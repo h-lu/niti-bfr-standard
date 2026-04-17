@@ -1,0 +1,56 @@
+synthetic:
+  image_width: 1280
+  image_height: 848
+  fps: 20
+  duration_sec: 24
+  needle_length_px: 400
+  anchor_xy: [585, 32]
+  anchor_angle_deg: 90
+  kappa_m: 0.0045
+  kappa_a: 0.00005
+  transition_temp_c: 47.0
+  transition_width_c: 2.0
+  line_thickness_px: 5
+  temperature:
+    start_c: 20.0
+    end_c: 65.0
+  render:
+    background_gray: 236
+    noise_sigma: 2.0
+    blur_sigma: 0.8
+
+analysis:
+  demo_extraction:
+    roi_xyxy: [180, 0, 760, 520]
+    blur_ksize: 5
+    threshold_dark: 100
+    open_kernel: 3
+    close_kernel: 5
+    route_a_tip_cluster_radius_px: 6.0
+    fit_bin_px: 3.0
+    fit_path_fraction: 0.72
+    fit_margin_prefer_quadratic: 0.05
+    route_c:
+      endpoint_blend_route_a: 0.2
+      ema_alpha: 0.35
+      ema_alpha_floor: 0.08
+      enforce_monotonic_x: true
+      enforce_monotonic_kappa: true
+  wire_like_extraction:
+    roi_xyxy: [180, 0, 760, 520]
+    blur_ksize: 5
+    threshold_dark: 120
+    open_kernel: 3
+    close_kernel: 7
+    route_a_tip_cluster_radius_px: 6.0
+    fit_bin_px: 3.0
+    fit_path_fraction: 0.72
+    fit_margin_prefer_quadratic: 0.05
+    anchor_prior_xy: [575, 13]
+    anchor_prior_weight: 0.75
+    route_c:
+      endpoint_blend_route_a: 0.25
+      ema_alpha: 0.25
+      ema_alpha_floor: 0.08
+      enforce_monotonic_x: true
+      enforce_monotonic_kappa: true
