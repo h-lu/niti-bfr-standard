@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from niti_bfr.extract import ExtractionConfig
-from niti_bfr.pipeline import _metric_preference_score, analyze_video
+from niti_bfr.pipeline import analyze_video
 from niti_bfr.metrics import recovery_ratio_directional
 from niti_bfr.synth import (
     SyntheticRenderConfig,
@@ -166,11 +166,11 @@ def main() -> None:
     plt.plot(result.series["temperature_c"], result.series["x_route_a_recovery"], label="R_route_a(T)", linewidth=2, alpha=0.8)
     plt.plot(result.series["temperature_c"], result.series["x_fit_recovery"], label="R_route_b(T)", linewidth=2)
     plt.plot(result.series["temperature_c"], result.series["x_route_c_recovery"], label="R_route_c(T)", linewidth=2)
-    if result.af95_c is not None:
-        label = f"{result.primary_metric_label or 'primary'} Af-95={result.af95_c:.2f}C"
+    if result.mode == "formal_af" and result.af95_c is not None:
+        label = f"{result.formal_metric_label or 'formal'} Af-95={result.af95_c:.2f}C"
         plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=label)
-    if result.aftan_c is not None:
-        label = f"{result.primary_metric_label or 'primary'} Af-tan={result.aftan_c:.2f}C"
+    if result.mode == "formal_af" and result.aftan_c is not None:
+        label = f"{result.formal_metric_label or 'formal'} Af-tan={result.aftan_c:.2f}C"
         plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=label)
     plt.ylim(-0.05, 1.05)
     plt.xlabel("Temperature (C)")
@@ -205,14 +205,6 @@ def main() -> None:
                 "fit": report.fit.__dict__,
             }
 
-    if result.metric_reports:
-        preferred_metric = min(
-            ((label, _metric_preference_score(report)) for label, report in result.metric_reports.items()),
-            key=lambda item: item[1],
-        )[0]
-    else:
-        preferred_metric = None
-
     metric_truth_comparison = None
     if result.metric_reports:
         metric_truth_comparison = {
@@ -240,11 +232,13 @@ def main() -> None:
 
     summary = {
         "demo_output": str(out_dir),
+        "mode": result.mode,
+        "formal_metric_label": result.formal_metric_label,
+        "formal_gate_reason": result.formal_gate_reason,
         "af95_c": result.af95_c,
         "aftan_c": result.aftan_c,
         "fit": result.fit.__dict__ if result.fit else None,
         "primary_metric_label": result.primary_metric_label,
-        "preferred_metric_for_af": preferred_metric,
         "truth_metrics": truth_metrics,
         "metric_truth_comparison": metric_truth_comparison,
         "metric_reports": metric_reports,

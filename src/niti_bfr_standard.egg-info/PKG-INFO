@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: niti-bfr-standard
+Version: 0.1.0
+Summary: Minimal software scheme for NiTi bend-free-recovery testing
+Requires-Python: >=3.10
+Requires-Dist: numpy
+Requires-Dist: opencv-python
+Requires-Dist: scipy
+Requires-Dist: pandas
+Requires-Dist: matplotlib
+Requires-Dist: pyyaml
+Requires-Dist: scikit-image
+Requires-Dist: skan
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: jinja2
+Requires-Dist: python-multipart

@@ -1,0 +1,12 @@
+numpy
+opencv-python
+scipy
+pandas
+matplotlib
+pyyaml
+scikit-image
+skan
+fastapi
+uvicorn
+jinja2
+python-multipart

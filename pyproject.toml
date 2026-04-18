@@ -16,6 +16,10 @@ dependencies = [
   "pyyaml",
   "scikit-image",
   "skan",
+  "fastapi",
+  "uvicorn",
+  "jinja2",
+  "python-multipart",
 ]
 
 [tool.setuptools]

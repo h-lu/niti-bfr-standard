@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>任务 {{ run['id'] }}</title>
+    {% if refresh %}<meta http-equiv="refresh" content="3">{% endif %}
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
+      .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 20px 56px; }
+      .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
+      .grid { display: grid; gap: 20px; grid-template-columns: 320px 1fr; }
+      .card { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 700; }
+      .status-completed { background: #dcfce7; color: #166534; }
+      .status-running { background: #fef3c7; color: #92400e; }
+      .status-queued { background: #dbeafe; color: #1d4ed8; }
+      .status-failed { background: #fee2e2; color: #991b1b; }
+      .muted { color: #6b7280; font-size: 13px; }
+      .kv { display: grid; grid-template-columns: 120px 1fr; gap: 8px 12px; font-size: 14px; }
+      .kv div { padding: 2px 0; }
+      .images { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+      img { width: 100%; border-radius: 12px; border: 1px solid #e5e7eb; background: white; }
+      ul { padding-left: 18px; }
+      a { color: #2563eb; text-decoration: none; }
+      pre { white-space: pre-wrap; word-break: break-word; font-size: 13px; background: #0f172a; color: #e2e8f0; padding: 14px; border-radius: 12px; overflow: auto; }
+      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .topline { flex-direction: column; align-items: start; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topline">
+        <div>
+          <h1>{{ run['run_name'] or run['video_filename'] }}</h1>
+          <p class="muted">Run ID: {{ run['id'] }}</p>
+        </div>
+        <div>
+          <a href="{{ request.url_for('home') }}">返回首页</a>
+          <span class="muted"> · </span>
+          <a href="{{ request.url_for('history') }}">历史任务</a>
+        </div>
+      </div>
+
+      <div class="grid">
+        <section class="card">
+          <h2>任务状态</h2>
+          <p><span class="pill status-{{ run['status'] }}">{{ run['status'] }}</span></p>
+          <div class="kv">
+            <div>创建时间</div><div>{{ run['created_at'] }}</div>
+            <div>请求模式</div><div>{{ run['requested_mode'] }}</div>
+            <div>实际模式</div><div>{{ run['actual_mode'] or '-' }}</div>
+            <div>视频</div><div>{{ run['video_filename'] }}</div>
+            <div>温度 CSV</div><div>{{ run['temperature_filename'] or '-' }}</div>
+            <div>formal metric</div><div>{{ run['formal_metric_label'] or '-' }}</div>
+            <div>gate reason</div><div>{{ run['formal_gate_reason'] or '-' }}</div>
+            <div>Af-95</div><div>{% if run['af95_c'] is not none %}{{ '%.2f'|format(run['af95_c']) }} C{% else %}-{% endif %}</div>
+            <div>Af-tan</div><div>{% if run['aftan_c'] is not none %}{{ '%.2f'|format(run['aftan_c']) }} C{% else %}-{% endif %}</div>
+          </div>
+
+          {% if run['error_text'] %}
+          <h3>错误</h3>
+          <pre>{{ run['error_text'] }}</pre>
+          {% endif %}
+
+          <h3>下载</h3>
+          {% if download_files %}
+          <ul>
+            {% for item in download_files %}
+              <li><a href="{{ item['url'] }}" target="_blank">{{ item['name'] }}</a></li>
+            {% endfor %}
+          </ul>
+          {% else %}
+            <p class="muted">任务完成后会出现输出文件。</p>
+          {% endif %}
+        </section>
+
+        <section class="card">
+          <h2>结果摘要</h2>
+          {% if summary %}
+          <pre>{{ summary | tojson(indent=2) }}</pre>
+          {% else %}
+          <p class="muted">{% if refresh %}任务还在跑，页面会自动刷新。{% else %}还没有 summary。{% endif %}</p>
+          {% endif %}
+
+          <h2>图像输出</h2>
+          {% if image_files %}
+          <div class="images">
+            {% for item in image_files %}
+              <figure>
+                <img src="{{ item['url'] }}" alt="{{ item['name'] }}">
+                <figcaption class="muted">{{ item['name'] }}</figcaption>
+              </figure>
+            {% endfor %}
+          </div>
+          {% else %}
+            <p class="muted">任务完成后会在这里显示图像产物。</p>
+          {% endif %}
+        </section>
+      </div>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NiTi BFR 分析台</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
+      .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 56px; }
+      h1, h2 { margin: 0 0 12px; }
+      p { line-height: 1.6; }
+      .grid { display: grid; gap: 20px; grid-template-columns: 1.1fr 0.9fr; }
+      .card { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+      label { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }
+      input, select, button { width: 100%; box-sizing: border-box; border-radius: 10px; border: 1px solid #d1d5db; padding: 10px 12px; font-size: 14px; }
+      button { background: #111827; color: white; border: none; font-weight: 700; cursor: pointer; margin-top: 16px; }
+      button:hover { background: #0f172a; }
+      table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      th, td { padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }
+      .muted { color: #6b7280; font-size: 13px; }
+      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 700; }
+      .status-completed { background: #dcfce7; color: #166534; }
+      .status-running { background: #fef3c7; color: #92400e; }
+      .status-queued { background: #dbeafe; color: #1d4ed8; }
+      .status-failed { background: #fee2e2; color: #991b1b; }
+      a { color: #2563eb; text-decoration: none; }
+      .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
+      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .topline { flex-direction: column; align-items: start; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topline">
+        <div>
+          <h1>NiTi BFR 最小分析台</h1>
+          <p class="muted">先做能用版，只支持 wire-like，对应“上传 → 跑任务 → 看结果 → 查历史”。</p>
+        </div>
+        <a href="{{ request.url_for('history') }}">查看全部历史</a>
+      </div>
+
+      <div class="grid">
+        <section class="card">
+          <h2>新建分析</h2>
+          <p class="muted">quicklook 不依赖温度文件，formal Af 需要温度同步 CSV，若条件不够会自动降级。</p>
+          <form action="{{ request.url_for('create_run') }}" method="post" enctype="multipart/form-data">
+            <label for="run_name">任务名（可选）</label>
+            <input id="run_name" name="run_name" type="text" placeholder="例如：批次 A 第一次试跑">
+
+            <label for="video_file">视频文件</label>
+            <input id="video_file" name="video_file" type="file" accept="video/*" required>
+
+            <label for="temperature_file">温度 CSV（可选）</label>
+            <input id="temperature_file" name="temperature_file" type="file" accept=".csv,text/csv">
+
+            <label for="requested_mode">分析模式</label>
+            <select id="requested_mode" name="requested_mode">
+              <option value="quicklook">quicklook</option>
+              <option value="formal_af">formal Af</option>
+            </select>
+
+            <label for="preset">对象预设</label>
+            <select id="preset" name="preset">
+              <option value="wire_like">wire_like</option>
+            </select>
+
+            <button type="submit">创建任务</button>
+          </form>
+        </section>
+
+        <section class="card">
+          <h2>项目内示例</h2>
+          <p class="muted">不想上传也行，直接用仓库自带示例做测试。</p>
+          {% for sample_id, sample in sample_runs.items() %}
+          <form action="{{ request.url_for('create_sample_run') }}" method="post" style="margin-bottom: 14px;">
+            <input type="hidden" name="sample_id" value="{{ sample_id }}">
+            <div style="font-weight: 700; margin-bottom: 4px;">{{ sample["label"] }}</div>
+            <div class="muted" style="margin-bottom: 8px;">{{ sample["description"] }}</div>
+            <button type="submit">直接运行这个示例</button>
+          </form>
+          {% endfor %}
+        </section>
+
+        <section class="card">
+          <h2>最近任务</h2>
+          {% if runs %}
+          <table>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>任务</th>
+                <th>状态</th>
+                <th>结果</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for run in runs %}
+              <tr>
+                <td>{{ run["created_at"][:19].replace("T", " ") }}</td>
+                <td>
+                  <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
+                  <div class="muted">{{ run["requested_mode"] }} / {{ run["preset"] }}</div>
+                </td>
+                <td><span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span></td>
+                <td>
+                  {% if run["actual_mode"] %}
+                    <div>{{ run["actual_mode"] }}</div>
+                  {% endif %}
+                  {% if run["af95_c"] is not none %}
+                    <div class="muted">Af-95 {{ "%.2f"|format(run["af95_c"]) }} C</div>
+                  {% elif run["formal_gate_reason"] %}
+                    <div class="muted">{{ run["formal_gate_reason"] }}</div>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% else %}
+            <p class="muted">还没有任务，先上传一个视频。</p>
+          {% endif %}
+        </section>
+      </div>
+    </div>
+  </body>
+</html>

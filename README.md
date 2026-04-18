@@ -174,6 +174,8 @@ python3 scripts/analyze_wire_like.py
 
 - [v0.1-summary.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/v0.1-summary.md)
   其中总结了当前针型对象是否算“已解决”、A/B/C 的推荐用法、demo 的理论值，以及真实实验还需要补哪些输入。
+- [v0.2-scope-guard.md](docs/v0.2-scope-guard.md)
+  下阶段只收敛 `formal Af` 的边界、准入条件与正式主量，不继续扩算法范围。
 
 ## 通俗解释
 

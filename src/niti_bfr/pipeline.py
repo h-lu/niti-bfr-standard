@@ -20,10 +20,9 @@ class AnalysisResult:
     aftan_c: float | None
     metric_reports: dict[str, MetricEvaluation] | None = None
     primary_metric_label: str | None = None
-
-
-def _metric_preference_score(report: MetricEvaluation) -> float:
-    return float(report.fit_rmse + 200.0 * report.monotonic_violation_fraction)
+    mode: str = "quicklook"
+    formal_metric_label: str | None = None
+    formal_gate_reason: str | None = None
 
 
 def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
@@ -107,6 +106,27 @@ def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvalu
     return reports
 
 
+def _formal_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) -> tuple[bool, str | None]:
+    valid = series.dropna(subset=["temperature_c", "kappa_fit_px_inv", "kappa_fit_recovery", "quality"])
+    if len(valid) < 15:
+        return False, "insufficient_kappa_points"
+
+    quality_median = float(valid["quality"].median())
+    if quality_median < 0.10:
+        return False, "unstable_kappa_extraction"
+
+    kappa_report = reports["kappa_fit"]
+    if kappa_report.monotonic_violation_fraction > 0.25:
+        return False, "kappa_fit_not_monotonic_enough"
+
+    tail_count = max(5, int(np.ceil(len(valid) * 0.1)))
+    tail_recovery = valid["kappa_fit_recovery"].to_numpy()[-tail_count:]
+    if float(np.nanmedian(tail_recovery)) < 0.90:
+        return False, "missing_high_temp_plateau"
+
+    return True, None
+
+
 def analyze_video(
     video_path: str | Path,
     extraction: ExtractionConfig,
@@ -187,6 +207,9 @@ def analyze_video(
     aftan_c = None
     metric_reports = None
     primary_metric_label = None
+    mode = "quicklook"
+    formal_metric_label = None
+    formal_gate_reason = "temperature_sync_missing"
 
     if temperature_csv is not None:
         temp = pd.read_csv(temperature_csv).copy()
@@ -211,11 +234,16 @@ def analyze_video(
         if "temperature_c" not in merged.columns:
             raise ValueError("temperature file must contain temperature_c")
         metric_reports = _evaluate_temperature_metrics(merged)
-        preferred_items = sorted(metric_reports.items(), key=lambda item: _metric_preference_score(item[1]))
-        primary_metric_label, primary_report = preferred_items[0]
-        fit = primary_report.fit
-        af95_c = primary_report.af95_c
-        aftan_c = primary_report.aftan_c
+        formal_metric_label = "kappa_fit"
+        formal_allowed, formal_gate_reason = _formal_af_gate(merged, metric_reports)
+        if formal_allowed:
+            formal_report = metric_reports[formal_metric_label]
+            fit = formal_report.fit
+            af95_c = formal_report.af95_c
+            aftan_c = formal_report.aftan_c
+            primary_metric_label = formal_metric_label
+            mode = "formal_af"
+            formal_gate_reason = None
         series = merged
 
     return AnalysisResult(
@@ -225,4 +253,7 @@ def analyze_video(
         aftan_c=aftan_c,
         metric_reports=metric_reports,
         primary_metric_label=primary_metric_label,
+        mode=mode,
+        formal_metric_label=formal_metric_label,
+        formal_gate_reason=formal_gate_reason,
     )
