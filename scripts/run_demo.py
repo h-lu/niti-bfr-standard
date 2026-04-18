@@ -6,6 +6,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.signal import savgol_filter
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from niti_bfr.extract import ExtractionConfig
 from niti_bfr.pipeline import _metric_preference_score, analyze_video
+from niti_bfr.metrics import recovery_ratio_directional
 from niti_bfr.synth import (
     SyntheticRenderConfig,
     build_model_from_dict,
@@ -20,6 +22,84 @@ from niti_bfr.synth import (
     write_synthetic_dataset,
 )
 from niti_bfr.temporal import RouteCConfig
+
+
+def _sigmoid(temp_c: np.ndarray, x_m: float, x_a: float, t0: float, width: float) -> np.ndarray:
+    return x_m + (x_a - x_m) / (1.0 + np.exp(-(temp_c - t0) / width))
+
+
+def _af_tan_construction(temp_c: np.ndarray, recovery: np.ndarray) -> tuple[np.ndarray, np.ndarray, int, float] | None:
+    temp_c = np.asarray(temp_c, dtype=float)
+    recovery = np.asarray(recovery, dtype=float)
+    n = len(temp_c)
+    if n < 7:
+        return None
+    window = min(n if n % 2 == 1 else n - 1, 11)
+    window = max(window, 5)
+    smooth = savgol_filter(recovery, window_length=window, polyorder=2, mode="interp")
+    slope = np.gradient(smooth, temp_c)
+    idx = int(np.argmax(slope))
+    upper = float(np.median(smooth[int(0.85 * n) :]))
+    return smooth, slope, idx, upper
+
+
+def _plot_metric_af(
+    temp_c: np.ndarray,
+    values: np.ndarray,
+    report,
+    out_path: Path,
+    title: str,
+    ylabel: str,
+) -> None:
+    temp_c = np.asarray(temp_c, dtype=float)
+    values = np.asarray(values, dtype=float)
+    fit_values = values if report.increasing else -values
+    fit_curve = _sigmoid(temp_c, report.fit.x_m, report.fit.x_a, report.fit.t0, report.fit.width)
+    fit_curve_display = fit_curve if report.increasing else -fit_curve
+    recovery = recovery_ratio_directional(values, report.fit.x_m, report.fit.x_a, increasing=report.increasing)
+
+    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(8.2, 7.2), sharex=True, height_ratios=[1.0, 0.95])
+
+    ax0.plot(temp_c, values, label="measured", linewidth=2, color="tab:blue")
+    ax0.plot(temp_c, fit_curve_display, label="sigmoid fit", linewidth=2, color="tab:orange")
+    if np.isfinite(report.af95_c):
+        ax0.axvline(report.af95_c, color="tab:green", linestyle="--", label=f"Af-95 = {report.af95_c:.2f} C")
+    if np.isfinite(report.aftan_c):
+        ax0.axvline(report.aftan_c, color="tab:red", linestyle="--", label=f"Af-tan = {report.aftan_c:.2f} C")
+    ax0.set_ylabel(ylabel)
+    ax0.set_title(title)
+    ax0.grid(alpha=0.22)
+    ax0.legend(loc="best")
+
+    ax1.plot(temp_c, recovery, label="recovery", linewidth=2, color="tab:purple")
+    ax1.axhline(0.95, color="tab:green", linestyle=":", label="95% level")
+    if np.isfinite(report.af95_c):
+        ax1.axvline(report.af95_c, color="tab:green", linestyle="--")
+    if np.isfinite(report.aftan_c):
+        ax1.axvline(report.aftan_c, color="tab:red", linestyle="--")
+
+    tan_construct = _af_tan_construction(temp_c, recovery)
+    if tan_construct is not None:
+        smooth, slope, idx, upper = tan_construct
+        t0 = float(temp_c[idx])
+        r0 = float(smooth[idx])
+        m = float(slope[idx])
+        if m > 1e-9:
+            tan_line = r0 + m * (temp_c - t0)
+            mask = np.abs(temp_c - t0) <= 6.0
+            ax1.plot(temp_c, smooth, color="tab:gray", linewidth=1.5, alpha=0.9, label="smoothed recovery")
+            ax1.plot(temp_c[mask], tan_line[mask], color="tab:red", linewidth=1.5, alpha=0.9, label="Af-tan tangent")
+            ax1.axhline(upper, color="tab:orange", linestyle=":", alpha=0.9, label="upper plateau")
+
+    ax1.set_xlabel("Temperature (C)")
+    ax1.set_ylabel("Recovery ratio")
+    ax1.set_ylim(-0.05, 1.08)
+    ax1.grid(alpha=0.22)
+    ax1.legend(loc="best")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=170)
+    plt.close(fig)
 
 
 def main() -> None:
@@ -54,8 +134,12 @@ def main() -> None:
         open_kernel=int(extraction_params["open_kernel"]),
         close_kernel=int(extraction_params["close_kernel"]),
         route_a_tip_cluster_radius_px=float(extraction_params.get("route_a_tip_cluster_radius_px", 6.0)),
+        route_b_endpoint_extension_scale=float(extraction_params.get("route_b_endpoint_extension_scale", 0.0)),
+        route_b_cap_inset_scale=float(extraction_params.get("route_b_cap_inset_scale", 0.08)),
         fit_bin_px=float(extraction_params.get("fit_bin_px", 3.0)),
         fit_path_fraction=float(extraction_params.get("fit_path_fraction", 0.72)),
+        fit_path_fraction_min=float(extraction_params.get("fit_path_fraction_min", 0.42)),
+        fit_curvature_threshold_ratio=float(extraction_params.get("fit_curvature_threshold_ratio", 0.28)),
         fit_margin_prefer_quadratic=float(extraction_params.get("fit_margin_prefer_quadratic", 0.05)),
     )
     result = analyze_video(
@@ -169,6 +253,25 @@ def main() -> None:
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+
+    if result.metric_reports:
+        metric_plot_specs = {
+            "x_route_a": ("Route A Af Plot", "x (px)", out_dir / "af_route_a_x.png"),
+            "x_fit": ("Route B x_fit Af Plot", "x (px)", out_dir / "af_route_b_x.png"),
+            "x_route_c": ("Route C x_route_c Af Plot", "x (px)", out_dir / "af_route_c_x.png"),
+            "kappa_fit": ("Route B kappa_fit Af Plot", "Curvature (px^-1)", out_dir / "af_route_b_kappa.png"),
+            "kappa_route_c": ("Route C kappa_route_c Af Plot", "Curvature (px^-1)", out_dir / "af_route_c_kappa.png"),
+        }
+        series_map = {
+            "x_route_a": result.series["x_route_a_px"].to_numpy(),
+            "x_fit": result.series["x_fit_px"].to_numpy(),
+            "x_route_c": result.series["x_route_c_px"].to_numpy(),
+            "kappa_fit": result.series["kappa_fit_px_inv"].to_numpy(),
+            "kappa_route_c": result.series["kappa_route_c_px_inv"].to_numpy(),
+        }
+        temp = result.series["temperature_c"].to_numpy()
+        for key, (title, ylabel, out_path) in metric_plot_specs.items():
+            _plot_metric_af(temp, series_map[key], result.metric_reports[key], out_path, title, ylabel)
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
 

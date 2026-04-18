@@ -107,6 +107,28 @@ def temporal_regularize(
     return out
 
 
+def temporal_regularize_angle(values_rad: np.ndarray, alpha: float | np.ndarray) -> np.ndarray:
+    values = np.asarray(values_rad, dtype=float)
+    if len(values) == 0:
+        return values.copy()
+    valid = np.isfinite(values)
+    if not np.any(valid):
+        return np.full_like(values, np.nan)
+    out = np.full_like(values, np.nan)
+    unwrapped_valid = np.unwrap(values[valid])
+    filled = _fill_nan_linear(
+        np.interp(
+            np.arange(len(values), dtype=float),
+            np.flatnonzero(valid).astype(float),
+            unwrapped_valid,
+        )
+    )
+    smooth = _bidirectional_ema(filled, alpha)
+    out[:] = smooth
+    out[~valid] = np.nan
+    return out
+
+
 def apply_route_c(series: pd.DataFrame, config: RouteCConfig) -> pd.DataFrame:
     series = series.copy()
     w = float(np.clip(config.endpoint_blend_route_a, 0.0, 1.0))
@@ -116,37 +138,55 @@ def apply_route_c(series: pd.DataFrame, config: RouteCConfig) -> pd.DataFrame:
     quality = np.clip(np.nan_to_num(quality, nan=0.0), 0.0, 1.0)
     alpha_series = alpha_floor + (alpha - alpha_floor) * quality
 
-    for axis in ("x", "y"):
-        anchor_route_a = series[f"route_a_anchor_{axis}"].to_numpy(dtype=float)
-        tip_route_a = series[f"route_a_tip_{axis}"].to_numpy(dtype=float)
-        anchor_route_b = series[f"anchor_{axis}"].to_numpy(dtype=float)
-        tip_route_b = series[f"tip_{axis}"].to_numpy(dtype=float)
-        anchor_raw = (1.0 - w) * anchor_route_b + w * anchor_route_a
-        tip_raw = (1.0 - w) * tip_route_b + w * tip_route_a
-        series[f"route_c_anchor_{axis}"] = temporal_regularize(
-            anchor_raw,
-            increasing=False,
-            alpha=alpha_series,
-            enforce_monotonic=False,
-        )
-        series[f"route_c_tip_{axis}"] = temporal_regularize(
-            tip_raw,
-            increasing=False,
-            alpha=alpha_series,
-            enforce_monotonic=False,
-        )
+    anchor_route_a_x = series["route_a_anchor_x"].to_numpy(dtype=float)
+    anchor_route_a_y = series["route_a_anchor_y"].to_numpy(dtype=float)
+    tip_route_a_x = series["route_a_tip_x"].to_numpy(dtype=float)
+    tip_route_a_y = series["route_a_tip_y"].to_numpy(dtype=float)
+    anchor_route_b_x = series["anchor_x"].to_numpy(dtype=float)
+    anchor_route_b_y = series["anchor_y"].to_numpy(dtype=float)
+    tip_route_b_x = series["tip_x"].to_numpy(dtype=float)
+    tip_route_b_y = series["tip_y"].to_numpy(dtype=float)
 
-    dx = series["route_c_tip_x"].to_numpy(dtype=float) - series["route_c_anchor_x"].to_numpy(dtype=float)
-    dy = series["route_c_tip_y"].to_numpy(dtype=float) - series["route_c_anchor_y"].to_numpy(dtype=float)
-    x_from_endpoints = np.sqrt(dx**2 + dy**2)
-    series["x_route_c_px"] = x_from_endpoints
-    if config.enforce_monotonic_x:
-        valid = np.isfinite(x_from_endpoints)
-        if np.any(valid):
-            monotonic = _isotonic_regression(x_from_endpoints[valid], increasing=True)
-            out = x_from_endpoints.copy()
-            out[valid] = monotonic
-            series["x_route_c_px"] = out
+    anchor_raw_x = (1.0 - w) * anchor_route_b_x + w * anchor_route_a_x
+    anchor_raw_y = (1.0 - w) * anchor_route_b_y + w * anchor_route_a_y
+    tip_raw_x = (1.0 - w) * tip_route_b_x + w * tip_route_a_x
+    tip_raw_y = (1.0 - w) * tip_route_b_y + w * tip_route_a_y
+
+    anchor_smooth_x = temporal_regularize(
+        anchor_raw_x,
+        increasing=False,
+        alpha=alpha_series,
+        enforce_monotonic=False,
+    )
+    anchor_smooth_y = temporal_regularize(
+        anchor_raw_y,
+        increasing=False,
+        alpha=alpha_series,
+        enforce_monotonic=False,
+    )
+
+    dx_raw = tip_raw_x - anchor_raw_x
+    dy_raw = tip_raw_y - anchor_raw_y
+    x_raw = np.sqrt(dx_raw**2 + dy_raw**2)
+    theta_raw = np.arctan2(dy_raw, dx_raw)
+
+    x_smooth = temporal_regularize(
+        x_raw,
+        increasing=True,
+        alpha=alpha_series,
+        enforce_monotonic=config.enforce_monotonic_x,
+    )
+    theta_smooth = temporal_regularize_angle(theta_raw, alpha=alpha_series)
+
+    tip_smooth_x = anchor_smooth_x + x_smooth * np.cos(theta_smooth)
+    tip_smooth_y = anchor_smooth_y + x_smooth * np.sin(theta_smooth)
+
+    series["route_c_anchor_x"] = anchor_smooth_x
+    series["route_c_anchor_y"] = anchor_smooth_y
+    series["route_c_tip_x"] = tip_smooth_x
+    series["route_c_tip_y"] = tip_smooth_y
+    series["route_c_axis_theta_rad"] = theta_smooth
+    series["x_route_c_px"] = x_smooth
     series["kappa_route_c_px_inv"] = temporal_regularize(
         series["kappa_fit_px_inv"].to_numpy(dtype=float),
         increasing=False,

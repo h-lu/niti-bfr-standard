@@ -170,6 +170,11 @@ python3 scripts/analyze_wire_like.py
 - [research-notes.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/research-notes.md)
   其中新增了“方法对照表”和“商业软件/开源工具参考表”，方便直接比较标准思路、论文方法和当前仓库路线。
 
+当前最小方案的封版结论见:
+
+- [v0.1-summary.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/v0.1-summary.md)
+  其中总结了当前针型对象是否算“已解决”、A/B/C 的推荐用法、demo 的理论值，以及真实实验还需要补哪些输入。
+
 ## 通俗解释
 
 当前仓库同时计算三条量，它们都在回答“针头恢复了多少”，但看的角度不同。

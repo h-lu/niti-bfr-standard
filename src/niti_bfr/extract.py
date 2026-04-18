@@ -22,7 +22,11 @@ class ExtractionConfig:
     anchor_prior_xy: tuple[float, float] | None = None
     anchor_prior_weight: float = 0.0
     route_a_tip_cluster_radius_px: float = 6.0
+    route_b_endpoint_extension_scale: float = 0.0
+    route_b_cap_inset_scale: float = 0.08
     fit_path_fraction: float = 0.72
+    fit_path_fraction_min: float = 0.42
+    fit_curvature_threshold_ratio: float = 0.28
 
 
 @dataclass
@@ -66,6 +70,11 @@ def _component_contour(component: np.ndarray) -> np.ndarray:
     return contour[:, 0, :].astype(float)
 
 
+def _convex_hull_xy(points_xy: np.ndarray) -> np.ndarray:
+    hull = cv2.convexHull(np.round(points_xy).astype(np.float32))
+    return hull[:, 0, :].astype(float)
+
+
 def _estimate_tangent(contour_xy: np.ndarray, config: ExtractionConfig) -> np.ndarray:
     top_band = contour_xy[:, 1] <= contour_xy[:, 1].min() + config.anchor_top_band_px
     top_pts = contour_xy[top_band] if np.any(top_band) else contour_xy
@@ -75,6 +84,34 @@ def _estimate_tangent(contour_xy: np.ndarray, config: ExtractionConfig) -> np.nd
     if tangent[1] < 0:
         tangent = -tangent
     return tangent / max(np.linalg.norm(tangent), 1e-9)
+
+
+def _estimate_path_tangent(path_xy: np.ndarray) -> np.ndarray:
+    if len(path_xy) < 2:
+        raise RuntimeError("path too short to estimate tangent")
+    n = min(max(len(path_xy) // 6, 6), len(path_xy))
+    pts = path_xy[:n]
+    centered = pts - pts.mean(axis=0, keepdims=True)
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    tangent = vh[0]
+    if tangent[1] < 0:
+        tangent = -tangent
+    return tangent / max(np.linalg.norm(tangent), 1e-9)
+
+
+def _terminal_direction(path_xy: np.ndarray, head: bool, window: int = 8) -> np.ndarray:
+    if len(path_xy) < 2:
+        raise RuntimeError("path too short to estimate terminal direction")
+    n = min(max(window, 2), len(path_xy))
+    pts = path_xy[:n] if head else path_xy[-n:]
+    start = pts[0]
+    end = pts[-1]
+    direction = end - start
+    if np.linalg.norm(direction) < 1e-9 and len(pts) >= 2:
+        direction = pts[-1] - pts[0]
+    if not head:
+        return _unit_direction(direction)
+    return _unit_direction(direction)
 
 
 def _anchor_reference(contour_xy: np.ndarray, config: ExtractionConfig, roi_offset_xy: np.ndarray) -> np.ndarray:
@@ -171,26 +208,141 @@ def _refine_endpoint_from_contour(contour_local: np.ndarray, seed_local: np.ndar
     return nearby.mean(axis=0)
 
 
+def _contour_apex_along_direction(
+    contour_local: np.ndarray,
+    seed_local: np.ndarray,
+    direction_local: np.ndarray,
+    radius_px: float,
+) -> np.ndarray:
+    direction = _unit_direction(direction_local)
+    normal = np.array([-direction[1], direction[0]], dtype=float)
+    rel = contour_local - seed_local[None, :]
+    along = rel @ direction
+    lateral = np.abs(rel @ normal)
+    lateral_limit = max(3.0 * radius_px, 8.0)
+    candidates = contour_local[lateral <= lateral_limit]
+    candidate_along = along[lateral <= lateral_limit]
+    if len(candidates) == 0:
+        candidates = contour_local
+        candidate_along = along
+    best = candidates[int(np.argmax(candidate_along))]
+    return best
+
+
+def _contour_cap_center_along_direction(
+    contour_local: np.ndarray,
+    seed_local: np.ndarray,
+    direction_local: np.ndarray,
+    radius_px: float,
+) -> np.ndarray:
+    direction = _unit_direction(direction_local)
+    normal = np.array([-direction[1], direction[0]], dtype=float)
+    rel = contour_local - seed_local[None, :]
+    along = rel @ direction
+    lateral = np.abs(rel @ normal)
+    lateral_limit = max(3.0 * radius_px, 8.0)
+    candidates = contour_local[lateral <= lateral_limit]
+    candidate_along = along[lateral <= lateral_limit]
+    if len(candidates) == 0:
+        candidates = contour_local
+        candidate_along = along
+    target = float(np.max(candidate_along))
+    band = max(0.75 * radius_px, 1.5)
+    cap = candidates[candidate_along >= target - band]
+    if len(cap) == 0:
+        cap = candidates[[int(np.argmax(candidate_along))]]
+    return cap.mean(axis=0)
+
+
+def _route_a_distal_apex(contour_local: np.ndarray, anchor_local: np.ndarray, tip_direction: np.ndarray) -> np.ndarray:
+    direction = _unit_direction(tip_direction)
+    rel = contour_local - anchor_local[None, :]
+    along = rel @ direction
+    hull = _convex_hull_xy(contour_local)
+    hull_rel = hull - anchor_local[None, :]
+    hull_along = hull_rel @ direction
+    return hull[int(np.argmax(hull_along))]
+
+
+def _unit_direction(vec: np.ndarray) -> np.ndarray:
+    vec = np.asarray(vec, dtype=float)
+    return vec / max(float(np.linalg.norm(vec)), 1e-9)
+
+
+def _point_radius(distance_map: np.ndarray, point_local: np.ndarray) -> float:
+    x = int(np.clip(round(float(point_local[0])), 0, distance_map.shape[1] - 1))
+    y = int(np.clip(round(float(point_local[1])), 0, distance_map.shape[0] - 1))
+    return float(distance_map[y, x])
+
+
+def _extend_endpoint(point_local: np.ndarray, direction_local: np.ndarray, radius_px: float, sign: float) -> np.ndarray:
+    return point_local + sign * radius_px * _unit_direction(direction_local)
+
+
 def _extract_route_a_endpoints(
     contour_local: np.ndarray,
     config: ExtractionConfig,
     roi_offset_xy: np.ndarray,
     skeleton_path_local: np.ndarray,
+    distance_map: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, float]:
-    anchor_local = _refine_endpoint_from_contour(
+    anchor_dir = _terminal_direction(skeleton_path_local, head=True)
+    tip_dir = _terminal_direction(skeleton_path_local, head=False)
+    anchor_radius = _point_radius(distance_map, skeleton_path_local[0])
+    tip_radius = _point_radius(distance_map, skeleton_path_local[-1])
+    anchor_local = _contour_apex_along_direction(
         contour_local,
-        _anchor_reference(contour_local, config, roi_offset_xy),
-        config.route_a_tip_cluster_radius_px,
+        skeleton_path_local[0],
+        -anchor_dir,
+        anchor_radius,
     )
-    tip_local = _refine_endpoint_from_contour(
-        contour_local,
-        skeleton_path_local[-1],
-        config.route_a_tip_cluster_radius_px,
-    )
+    tip_local = _route_a_distal_apex(contour_local, anchor_local, tip_dir)
     anchor_global = anchor_local + roi_offset_xy
     tip_global = tip_local + roi_offset_xy
     x_route_a = float(np.linalg.norm(tip_global - anchor_global))
     return anchor_global, tip_global, x_route_a
+
+
+def _extract_route_b_endpoints(
+    contour_local: np.ndarray,
+    skeleton_path_local: np.ndarray,
+    roi_offset_xy: np.ndarray,
+    distance_map: np.ndarray,
+    config: ExtractionConfig,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    anchor_dir = _terminal_direction(skeleton_path_local, head=True)
+    tip_dir = _terminal_direction(skeleton_path_local, head=False)
+    anchor_radius = _point_radius(distance_map, skeleton_path_local[0])
+    tip_radius = _point_radius(distance_map, skeleton_path_local[-1])
+    scale = float(np.clip(config.route_b_endpoint_extension_scale, 0.0, 1.5))
+    inset_scale = float(np.clip(config.route_b_cap_inset_scale, 0.0, 0.5))
+    anchor_cap = _contour_cap_center_along_direction(
+        contour_local,
+        skeleton_path_local[0],
+        -anchor_dir,
+        anchor_radius,
+    )
+    tip_cap = _contour_cap_center_along_direction(
+        contour_local,
+        skeleton_path_local[-1],
+        tip_dir,
+        tip_radius,
+    )
+    if scale > 0.0:
+        anchor_extend = _extend_endpoint(skeleton_path_local[0], anchor_dir, anchor_radius * scale, sign=-1.0)
+        tip_extend = _extend_endpoint(skeleton_path_local[-1], tip_dir, tip_radius * scale, sign=1.0)
+        anchor_local = 0.5 * (anchor_cap + anchor_extend)
+        tip_local = 0.5 * (tip_cap + tip_extend)
+    else:
+        anchor_local = anchor_cap
+        tip_local = tip_cap
+    if inset_scale > 0.0:
+        anchor_local = anchor_local + anchor_dir * anchor_radius * inset_scale
+        tip_local = tip_local - tip_dir * tip_radius * inset_scale
+    anchor_global = anchor_local + roi_offset_xy
+    tip_global = tip_local + roi_offset_xy
+    x_fit = float(np.linalg.norm(tip_global - anchor_global))
+    return anchor_global, tip_global, x_fit
 
 
 def _sample_centerline_from_path(
@@ -210,8 +362,36 @@ def _sample_centerline_from_path(
     total_arc = float(arc[-1])
     if total_arc < 10.0:
         raise RuntimeError("needle extent too short for fitting")
-    fit_arc_max = max(total_arc * config.fit_path_fraction, 30.0)
-    fit_arc_max = min(fit_arc_max, total_arc)
+    full_n = max(int(np.ceil(total_arc / max(config.fit_bin_px, 1e-6))) + 1, 16)
+    full_arc = np.linspace(0.0, total_arc, full_n)
+    full_u = np.interp(full_arc, arc, local_path[:, 0])
+    full_v = np.interp(full_arc, arc, local_path[:, 1])
+    full_local = np.column_stack([full_u, full_v])
+    if len(full_local) >= 5:
+        du = np.gradient(full_local[:, 0], full_arc)
+        dv = np.gradient(full_local[:, 1], full_arc)
+        ddu = np.gradient(du, full_arc)
+        ddv = np.gradient(dv, full_arc)
+        curvature = np.abs(du * ddv - dv * ddu) / np.maximum((du**2 + dv**2) ** 1.5, 1e-9)
+        if len(curvature) >= 7:
+            kernel = np.ones(7, dtype=float) / 7.0
+            curvature = np.convolve(curvature, kernel, mode="same")
+        max_curvature = float(np.max(curvature))
+        if max_curvature > 1e-9:
+            threshold = config.fit_curvature_threshold_ratio * max_curvature
+            active = np.flatnonzero(curvature >= threshold)
+            if len(active):
+                adaptive_arc = float(full_arc[min(int(active[-1] + 2), len(full_arc) - 1)])
+            else:
+                adaptive_arc = total_arc * config.fit_path_fraction
+        else:
+            adaptive_arc = total_arc * config.fit_path_fraction
+    else:
+        adaptive_arc = total_arc * config.fit_path_fraction
+
+    fit_arc_min = total_arc * config.fit_path_fraction_min
+    fit_arc_max = float(np.clip(adaptive_arc, fit_arc_min, total_arc * config.fit_path_fraction))
+    fit_arc_max = min(max(fit_arc_max, 30.0), total_arc)
     n_samples = max(int(np.ceil(fit_arc_max / max(config.fit_bin_px, 1e-6))) + 1, 10)
     target_arc = np.linspace(0.0, fit_arc_max, n_samples)
     sampled_u = np.interp(target_arc, arc, local_path[:, 0])
@@ -295,15 +475,23 @@ def extract_geometry(frame_bgr: np.ndarray, config: ExtractionConfig) -> Extract
     roi_offset_xy = np.array([x0, y0], dtype=float)
     anchor_reference_local = _anchor_reference(contour_local, config, roi_offset_xy)
     skeleton_path_local = _extract_skeleton_path_local(component, anchor_reference_local)
+    tangent = _estimate_path_tangent(skeleton_path_local)
     skeleton_path_global = skeleton_path_local + roi_offset_xy[None, :]
+    distance_map = cv2.distanceTransform((component > 0).astype(np.uint8), cv2.DIST_L2, 5)
     route_a_anchor_global, route_a_tip_global, x_route_a = _extract_route_a_endpoints(
         contour_local,
         config,
         roi_offset_xy,
         skeleton_path_local,
+        distance_map,
     )
-    anchor_global = skeleton_path_global[0]
-    tip_global = skeleton_path_global[-1]
+    anchor_global, tip_global, x_fit = _extract_route_b_endpoints(
+        contour_local,
+        skeleton_path_local,
+        roi_offset_xy,
+        distance_map,
+        config,
+    )
     centerline_local, centerline_global = _sample_centerline_from_path(
         skeleton_path_global,
         anchor_global,
@@ -331,7 +519,6 @@ def extract_geometry(frame_bgr: np.ndarray, config: ExtractionConfig) -> Extract
         selected_rmse = circle_rmse
 
     fitted_curve_global = _local_to_global(fitted_curve_local, fit_anchor_global, tangent)
-    x_fit = float(np.linalg.norm(tip_global - anchor_global))
     v_span = max(float(centerline_local[-1, 1] - centerline_local[0, 1]), 1.0)
     coverage = min(len(centerline_local) * config.fit_bin_px / v_span, 1.0)
     quality = float(np.exp(-selected_rmse / 4.0) * coverage)

@@ -48,143 +48,10 @@ def _draw_mask_inset(canvas: np.ndarray, mask: np.ndarray, title: str, origin_xy
     canvas[oy : oy + inset_h, ox : ox + inset_w] = mask_small
 
 
-def _draw_route_a_overlay(frame_bgr: np.ndarray, geom, truth_row: pd.Series, frame_idx: int) -> np.ndarray:
-    overlay = frame_bgr.copy()
-    x0, y0, x1, y1 = truth_row["roi_xyxy"]
-    cv2.rectangle(overlay, (x0, y0), (x1, y1), (80, 180, 255), 2)
-    contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
-    cv2.polylines(overlay, [contour], isClosed=True, color=(110, 110, 110), thickness=1, lineType=cv2.LINE_AA)
-    cv2.line(
-        overlay,
-        np.round(geom.route_a_anchor_xy).astype(int),
-        np.round(geom.route_a_tip_xy).astype(int),
-        (220, 0, 220),
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.circle(overlay, np.round(geom.route_a_anchor_xy).astype(int), 5, (255, 0, 255), -1)
-    cv2.circle(overlay, np.round(geom.route_a_tip_xy).astype(int), 5, (180, 0, 255), -1)
-    cv2.circle(
-        overlay,
-        (int(round(float(truth_row["anchor_x"]))), int(round(float(truth_row["anchor_y"])))),
-        4,
-        (0, 180, 0),
-        -1,
-    )
-    cv2.circle(
-        overlay,
-        (int(round(float(truth_row["tip_x"]))), int(round(float(truth_row["tip_y"])))),
-        4,
-        (0, 90, 220),
-        -1,
-    )
-
-    _draw_mask_inset(overlay, geom.mask, "ROI mask", (18, 48))
-    lines = [
-        "Demo process: Route A (endpoint/chord)",
-        f"frame={frame_idx:03d}  T={truth_row['temperature_c']:.2f} C",
-        "magenta line: route A chord",
-        "magenta dots: route A anchor/tip",
-        "green+blue dots: synthetic truth anchor/tip",
-        f"x_route_a={geom.x_route_a_px:.1f}px",
-        f"x_true={truth_row['x_true_px']:.1f}px",
-        f"instant error={geom.x_route_a_px - truth_row['x_true_px']:+.1f}px",
-    ]
-    _draw_text_block_bottom_left(overlay, lines)
-    return overlay
-
-
-def _draw_route_b_overlay(frame_bgr: np.ndarray, geom, truth_row: pd.Series, frame_idx: int) -> np.ndarray:
-    overlay = frame_bgr.copy()
-    x0, y0, x1, y1 = truth_row["roi_xyxy"]
-    cv2.rectangle(overlay, (x0, y0), (x1, y1), (80, 180, 255), 2)
-    contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
-    skeleton_path = np.round(geom.sampled_centerline_xy).astype(np.int32).reshape(-1, 1, 2)
-    fit_samples = np.round(geom.fit_samples_xy).astype(np.int32).reshape(-1, 1, 2)
-    fit_curve = np.round(geom.fitted_curve_xy).astype(np.int32).reshape(-1, 1, 2)
-    cv2.polylines(overlay, [contour], isClosed=True, color=(120, 120, 120), thickness=1, lineType=cv2.LINE_AA)
-    cv2.polylines(overlay, [skeleton_path], isClosed=False, color=(0, 140, 255), thickness=2, lineType=cv2.LINE_AA)
-    cv2.polylines(overlay, [fit_samples], isClosed=False, color=(0, 220, 255), thickness=2, lineType=cv2.LINE_AA)
-    cv2.polylines(overlay, [fit_curve], isClosed=False, color=(255, 180, 0), thickness=2, lineType=cv2.LINE_AA)
-    cv2.circle(overlay, np.round(geom.anchor_xy).astype(int), 6, (0, 220, 0), -1)
-    cv2.circle(overlay, np.round(geom.tip_xy).astype(int), 6, (0, 0, 255), -1)
-    cv2.circle(
-        overlay,
-        (int(round(float(truth_row["anchor_x"]))), int(round(float(truth_row["anchor_y"])))),
-        4,
-        (0, 180, 0),
-        -1,
-    )
-    cv2.circle(
-        overlay,
-        (int(round(float(truth_row["tip_x"]))), int(round(float(truth_row["tip_y"])))),
-        4,
-        (0, 90, 220),
-        -1,
-    )
-
-    _draw_mask_inset(overlay, geom.mask, "ROI mask", (18, 48))
-    lines = [
-        "Demo process: Route B (skeleton + local bend fit)",
-        f"frame={frame_idx:03d}  T={truth_row['temperature_c']:.2f} C",
-        "orange: skeleton main path used for x_fit",
-        "cyan: local fit samples",
-        "gold: local fitted curve used for kappa_fit",
-        "green/red: route B anchor/tip",
-        f"x_fit={geom.x_fit_px:.1f}px  x_true={truth_row['x_true_px']:.1f}px",
-        f"kappa_fit={geom.kappa_fit_px_inv:.5f}  kappa_true={truth_row['kappa_true_px_inv']:.5f}",
-        f"model={geom.model_name}  q={geom.quality:.2f}",
-    ]
-    _draw_text_block_bottom_left(overlay, lines)
-    return overlay
-
-
-def _draw_route_c_overlay(frame_bgr: np.ndarray, geom, row: pd.Series, truth_row: pd.Series, frame_idx: int) -> np.ndarray:
-    overlay = frame_bgr.copy()
-    x0, y0, x1, y1 = truth_row["roi_xyxy"]
-    cv2.rectangle(overlay, (x0, y0), (x1, y1), (80, 180, 255), 2)
-    contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
-    cv2.polylines(overlay, [contour], isClosed=True, color=(110, 110, 110), thickness=1, lineType=cv2.LINE_AA)
-    route_c_anchor = np.array([row["route_c_anchor_x"], row["route_c_anchor_y"]], dtype=float)
-    route_c_tip = np.array([row["route_c_tip_x"], row["route_c_tip_y"]], dtype=float)
-    cv2.line(
-        overlay,
-        np.round(route_c_anchor).astype(int),
-        np.round(route_c_tip).astype(int),
-        (60, 200, 60),
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.circle(overlay, np.round(route_c_anchor).astype(int), 5, (60, 200, 60), -1)
-    cv2.circle(overlay, np.round(route_c_tip).astype(int), 6, (40, 120, 255), -1)
-    cv2.circle(overlay, np.round(geom.route_a_tip_xy).astype(int), 4, (255, 0, 255), -1)
-    cv2.circle(overlay, np.round(geom.tip_xy).astype(int), 4, (0, 0, 255), -1)
-    cv2.circle(
-        overlay,
-        (int(round(float(truth_row["tip_x"]))), int(round(float(truth_row["tip_y"])))),
-        4,
-        (0, 90, 220),
-        -1,
-    )
-    _draw_mask_inset(overlay, geom.mask, "ROI mask", (18, 48))
-    lines = [
-        "Demo process: Route C (temporal geometry state)",
-        f"frame={frame_idx:03d}  T={truth_row['temperature_c']:.2f} C",
-        "green line: route C temporally regularized chord",
-        "orange dot: route C tip",
-        "small pink/red/blue dots: route A / B / truth tips",
-        f"x_route_c={row['x_route_c_px']:.1f}px  x_true={truth_row['x_true_px']:.1f}px",
-        f"kappa_route_c={row['kappa_route_c_px_inv']:.5f}  kappa_true={truth_row['kappa_true_px_inv']:.5f}",
-        f"theta={row['route_c_axis_theta_rad']:.3f} rad",
-    ]
-    _draw_text_block_bottom_left(overlay, lines)
-    return overlay
-
-
 def _draw_text_block(canvas: np.ndarray, lines: list[str], origin_xy: tuple[int, int]) -> None:
     ox, oy = origin_xy
     line_h = 24
-    width = 520
+    width = 560
     height = line_h * len(lines) + 16
     cv2.rectangle(canvas, (ox - 8, oy - 24), (ox + width, oy - 24 + height), (245, 245, 245), -1)
     cv2.rectangle(canvas, (ox - 8, oy - 24), (ox + width, oy - 24 + height), (120, 120, 120), 1)
@@ -204,42 +71,129 @@ def _draw_text_block(canvas: np.ndarray, lines: list[str], origin_xy: tuple[int,
 def _draw_text_block_bottom_left(canvas: np.ndarray, lines: list[str]) -> None:
     line_h = 24
     margin = 18
-    width = 520
+    width = 560
     height = line_h * len(lines) + 16
     origin_xy = (margin, canvas.shape[0] - margin - height + 40)
     _draw_text_block(canvas, lines, origin_xy=origin_xy)
 
 
-def _draw_combined_overlay(frame_bgr: np.ndarray, route_a_frame: np.ndarray, route_b_frame: np.ndarray) -> np.ndarray:
-    margin = 12
+def _route_a_overlay(frame_bgr: np.ndarray, geom, row: pd.Series, frame_idx: int, roi_xyxy: tuple[int, int, int, int]) -> np.ndarray:
+    overlay = frame_bgr.copy()
+    x0, y0, x1, y1 = roi_xyxy
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (80, 180, 255), 2)
+    contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
+    cv2.polylines(overlay, [contour], isClosed=True, color=(120, 120, 120), thickness=1, lineType=cv2.LINE_AA)
+    cv2.line(
+        overlay,
+        np.round(geom.route_a_anchor_xy).astype(int),
+        np.round(geom.route_a_tip_xy).astype(int),
+        (220, 0, 220),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.circle(overlay, np.round(geom.route_a_anchor_xy).astype(int), 5, (255, 0, 255), -1)
+    cv2.circle(overlay, np.round(geom.route_a_tip_xy).astype(int), 6, (180, 0, 255), -1)
+    _draw_mask_inset(overlay, geom.mask, "ROI mask", (18, 48))
+    lines = [
+        "wire-like process: Route A (endpoint/chord baseline)",
+        f"frame={frame_idx:03d}  time={row['time_sec']:.2f}s",
+        "magenta: route A chord",
+        "pink dots: route A anchor / tip",
+        f"x_route_a={row['x_route_a_px']:.1f}px",
+        f"quality={row['quality']:.2f}",
+    ]
+    _draw_text_block_bottom_left(overlay, lines)
+    return overlay
+
+
+def _route_b_overlay(frame_bgr: np.ndarray, geom, row: pd.Series, frame_idx: int, roi_xyxy: tuple[int, int, int, int]) -> np.ndarray:
+    overlay = frame_bgr.copy()
+    x0, y0, x1, y1 = roi_xyxy
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (80, 180, 255), 2)
+    contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
+    skeleton_path = np.round(geom.sampled_centerline_xy).astype(np.int32).reshape(-1, 1, 2)
+    fit_samples = np.round(geom.fit_samples_xy).astype(np.int32).reshape(-1, 1, 2)
+    fit_curve = np.round(geom.fitted_curve_xy).astype(np.int32).reshape(-1, 1, 2)
+    cv2.polylines(overlay, [contour], isClosed=True, color=(120, 120, 120), thickness=1, lineType=cv2.LINE_AA)
+    cv2.polylines(overlay, [skeleton_path], isClosed=False, color=(0, 140, 255), thickness=2, lineType=cv2.LINE_AA)
+    cv2.polylines(overlay, [fit_samples], isClosed=False, color=(0, 220, 255), thickness=2, lineType=cv2.LINE_AA)
+    cv2.polylines(overlay, [fit_curve], isClosed=False, color=(255, 180, 0), thickness=2, lineType=cv2.LINE_AA)
+    cv2.circle(overlay, np.round(geom.anchor_xy).astype(int), 5, (0, 220, 0), -1)
+    cv2.circle(overlay, np.round(geom.tip_xy).astype(int), 6, (0, 0, 255), -1)
+    _draw_mask_inset(overlay, geom.mask, "ROI mask", (18, 48))
+    lines = [
+        "wire-like process: Route B (single-frame shape fit)",
+        f"frame={frame_idx:03d}  time={row['time_sec']:.2f}s",
+        "orange: route B skeleton path",
+        "cyan: fit samples, blue: fitted curve",
+        "green/red: route B anchor / tip",
+        f"x_fit={row['x_fit_px']:.1f}px",
+        f"kappa_fit={row['kappa_fit_px_inv']:.5f}",
+        f"model={row['model_name']}  quality={row['quality']:.2f}",
+    ]
+    _draw_text_block_bottom_left(overlay, lines)
+    return overlay
+
+
+def _route_c_overlay(frame_bgr: np.ndarray, geom, row: pd.Series, frame_idx: int, roi_xyxy: tuple[int, int, int, int]) -> np.ndarray:
+    overlay = frame_bgr.copy()
+    x0, y0, x1, y1 = roi_xyxy
+    cv2.rectangle(overlay, (x0, y0), (x1, y1), (80, 180, 255), 2)
+    contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
+    cv2.polylines(overlay, [contour], isClosed=True, color=(120, 120, 120), thickness=1, lineType=cv2.LINE_AA)
+    route_c_anchor = np.array([row["route_c_anchor_x"], row["route_c_anchor_y"]], dtype=float)
+    route_c_tip = np.array([row["route_c_tip_x"], row["route_c_tip_y"]], dtype=float)
+    cv2.line(
+        overlay,
+        np.round(route_c_anchor).astype(int),
+        np.round(route_c_tip).astype(int),
+        (60, 200, 60),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.circle(overlay, np.round(route_c_anchor).astype(int), 5, (60, 200, 60), -1)
+    cv2.circle(overlay, np.round(route_c_tip).astype(int), 6, (40, 120, 255), -1)
+    cv2.circle(overlay, np.round(geom.route_a_tip_xy).astype(int), 4, (255, 0, 255), -1)
+    cv2.circle(overlay, np.round(geom.tip_xy).astype(int), 4, (0, 0, 255), -1)
+    _draw_mask_inset(overlay, geom.mask, "ROI mask", (18, 48))
+    lines = [
+        "wire-like process: Route C (temporal enhancement)",
+        f"frame={frame_idx:03d}  time={row['time_sec']:.2f}s",
+        "green line: route C temporally regularized chord",
+        "orange dot: route C tip",
+        "small pink/red dots: route A / B single-frame tips",
+        f"x_route_c={row['x_route_c_px']:.1f}px",
+        f"kappa_route_c={row['kappa_route_c_px_inv']:.5f}",
+    ]
+    _draw_text_block_bottom_left(overlay, lines)
+    return overlay
+
+
+def _combined_overlay(frame_bgr: np.ndarray, route_a_frame: np.ndarray, route_b_frame: np.ndarray, route_c_frame: np.ndarray) -> np.ndarray:
+    margin = 10
     h, w = frame_bgr.shape[:2]
-    scale = 0.48
+    scale = 0.32
     small_a = cv2.resize(route_a_frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     small_b = cv2.resize(route_b_frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    small_c = cv2.resize(route_c_frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     canvas = frame_bgr.copy()
-    y1 = h - small_a.shape[0] - margin
-    x1 = margin
-    y2 = h - small_b.shape[0] - margin
-    x2 = w - small_b.shape[1] - margin
-    canvas[y1 : y1 + small_a.shape[0], x1 : x1 + small_a.shape[1]] = small_a
-    canvas[y2 : y2 + small_b.shape[0], x2 : x2 + small_b.shape[1]] = small_b
-    cv2.rectangle(canvas, (x1 - 2, y1 - 2), (x1 + small_a.shape[1] + 2, y1 + small_a.shape[0] + 2), (255, 255, 255), 2)
-    cv2.rectangle(canvas, (x2 - 2, y2 - 2), (x2 + small_b.shape[1] + 2, y2 + small_b.shape[0] + 2), (255, 255, 255), 2)
+    y = h - small_a.shape[0] - margin
+    x_positions = [margin, (w - small_b.shape[1]) // 2, w - small_c.shape[1] - margin]
+    for x, panel in zip(x_positions, [small_a, small_b, small_c]):
+        canvas[y : y + panel.shape[0], x : x + panel.shape[1]] = panel
+        cv2.rectangle(canvas, (x - 2, y - 2), (x + panel.shape[1] + 2, y + panel.shape[0] + 2), (255, 255, 255), 2)
     return canvas
 
 
 def main() -> None:
+    video_path = ROOT / "data/wire-like.mp4"
     config = yaml.safe_load((ROOT / "configs/minimal.yaml").read_text(encoding="utf-8"))
-    extraction_cfg = _make_extraction_config(config["analysis"]["demo_extraction"])
-    out_dir = ROOT / "outputs/demo"
-    video_path = out_dir / "synthetic.mp4"
-    truth_path = out_dir / "temperature_truth.csv"
-    if not video_path.exists() or not truth_path.exists():
-        raise RuntimeError("demo files missing, run scripts/run_demo.py first")
+    extraction_params = config["analysis"]["wire_like_extraction"]
+    extraction_cfg = _make_extraction_config(extraction_params)
+    route_c_cfg = RouteCConfig(**extraction_params.get("route_c", {}))
+    out_dir = ROOT / "outputs/wire_like"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    truth = pd.read_csv(truth_path)
-    x0, y0, x1, y1 = extraction_cfg.roi_xyxy
-    truth["roi_xyxy"] = [(x0, y0, x1, y1)] * len(truth)
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"failed to open video: {video_path}")
@@ -247,16 +201,10 @@ def main() -> None:
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer_a = cv2.VideoWriter(str(out_dir / "route_a_process.mp4"), fourcc, fps, (width, height))
-    writer_b = cv2.VideoWriter(str(out_dir / "route_b_process.mp4"), fourcc, fps, (width, height))
-    writer_c = cv2.VideoWriter(str(out_dir / "route_c_process.mp4"), fourcc, fps, (width, height))
-    writer_ab = cv2.VideoWriter(str(out_dir / "route_ab_process.mp4"), fourcc, fps, (width, height))
-
-    frame_idx = 0
     rows = []
-    raw_frames = []
+    raw_frames: list[np.ndarray] = []
     geoms = []
+    frame_idx = 0
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -284,27 +232,34 @@ def main() -> None:
             }
         )
         frame_idx += 1
-
     cap.release()
-    series = apply_route_c(pd.DataFrame(rows), RouteCConfig(**config["analysis"]["demo_extraction"].get("route_c", {})))
 
+    series = pd.DataFrame(rows)
+    series = apply_route_c(series, route_c_cfg)
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer_a = cv2.VideoWriter(str(out_dir / "route_a_process.mp4"), fourcc, fps, (width, height))
+    writer_b = cv2.VideoWriter(str(out_dir / "route_b_process.mp4"), fourcc, fps, (width, height))
+    writer_c = cv2.VideoWriter(str(out_dir / "route_c_process.mp4"), fourcc, fps, (width, height))
+    writer_abc = cv2.VideoWriter(str(out_dir / "route_abc_process.mp4"), fourcc, fps, (width, height))
+
+    roi_xyxy = extraction_cfg.roi_xyxy
     for frame_idx, (frame, geom) in enumerate(zip(raw_frames, geoms)):
-        truth_row = truth.iloc[frame_idx]
         row = series.iloc[frame_idx]
-        frame_a = _draw_route_a_overlay(frame, geom, truth_row, frame_idx)
-        frame_b = _draw_route_b_overlay(frame, geom, truth_row, frame_idx)
-        frame_c = _draw_route_c_overlay(frame, geom, row, truth_row, frame_idx)
-        frame_ab = _draw_combined_overlay(frame, frame_a, frame_b)
+        frame_a = _route_a_overlay(frame, geom, row, frame_idx, roi_xyxy)
+        frame_b = _route_b_overlay(frame, geom, row, frame_idx, roi_xyxy)
+        frame_c = _route_c_overlay(frame, geom, row, frame_idx, roi_xyxy)
+        frame_abc = _combined_overlay(frame, frame_a, frame_b, frame_c)
         writer_a.write(frame_a)
         writer_b.write(frame_b)
         writer_c.write(frame_c)
-        writer_ab.write(frame_ab)
+        writer_abc.write(frame_abc)
 
     writer_a.release()
     writer_b.release()
     writer_c.release()
-    writer_ab.release()
-    print(f"wrote process videos to {out_dir}")
+    writer_abc.release()
+    print(f"wrote wire-like process videos to {out_dir}")
 
 
 if __name__ == "__main__":

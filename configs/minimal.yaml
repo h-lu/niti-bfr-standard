@@ -27,8 +27,12 @@ analysis:
     open_kernel: 3
     close_kernel: 5
     route_a_tip_cluster_radius_px: 6.0
+    route_b_endpoint_extension_scale: 0.0
+    route_b_cap_inset_scale: 0.08
     fit_bin_px: 3.0
     fit_path_fraction: 0.72
+    fit_path_fraction_min: 0.42
+    fit_curvature_threshold_ratio: 0.28
     fit_margin_prefer_quadratic: 0.05
     route_c:
       endpoint_blend_route_a: 0.2
@@ -39,12 +43,16 @@ analysis:
   wire_like_extraction:
     roi_xyxy: [180, 0, 760, 520]
     blur_ksize: 5
-    threshold_dark: 120
-    open_kernel: 3
+    threshold_dark: 145
+    open_kernel: 1
     close_kernel: 7
     route_a_tip_cluster_radius_px: 6.0
+    route_b_endpoint_extension_scale: 0.0
+    route_b_cap_inset_scale: 0.08
     fit_bin_px: 3.0
     fit_path_fraction: 0.72
+    fit_path_fraction_min: 0.42
+    fit_curvature_threshold_ratio: 0.28
     fit_margin_prefer_quadratic: 0.05
     anchor_prior_xy: [575, 13]
     anchor_prior_weight: 0.75

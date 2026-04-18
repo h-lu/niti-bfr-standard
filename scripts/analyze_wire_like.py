@@ -70,8 +70,12 @@ def main() -> None:
         open_kernel=int(extraction_params["open_kernel"]),
         close_kernel=int(extraction_params["close_kernel"]),
         route_a_tip_cluster_radius_px=float(extraction_params.get("route_a_tip_cluster_radius_px", 6.0)),
+        route_b_endpoint_extension_scale=float(extraction_params.get("route_b_endpoint_extension_scale", 0.0)),
+        route_b_cap_inset_scale=float(extraction_params.get("route_b_cap_inset_scale", 0.08)),
         fit_bin_px=float(extraction_params.get("fit_bin_px", 3.0)),
         fit_path_fraction=float(extraction_params.get("fit_path_fraction", 0.72)),
+        fit_path_fraction_min=float(extraction_params.get("fit_path_fraction_min", 0.42)),
+        fit_curvature_threshold_ratio=float(extraction_params.get("fit_curvature_threshold_ratio", 0.28)),
         fit_margin_prefer_quadratic=float(extraction_params.get("fit_margin_prefer_quadratic", 0.05)),
     )
     out_dir = ROOT / "outputs/wire_like"
