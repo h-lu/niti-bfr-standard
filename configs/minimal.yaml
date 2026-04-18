@@ -31,7 +31,14 @@ braided_synthetic:
   diameter_a_px: 220
   transition_temp_c: 47.0
   transition_width_c: 2.0
-  profile_power: 0.9
+  peak_shift_norm: 0.56
+  left_profile_power: 0.88
+  right_profile_power: 1.06
+  bow_m_px: 14.0
+  bow_a_px: 8.0
+  axis_angle_m_deg: -1.5
+  axis_angle_a_deg: 2.0
+  center_shift_a_xy: [10.0, -6.0]
   temperature:
     start_c: 20.0
     end_c: 65.0
@@ -43,6 +50,12 @@ braided_synthetic:
     braid_spacing_px: 28
     wire_thickness_px: 2
     outline_thickness_px: 2
+    support_gray: 178
+    support_length_px: 52
+    support_radius_px: 6
+    tip_cap_gray: 98
+    tip_cap_length_px: 20
+    tip_cap_radius_px: 10
     noise_sigma: 2.0
     blur_sigma: 0.8
 
@@ -98,4 +111,10 @@ analysis:
     min_component_area: 200
     width_sampling_step_px: 4.0
     taper_threshold_ratio: 0.25
+    compaction_threshold_ratio: 0.75
     qc_max_segments: 15
+    tube_radius_scale: 1.0
+    body_min_halfwidth_px: 3.0
+    centerline_smooth_window: 7
+    diameter_peak_threshold_ratio: 0.95
+    attachment_min_area_px2: 24
