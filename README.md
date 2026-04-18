@@ -125,6 +125,12 @@ python3 -m pip install -e .
 python3 scripts/run_demo.py
 ```
 
+运行第二类对象的最小 demo:
+
+```bash
+python3 scripts/run_braided_demo.py
+```
+
 生成 demo 的路线 A / B 计算过程视频:
 
 ```bash
@@ -170,12 +176,30 @@ python3 scripts/analyze_wire_like.py
 - [research-notes.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/research-notes.md)
   其中新增了“方法对照表”和“商业软件/开源工具参考表”，方便直接比较标准思路、论文方法和当前仓库路线。
 
+第二类对象的独立调研与方案草案见:
+
+- [braided-device-survey.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-device-survey.md)
+  该文档用于记录“编织网状器械 / braided device”这类新对象的资料整理、主量设计，以及预计采用的独立算法路线。
+
 当前最小方案的封版结论见:
 
 - [v0.1-summary.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/v0.1-summary.md)
   其中总结了当前针型对象是否算“已解决”、A/B/C 的推荐用法、demo 的理论值，以及真实实验还需要补哪些输入。
 - [v0.2-scope-guard.md](docs/v0.2-scope-guard.md)
   下阶段只收敛 `formal Af` 的边界、准入条件与正式主量，不继续扩算法范围。
+
+第二类对象当前提供独立 quicklook 脚本:
+
+```bash
+python3 scripts/analyze_braided_like.py /path/to/video.mp4
+```
+
+该脚本当前仅用于 `braided device` 风格对象的:
+
+- 包络长度 quicklook
+- 主轴长度 quicklook
+- 最大直径与左右收口定位
+- QC 叠加帧导出
 
 ## 通俗解释
 

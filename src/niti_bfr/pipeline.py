@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from .extract_braided import BraidedExtractionConfig, extract_braided_geometry
 from .extract import ExtractionConfig, extract_geometry
 from .metrics import MetricEvaluation, RecoveryFit, evaluate_metric, recovery_ratio_directional
 from .temporal import RouteCConfig, apply_route_c
@@ -256,4 +257,69 @@ def analyze_video(
         mode=mode,
         formal_metric_label=formal_metric_label,
         formal_gate_reason=formal_gate_reason,
+    )
+
+
+def analyze_braided_video_quicklook(
+    video_path: str | Path,
+    extraction: BraidedExtractionConfig,
+) -> AnalysisResult:
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise RuntimeError(f"failed to open video: {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
+    rows: list[dict[str, float]] = []
+    frame_idx = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        try:
+            geom = extract_braided_geometry(frame, extraction)
+            row = {
+                "frame": frame_idx,
+                "time_sec": frame_idx / fps,
+                "anchor_x": geom.anchor_xy[0],
+                "anchor_y": geom.anchor_xy[1],
+                "tip_x": geom.tip_xy[0],
+                "tip_y": geom.tip_xy[1],
+                "quality": geom.quality,
+                "length_env_px": geom.length_env_px,
+                "length_axis_px": geom.length_axis_px,
+                "diameter_max_px": geom.diameter_max_px,
+                "x_peak_norm": geom.x_peak_norm,
+                "taper_left_px": geom.taper_left_px,
+                "taper_right_px": geom.taper_right_px,
+            }
+        except RuntimeError:
+            row = {
+                "frame": frame_idx,
+                "time_sec": frame_idx / fps,
+                "anchor_x": np.nan,
+                "anchor_y": np.nan,
+                "tip_x": np.nan,
+                "tip_y": np.nan,
+                "quality": 0.0,
+                "length_env_px": np.nan,
+                "length_axis_px": np.nan,
+                "diameter_max_px": np.nan,
+                "x_peak_norm": np.nan,
+                "taper_left_px": np.nan,
+                "taper_right_px": np.nan,
+            }
+        rows.append(row)
+        frame_idx += 1
+    cap.release()
+
+    return AnalysisResult(
+        series=pd.DataFrame(rows),
+        fit=None,
+        af95_c=None,
+        aftan_c=None,
+        metric_reports=None,
+        primary_metric_label=None,
+        mode="quicklook",
+        formal_metric_label=None,
+        formal_gate_reason="braided_quicklook_only",
     )

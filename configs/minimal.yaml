@@ -19,6 +19,33 @@ synthetic:
     noise_sigma: 2.0
     blur_sigma: 0.8
 
+braided_synthetic:
+  image_width: 1280
+  image_height: 848
+  fps: 20
+  duration_sec: 24
+  center_xy: [640, 260]
+  length_m_px: 520
+  length_a_px: 410
+  diameter_m_px: 120
+  diameter_a_px: 220
+  transition_temp_c: 47.0
+  transition_width_c: 2.0
+  profile_power: 0.9
+  temperature:
+    start_c: 20.0
+    end_c: 65.0
+  render:
+    background_gray: 236
+    body_gray: 120
+    wire_gray: 70
+    outline_gray: 60
+    braid_spacing_px: 28
+    wire_thickness_px: 2
+    outline_thickness_px: 2
+    noise_sigma: 2.0
+    blur_sigma: 0.8
+
 analysis:
   demo_extraction:
     roi_xyxy: [180, 0, 760, 520]
@@ -62,3 +89,13 @@ analysis:
       ema_alpha_floor: 0.08
       enforce_monotonic_x: true
       enforce_monotonic_kappa: true
+  braided_device_extraction:
+    roi_xyxy: [120, 0, 980, 520]
+    blur_ksize: 5
+    threshold_dark: 145
+    open_kernel: 1
+    close_kernel: 5
+    min_component_area: 200
+    width_sampling_step_px: 4.0
+    taper_threshold_ratio: 0.25
+    qc_max_segments: 15
