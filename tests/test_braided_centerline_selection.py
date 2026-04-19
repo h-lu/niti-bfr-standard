@@ -64,6 +64,22 @@ class BraidedCenterlineSelectionTests(unittest.TestCase):
         self.assertTrue(np.array_equal(primary_xy, candidates["body_bins"]))
         self.assertTrue(np.array_equal(secondary_xy, candidates["prior"]))
 
+    def test_select_centerline_paths_keeps_global_length_consensus_when_low_span_candidate_is_filtered(self) -> None:
+        mask = np.ones((40, 80), dtype=np.uint8) * 255
+        mask[20, 30] = 0
+        candidates = {
+            "body_bins": np.array([[10.0, 20.0], [30.0, 20.0], [50.0, 20.0], [70.0, 20.0]], dtype=float),
+            "skeleton": np.array([[39.0, 30.0], [39.0, 20.0], [39.0, 10.0]], dtype=float),
+            "prior": np.array([[5.0, 21.0], [30.0, 21.0], [55.0, 21.0], [75.0, 21.0]], dtype=float),
+        }
+
+        primary_name, primary_xy, secondary_name, secondary_xy = _select_centerline_paths(mask, candidates)
+
+        self.assertEqual(primary_name, "body_bins")
+        self.assertEqual(secondary_name, "prior")
+        self.assertTrue(np.array_equal(primary_xy, candidates["body_bins"]))
+        self.assertTrue(np.array_equal(secondary_xy, candidates["prior"]))
+
 
 if __name__ == "__main__":
     unittest.main()

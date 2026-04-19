@@ -966,16 +966,20 @@ def _select_centerline_paths(
     if not eligible_primary_names:
         eligible_primary_names = list(lengths)
 
-    median_length_px = float(np.median(np.asarray([lengths[name] for name in eligible_primary_names], dtype=float)))
+    # Keep the global candidate-length consensus as the primary anchor even when
+    # low-span candidates are excluded from winning. This avoids frame-to-frame
+    # flips where `prior` and `body_bins` are equally eligible but a filtered
+    # candidate still carries the length consensus toward the body-only solution.
+    consensus_length_px = float(np.median(np.asarray(list(lengths.values()), dtype=float)))
     primary_preference = {"body_bins": 0, "skeleton": 1, "prior": 2}
     secondary_preference = {"skeleton": 0, "body_bins": 1, "prior": 2}
 
     primary_name = min(
         eligible_primary_names,
         key=lambda name: (
-            abs(lengths[name] - median_length_px) / max(median_length_px, 1e-9),
-            1.0 - supports[name],
             primary_preference.get(name, 99),
+            abs(lengths[name] - consensus_length_px) / max(consensus_length_px, 1e-9),
+            1.0 - supports[name],
         ),
     )
     primary_xy = candidates[primary_name]
