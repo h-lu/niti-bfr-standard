@@ -163,6 +163,15 @@ def _run_result_hint(run: sqlite3.Row | dict[str, Any]) -> str:
     return gate_reason or "-"
 
 
+templates.env.globals.update(
+    preset_label=_preset_label,
+    preset_description=_preset_description,
+    mode_label=_mode_label,
+    mode_description=_mode_description,
+    run_result_hint=_run_result_hint,
+)
+
+
 @app.get("/")
 def home(request: Request) -> Any:
     runs = _list_runs(limit=12)
