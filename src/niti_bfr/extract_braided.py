@@ -916,9 +916,18 @@ def _path_support_fraction(mask: np.ndarray, points_xy: np.ndarray) -> float:
 def _endpoint_gap(primary_xy: np.ndarray, secondary_xy: np.ndarray) -> float:
     if len(primary_xy) == 0 or len(secondary_xy) == 0:
         return float("nan")
-    anchor_gap = float(np.linalg.norm(primary_xy[0] - secondary_xy[0]))
-    tip_gap = float(np.linalg.norm(primary_xy[-1] - secondary_xy[-1]))
-    return float(0.5 * (anchor_gap + tip_gap))
+    primary_length = _path_length(primary_xy)
+    secondary_length = _path_length(secondary_xy)
+    if np.isfinite(primary_length) and np.isfinite(secondary_length) and primary_length <= secondary_length:
+        shorter_xy, longer_xy = primary_xy, secondary_xy
+    else:
+        shorter_xy, longer_xy = secondary_xy, primary_xy
+
+    endpoint_gaps: list[float] = []
+    for endpoint_xy in (shorter_xy[0], shorter_xy[-1]):
+        deltas = longer_xy - endpoint_xy[None, :]
+        endpoint_gaps.append(float(np.min(np.linalg.norm(deltas, axis=1))))
+    return float(np.mean(endpoint_gaps))
 
 
 def _select_centerline_paths(
@@ -960,7 +969,8 @@ def _select_centerline_paths(
             secondary_preference.get(name, 99),
         ),
     )
-    return primary_name, primary_xy, secondary_name, candidates[secondary_name]
+    secondary_xy = _align_path_orientation(primary_xy, candidates[secondary_name])
+    return primary_name, primary_xy, secondary_name, secondary_xy
 
 
 def _orthogonal_extent(mask: np.ndarray, point_xy: np.ndarray, normal_xy: np.ndarray, sign: float) -> float:
