@@ -25,7 +25,7 @@
       <div class="topline">
         <div>
           <h1>历史任务</h1>
-          <p class="muted">最小留档，先围绕 run 做状态、结果和追踪。</p>
+          <p class="muted">最小留档，覆盖 wire-like / braided-like 两类 run 的状态、结果和追踪。</p>
         </div>
         <a href="{{ request.url_for('home') }}">返回首页</a>
       </div>
@@ -47,16 +47,15 @@
               <td>
                 <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
                 <div class="muted">{{ run["video_filename"] }}</div>
+                <div class="muted">{{ preset_label(run['preset']) }}</div>
               </td>
               <td><span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span></td>
-              <td>{{ run["requested_mode"] }}</td>
+              <td>{{ mode_label(run['requested_mode']) }}</td>
               <td>
                 {% if run["actual_mode"] %}
-                  <div>{{ run["actual_mode"] }}</div>
+                  <div>{{ mode_label(run['actual_mode']) }}</div>
                 {% endif %}
-                {% if run["formal_gate_reason"] %}
-                  <div class="muted">{{ run["formal_gate_reason"] }}</div>
-                {% endif %}
+                <div class="muted">{{ run_result_hint(run) }}</div>
               </td>
             </tr>
             {% endfor %}
