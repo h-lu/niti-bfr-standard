@@ -1,0 +1,70 @@
+{
+  "metric_aliases": {
+    "A": "length_axis",
+    "B": "diameter_max",
+    "C": "area_proj"
+  },
+  "theory": {
+    "A": {
+      "metric_key": "length_axis",
+      "af95_c": 52.887945325613096,
+      "aftan_c": 50.994851740543986
+    },
+    "B": {
+      "metric_key": "diameter_max",
+      "af95_c": 52.88903158229088,
+      "aftan_c": 50.99592410592863
+    },
+    "C": {
+      "metric_key": "area_proj",
+      "af95_c": 51.919016727516585,
+      "aftan_c": 50.08199764663405
+    }
+  },
+  "measured": {
+    "A": {
+      "metric_key": "length_axis",
+      "af95_c": 53.319399245966935,
+      "aftan_c": 50.793003507268025
+    },
+    "B": {
+      "metric_key": "diameter_max",
+      "af95_c": 53.05712245674261,
+      "aftan_c": 50.74048821477999
+    },
+    "C": {
+      "metric_key": "area_proj",
+      "af95_c": 55.469301950404606,
+      "aftan_c": 49.70179987556509
+    }
+  },
+  "comparison": {
+    "A": {
+      "metric_key": "length_axis",
+      "measured_af95_c": 53.319399245966935,
+      "truth_af95_c": 52.887945325613096,
+      "af95_error_c": 0.4314539203538388,
+      "measured_aftan_c": 50.793003507268025,
+      "truth_aftan_c": 50.994851740543986,
+      "aftan_error_c": -0.20184823327596035
+    },
+    "B": {
+      "metric_key": "diameter_max",
+      "measured_af95_c": 53.05712245674261,
+      "truth_af95_c": 52.88903158229088,
+      "af95_error_c": 0.1680908744517282,
+      "measured_aftan_c": 50.74048821477999,
+      "truth_aftan_c": 50.99592410592863,
+      "aftan_error_c": -0.2554358911486432
+    },
+    "C": {
+      "metric_key": "area_proj",
+      "measured_af95_c": 55.469301950404606,
+      "truth_af95_c": 51.919016727516585,
+      "af95_error_c": 3.5502852228880215,
+      "measured_aftan_c": 49.70179987556509,
+      "truth_aftan_c": 50.08199764663405,
+      "aftan_error_c": -0.38019777106896413
+    }
+  }
+}

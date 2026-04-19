@@ -1,0 +1,2 @@
+frame,time_sec,anchor_x,anchor_y,tip_x,tip_y,quality,length_env_px,length_axis_px,diameter_max_px,x_peak_norm,taper_left_px,taper_right_px,length_env_smooth,length_axis_smooth,diameter_max_smooth
+0,0.0,119.24740916316651,200.06101323207199,494.0091386671759,181.1814032557058,1.0,375.2369832168678,376.0,86.29358796022893,0.5425531914893617,0.0,40.0,375.2369832168678,376.0,86.29358796022893

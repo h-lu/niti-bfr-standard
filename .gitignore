@@ -1,9 +1,0 @@
-.DS_Store
-__pycache__/
-.pytest_cache/
-.mypy_cache/
-.venv/
-build/
-dist/
-outputs/
-tmp/
