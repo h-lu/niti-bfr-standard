@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -30,6 +31,22 @@ BRAIDED_METRIC_DISPLAY = {
     "length_axis": "A:length_axis",
     "diameter_max": "B:diameter_max",
     "area_proj": "C:area_proj",
+}
+
+BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS: dict[str, float] = {
+    "min_valid_frames": 10.0,
+    "quality_median_min": 0.45,
+    "quality_lt_0_5_fraction_max": 0.20,
+    "axis_monotonic_violation_fraction_max": 0.20,
+    "centerline_disagreement_median_max": 0.08,
+    "endpoint_jump_fraction_p95_max": 0.08,
+    "endpoint_jump_px_floor": 12.0,
+    "axis_peak_position_stability_p95_max": 0.18,
+    "body_mask_attachment_leak_fraction_p90_max": 0.03,
+    "excluded_attachment_area_fraction_median_max": 0.12,
+    "body_mask_area_fraction_median_min": 0.55,
+    "branch_component_count_after_pruning_p95_max": 4.0,
+    "attachment_border_touch_count_p90_max": 0.0,
 }
 
 
@@ -249,6 +266,9 @@ def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
             )
         else:
             augmented["endpoint_jump_px"] = _rowwise_nanmax(np.column_stack([anchor_jump, tip_jump]))
+    axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in augmented.columns else "length_axis_px"
+    if axis_eval_col in augmented.columns and "endpoint_jump_px" in augmented.columns:
+        augmented["endpoint_jump_fraction"] = _safe_fraction(augmented["endpoint_jump_px"], augmented[axis_eval_col])
     if "diameter_peak_pos_norm" in augmented.columns:
         stability = np.full(len(augmented), np.nan, dtype=float)
         if len(augmented) >= 2:
@@ -308,6 +328,210 @@ def _safe_fraction(numerator: np.ndarray | pd.Series, denominator: np.ndarray | 
     return out
 
 
+def _finite_value(value: float) -> float | None:
+    value = float(value)
+    if not np.isfinite(value):
+        return None
+    return value
+
+
+def _braided_monotonic_violation_fraction(
+    temp_c: np.ndarray | pd.Series,
+    values: np.ndarray | pd.Series,
+    *,
+    increasing: bool,
+) -> float | None:
+    temp_arr = np.asarray(temp_c, dtype=float)
+    value_arr = np.asarray(values, dtype=float)
+    valid = np.isfinite(temp_arr) & np.isfinite(value_arr)
+    if np.count_nonzero(valid) < 4:
+        return None
+
+    temp_valid = temp_arr[valid]
+    value_valid = value_arr[valid]
+    order = np.argsort(temp_valid)
+    value_valid = value_valid[order]
+
+    window = min(9, len(value_valid))
+    if window % 2 == 0:
+        window -= 1
+    if window >= 3:
+        smooth = pd.Series(value_valid).rolling(window=window, center=True, min_periods=1).median().to_numpy(dtype=float)
+    else:
+        smooth = value_valid
+
+    dynamic_range = float(np.nanmax(smooth) - np.nanmin(smooth)) if len(smooth) else 0.0
+    tolerance = max(0.5, 0.005 * dynamic_range)
+    diff = np.diff(smooth)
+    if increasing:
+        violations = diff < -tolerance
+    else:
+        violations = diff > tolerance
+    return float(np.mean(violations)) if len(diff) else 0.0
+
+
+def _braided_endpoint_jump_limit_px(series: pd.DataFrame, axis_eval_col: str) -> float | None:
+    if axis_eval_col not in series.columns:
+        return None
+    axis_median = _finite_median(series[axis_eval_col])
+    if not np.isfinite(axis_median):
+        return None
+    return float(max(BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS["endpoint_jump_px_floor"], 0.08 * axis_median))
+
+
+def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
+    axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
+    if axis_eval_col in series.columns and "quality" in series.columns:
+        valid = series.dropna(subset=[axis_eval_col, "quality"])
+    elif axis_eval_col in series.columns:
+        valid = series.dropna(subset=[axis_eval_col])
+    else:
+        valid = series.iloc[0:0].copy()
+
+    metrics: dict[str, Any] = {
+        "axis_eval_col": axis_eval_col,
+        "valid_frames": int(len(valid)),
+        "quality_median": None,
+        "quality_lt_0_5_fraction": None,
+        "axis_monotonic_violation_fraction": None,
+        "centerline_disagreement_median": None,
+        "endpoint_jump_p95_px": None,
+        "endpoint_jump_fraction_p95": None,
+        "endpoint_jump_limit_px": None,
+        "branch_component_count_after_pruning_p95": None,
+        "axis_peak_position_stability_p95": None,
+        "body_mask_attachment_leak_fraction_p90": None,
+        "excluded_attachment_area_fraction_median": None,
+        "body_mask_area_fraction_median": None,
+        "attachment_border_touch_count_p90": None,
+    }
+    thresholds = {key: float(value) for key, value in BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS.items()}
+
+    if len(valid) > 0:
+        if "quality" in valid.columns:
+            metrics["quality_median"] = _finite_value(_finite_median(valid["quality"]))
+            metrics["quality_lt_0_5_fraction"] = float(np.mean(valid["quality"].to_numpy(dtype=float) < 0.5))
+        if {"temperature_c", axis_eval_col}.issubset(valid.columns):
+            axis_monotonic_violation = _braided_monotonic_violation_fraction(
+                valid["temperature_c"],
+                valid[axis_eval_col],
+                increasing=False,
+            )
+            metrics["axis_monotonic_violation_fraction"] = _finite_value(
+                axis_monotonic_violation if axis_monotonic_violation is not None else float("nan")
+            )
+        if "centerline_disagreement" in valid.columns:
+            metrics["centerline_disagreement_median"] = _finite_value(_finite_median(valid["centerline_disagreement"]))
+        if "endpoint_jump_px" in valid.columns:
+            metrics["endpoint_jump_p95_px"] = _finite_value(_finite_percentile(valid["endpoint_jump_px"], 95))
+            endpoint_fraction = (
+                valid["endpoint_jump_fraction"]
+                if "endpoint_jump_fraction" in valid.columns
+                else _safe_fraction(valid["endpoint_jump_px"], valid[axis_eval_col])
+            )
+            metrics["endpoint_jump_fraction_p95"] = _finite_value(_finite_percentile(endpoint_fraction, 95))
+            metrics["endpoint_jump_limit_px"] = _finite_value(_braided_endpoint_jump_limit_px(valid, axis_eval_col) or float("nan"))
+        branch_qc_col = None
+        if "branch_component_count_after_pruning" in valid.columns:
+            branch_qc_col = "branch_component_count_after_pruning"
+        elif "branch_count_after_pruning" in valid.columns:
+            branch_qc_col = "branch_count_after_pruning"
+        if branch_qc_col is not None:
+            metrics["branch_component_count_after_pruning_p95"] = _finite_value(_finite_percentile(valid[branch_qc_col], 95))
+        if "axis_peak_position_stability" in valid.columns:
+            metrics["axis_peak_position_stability_p95"] = _finite_value(_finite_percentile(valid["axis_peak_position_stability"], 95))
+        if "body_mask_attachment_leak_fraction" in valid.columns:
+            metrics["body_mask_attachment_leak_fraction_p90"] = _finite_value(
+                _finite_percentile(valid["body_mask_attachment_leak_fraction"], 90)
+            )
+        if {"excluded_attachment_area_px2", "component_area_px2"}.issubset(valid.columns):
+            excluded_attachment_fraction = _safe_fraction(
+                valid["excluded_attachment_area_px2"],
+                valid["component_area_px2"],
+            )
+            metrics["excluded_attachment_area_fraction_median"] = _finite_value(_finite_median(excluded_attachment_fraction))
+        if {"body_mask_area_px2", "component_area_px2"}.issubset(valid.columns):
+            body_component_fraction = _safe_fraction(
+                valid["body_mask_area_px2"],
+                valid["component_area_px2"],
+            )
+            metrics["body_mask_area_fraction_median"] = _finite_value(_finite_median(body_component_fraction))
+        if "attachment_border_touch_count" in valid.columns:
+            metrics["attachment_border_touch_count_p90"] = _finite_value(
+                _finite_percentile(valid["attachment_border_touch_count"], 90)
+            )
+
+    reasons: list[str] = []
+    if metrics["valid_frames"] < int(thresholds["min_valid_frames"]):
+        reasons.append("insufficient_axis_points")
+    if metrics["quality_median"] is not None and metrics["quality_median"] < thresholds["quality_median_min"]:
+        reasons.append("unstable_axis_extraction")
+    if (
+        metrics["quality_lt_0_5_fraction"] is not None
+        and metrics["quality_lt_0_5_fraction"] > thresholds["quality_lt_0_5_fraction_max"]
+    ):
+        reasons.append("quality_low_fraction")
+    if (
+        metrics["axis_monotonic_violation_fraction"] is not None
+        and metrics["axis_monotonic_violation_fraction"] > thresholds["axis_monotonic_violation_fraction_max"]
+    ):
+        reasons.append("length_axis_not_monotonic_enough")
+    if (
+        metrics["centerline_disagreement_median"] is not None
+        and metrics["centerline_disagreement_median"] > thresholds["centerline_disagreement_median_max"]
+    ):
+        reasons.append("centerline_disagreement")
+    if (
+        metrics["endpoint_jump_fraction_p95"] is not None
+        and metrics["endpoint_jump_fraction_p95"] > thresholds["endpoint_jump_fraction_p95_max"]
+    ):
+        reasons.append("endpoint_jump")
+    elif (
+        metrics["endpoint_jump_p95_px"] is not None
+        and metrics["endpoint_jump_limit_px"] is not None
+        and metrics["endpoint_jump_p95_px"] > metrics["endpoint_jump_limit_px"]
+    ):
+        reasons.append("endpoint_jump")
+    if (
+        metrics["branch_component_count_after_pruning_p95"] is not None
+        and metrics["branch_component_count_after_pruning_p95"] > thresholds["branch_component_count_after_pruning_p95_max"]
+    ):
+        reasons.append("branch_component_count_after_pruning")
+    if (
+        metrics["axis_peak_position_stability_p95"] is not None
+        and metrics["axis_peak_position_stability_p95"] > thresholds["axis_peak_position_stability_p95_max"]
+    ):
+        reasons.append("axis_peak_position_stability")
+    if (
+        metrics["body_mask_attachment_leak_fraction_p90"] is not None
+        and metrics["body_mask_attachment_leak_fraction_p90"] > thresholds["body_mask_attachment_leak_fraction_p90_max"]
+    ):
+        reasons.append("body_mask_attachment_leak_fraction")
+    if (
+        metrics["excluded_attachment_area_fraction_median"] is not None
+        and metrics["excluded_attachment_area_fraction_median"] > thresholds["excluded_attachment_area_fraction_median_max"]
+    ):
+        reasons.append("excluded_attachment_area_fraction")
+    if (
+        metrics["body_mask_area_fraction_median"] is not None
+        and metrics["body_mask_area_fraction_median"] < thresholds["body_mask_area_fraction_median_min"]
+    ):
+        reasons.append("body_mask_area_fraction")
+    if (
+        metrics["attachment_border_touch_count_p90"] is not None
+        and metrics["attachment_border_touch_count_p90"] > thresholds["attachment_border_touch_count_p90_max"]
+    ):
+        reasons.append("attachment_border_touch_count")
+
+    deduped_reasons = list(dict.fromkeys(reasons))
+    return {
+        "accepted": len(deduped_reasons) == 0,
+        "reasons": deduped_reasons,
+        "metrics": metrics,
+        "thresholds": thresholds,
+    }
+
+
 def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) -> tuple[bool, str | None]:
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
     axis_report = reports.get("length_axis")
@@ -321,56 +545,68 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
     if quality_median < 0.10:
         return False, "unstable_axis_extraction"
 
-    if axis_report.monotonic_violation_fraction > 0.25:
-        return False, "length_axis_not_monotonic_enough"
-
     if axis_report.dynamic_range < 5.0:
         return False, "axis_dynamic_range_too_small"
 
-    if "centerline_disagreement" in valid.columns:
-        if _finite_median(valid["centerline_disagreement"]) > 0.08:
+    acceptance = compute_braided_acceptance(valid)
+    acceptance_metrics = acceptance["metrics"]
+    acceptance_thresholds = acceptance["thresholds"]
+
+    if acceptance_metrics["axis_monotonic_violation_fraction"] is not None:
+        if (
+            acceptance_metrics["axis_monotonic_violation_fraction"]
+            > acceptance_thresholds["axis_monotonic_violation_fraction_max"]
+        ):
+            return False, "length_axis_not_monotonic_enough"
+
+    if acceptance_metrics["centerline_disagreement_median"] is not None:
+        if acceptance_metrics["centerline_disagreement_median"] > acceptance_thresholds["centerline_disagreement_median_max"]:
             return False, "centerline_disagreement"
 
-    if "endpoint_jump_px" in valid.columns:
-        endpoint_limit = max(12.0, 0.08 * float(np.nanmedian(valid[axis_eval_col])))
-        if _finite_percentile(valid["endpoint_jump_px"], 95) > endpoint_limit:
+    if acceptance_metrics["endpoint_jump_fraction_p95"] is not None:
+        if acceptance_metrics["endpoint_jump_fraction_p95"] > acceptance_thresholds["endpoint_jump_fraction_p95_max"]:
+            return False, "endpoint_jump"
+    if acceptance_metrics["endpoint_jump_p95_px"] is not None and acceptance_metrics["endpoint_jump_limit_px"] is not None:
+        if acceptance_metrics["endpoint_jump_p95_px"] > acceptance_metrics["endpoint_jump_limit_px"]:
             return False, "endpoint_jump"
 
-    branch_qc_col = None
-    if "branch_component_count_after_pruning" in valid.columns:
-        branch_qc_col = "branch_component_count_after_pruning"
-    elif "branch_count_after_pruning" in valid.columns:
-        branch_qc_col = "branch_count_after_pruning"
-    if branch_qc_col is not None:
-        if _finite_percentile(valid[branch_qc_col], 95) > 4.0:
+    if acceptance_metrics["branch_component_count_after_pruning_p95"] is not None:
+        if (
+            acceptance_metrics["branch_component_count_after_pruning_p95"]
+            > acceptance_thresholds["branch_component_count_after_pruning_p95_max"]
+        ):
             return False, "branch_component_count_after_pruning"
 
-    if "axis_peak_position_stability" in valid.columns:
-        if _finite_percentile(valid["axis_peak_position_stability"], 95) > 0.18:
+    if acceptance_metrics["axis_peak_position_stability_p95"] is not None:
+        if (
+            acceptance_metrics["axis_peak_position_stability_p95"]
+            > acceptance_thresholds["axis_peak_position_stability_p95_max"]
+        ):
             return False, "axis_peak_position_stability"
 
-    if "body_mask_attachment_leak_fraction" in valid.columns:
-        if _finite_percentile(valid["body_mask_attachment_leak_fraction"], 90) > 0.03:
+    if acceptance_metrics["body_mask_attachment_leak_fraction_p90"] is not None:
+        if (
+            acceptance_metrics["body_mask_attachment_leak_fraction_p90"]
+            > acceptance_thresholds["body_mask_attachment_leak_fraction_p90_max"]
+        ):
             return False, "body_mask_attachment_leak_fraction"
 
-    if {"excluded_attachment_area_px2", "component_area_px2"}.issubset(valid.columns):
-        excluded_attachment_fraction = _safe_fraction(
-            valid["excluded_attachment_area_px2"],
-            valid["component_area_px2"],
-        )
-        if _finite_median(excluded_attachment_fraction) > 0.12:
+    if acceptance_metrics["excluded_attachment_area_fraction_median"] is not None:
+        if (
+            acceptance_metrics["excluded_attachment_area_fraction_median"]
+            > acceptance_thresholds["excluded_attachment_area_fraction_median_max"]
+        ):
             return False, "excluded_attachment_area_fraction"
 
-    if {"body_mask_area_px2", "component_area_px2"}.issubset(valid.columns):
-        body_component_fraction = _safe_fraction(
-            valid["body_mask_area_px2"],
-            valid["component_area_px2"],
-        )
-        if _finite_median(body_component_fraction) < 0.55:
+    if acceptance_metrics["body_mask_area_fraction_median"] is not None:
+        if acceptance_metrics["body_mask_area_fraction_median"] < acceptance_thresholds["body_mask_area_fraction_median_min"]:
             return False, "body_mask_area_fraction"
 
-    if "attachment_border_touch_count" in valid.columns:
-        if _finite_percentile(valid["attachment_border_touch_count"], 90) > 0.0:
+    if acceptance_metrics["attachment_border_touch_count_p90"] is not None:
+        if (
+            acceptance_metrics["attachment_border_touch_count_p90"]
+            > acceptance_thresholds["attachment_border_touch_count_p90_max"]
+        ):
             return False, "attachment_border_touch_count"
 
     tail_count = max(5, int(np.ceil(len(valid) * 0.1)))

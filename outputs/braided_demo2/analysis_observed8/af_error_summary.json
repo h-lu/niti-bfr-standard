@@ -1,0 +1,28 @@
+{
+  "formal_gate_reason": "branch_count_after_pruning",
+  "A_length_axis": {
+    "measured_af95_c": 56.00098744811241,
+    "truth_af95_c": 59.354719562666645,
+    "af95_error_c": -3.3537321145542336,
+    "measured_aftan_c": 50.00353588515137,
+    "truth_aftan_c": 54.578943797710124,
+    "aftan_error_c": -4.575407912558752
+  },
+  "B_diameter_max": {
+    "measured_af95_c": 54.04074698827775,
+    "truth_af95_c": 54.318163476102455,
+    "af95_error_c": -0.2774164878247021,
+    "measured_aftan_c": 48.29047221287932,
+    "truth_aftan_c": 53.29276065411299,
+    "aftan_error_c": -5.002288441233667
+  },
+  "C_area_proj": {
+    "increasing": false,
+    "measured_af95_c": 58.18409773665546,
+    "truth_af95_c": 58.82906851197322,
+    "af95_error_c": -0.6449707753177591,
+    "measured_aftan_c": 54.84727128277094,
+    "truth_aftan_c": 56.514933194479774,
+    "aftan_error_c": -1.6676619117088336
+  }
+}

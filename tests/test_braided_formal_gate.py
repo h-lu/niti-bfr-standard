@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from niti_bfr.metrics import MetricEvaluation, RecoveryFit
-from niti_bfr.pipeline import AnalysisResult, _formal_braided_af_gate
+from niti_bfr.pipeline import AnalysisResult, _formal_braided_af_gate, compute_braided_acceptance
 from niti_bfr.webapp import _build_summary, _public_formal_metric_label
 
 
@@ -71,11 +71,56 @@ class BraidedFormalGateTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(reason, "body_mask_area_fraction")
 
+    def test_gate_rejects_endpoint_fraction_instability_below_px_floor(self) -> None:
+        series = self._base_series()
+        series["length_axis_formal_px"] = 100.0
+        series["endpoint_jump_px"] = 10.5
+        allowed, reason = _formal_braided_af_gate(series, self._reports())
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "endpoint_jump")
+
+    def test_gate_tolerates_subpixel_axis_jitter(self) -> None:
+        series = self._base_series()
+        series["length_axis_formal_px"] = np.linspace(120.0, 90.0, len(series)) + 0.2 * np.sin(np.linspace(0.0, 8.0, len(series)))
+        reports = self._reports()
+        reports["length_axis"] = MetricEvaluation(
+            label="length_axis",
+            increasing=False,
+            fit=reports["length_axis"].fit,
+            af95_c=reports["length_axis"].af95_c,
+            aftan_c=reports["length_axis"].aftan_c,
+            fit_rmse=reports["length_axis"].fit_rmse,
+            monotonic_violation_fraction=0.55,
+            dynamic_range=reports["length_axis"].dynamic_range,
+        )
+        allowed, reason = _formal_braided_af_gate(series, reports)
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_acceptance_exposes_real_video_thresholds(self) -> None:
+        acceptance = compute_braided_acceptance(self._base_series())
+        self.assertTrue(acceptance["accepted"])
+        self.assertEqual(acceptance["reasons"], [])
+        self.assertEqual(acceptance["metrics"]["valid_frames"], 20)
+        self.assertAlmostEqual(acceptance["metrics"]["endpoint_jump_limit_px"], 12.0)
+        self.assertAlmostEqual(acceptance["thresholds"]["endpoint_jump_fraction_p95_max"], 0.08)
+        self.assertAlmostEqual(acceptance["thresholds"]["axis_monotonic_violation_fraction_max"], 0.20)
+
 
 class PublicSummaryTests(unittest.TestCase):
     def test_public_formal_metric_hidden_for_quicklook(self) -> None:
+        series = pd.DataFrame(
+            {
+                "frame": np.arange(12),
+                "quality": np.full(12, 0.8),
+                "length_axis_px": np.full(12, 120.0),
+                "centerline_disagreement": np.full(12, 0.01),
+                "endpoint_jump_px": np.full(12, 2.0),
+                "body_mask_attachment_leak_fraction": np.full(12, 0.06),
+            }
+        )
         result = AnalysisResult(
-            series=pd.DataFrame({"frame": [0], "quality": [0.8]}),
+            series=series,
             fit=None,
             af95_c=None,
             aftan_c=None,
@@ -99,6 +144,8 @@ class PublicSummaryTests(unittest.TestCase):
         self.assertIsNone(summary["formal_metric_label"])
         self.assertEqual(summary["actual_mode"], "quicklook")
         self.assertEqual(summary["formal_gate_reason"], "body_mask_attachment_leak_fraction")
+        self.assertFalse(summary["acceptance"]["accepted"])
+        self.assertIn("body_mask_attachment_leak_fraction", summary["acceptance"]["reasons"])
 
 
 if __name__ == "__main__":

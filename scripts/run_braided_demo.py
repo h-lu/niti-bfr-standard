@@ -20,6 +20,7 @@ from niti_bfr.pipeline import (
     BRAIDED_METRIC_DISPLAY,
     BRAIDED_METRIC_KEY_TO_ALIAS,
     analyze_braided_video_quicklook,
+    compute_braided_acceptance,
 )
 from niti_bfr.synth import generate_temperature_schedule
 from niti_bfr.synth_braided import (
@@ -408,6 +409,7 @@ def main() -> None:
         "compaction_zone_length_mae_px": _mean_abs_error(result.series["compaction_zone_length_px"], truth["compaction_zone_length_true_px"]),
         "zone_symmetry_mae": _mean_abs_error(result.series["zone_symmetry"], truth["zone_symmetry_true"]),
     }
+    acceptance = compute_braided_acceptance(result.series)
     summary = {
         "demo_output": str(out_dir),
         "metric_aliases": BRAIDED_METRIC_ALIAS_TO_KEY,
@@ -498,6 +500,7 @@ def main() -> None:
         "centerline_disagreement_median": float(result.series["centerline_disagreement"].median()),
         "endpoint_jump_p95_px": float(result.series["endpoint_jump_px"].quantile(0.95)),
         "axis_peak_position_stability_p95": float(result.series["axis_peak_position_stability"].quantile(0.95)),
+        "acceptance": acceptance,
         "diameter_threshold_sweep": diameter_threshold_sweep,
         "error_summary": error_summary,
     }

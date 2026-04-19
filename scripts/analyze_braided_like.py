@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from niti_bfr.extract_braided import BraidedExtractionConfig, extract_braided_geometry
-from niti_bfr.pipeline import analyze_braided_video_quicklook
+from niti_bfr.pipeline import analyze_braided_video_quicklook, compute_braided_acceptance
 
 
 def _load_frame(video_path: Path, frame_idx: int) -> np.ndarray:
@@ -291,6 +291,7 @@ def main() -> None:
         overlay = _make_overlay(frame, extraction_cfg)
         cv2.imwrite(str(preview_dir / f"frame_{frame_idx:04d}.png"), overlay)
 
+    acceptance = compute_braided_acceptance(result.series)
     summary = {
         "metric_aliases": {
             "A": "length_axis",
@@ -332,6 +333,7 @@ def main() -> None:
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": None if result.af95_c is None else float(result.af95_c),
         "aftan_c": None if result.aftan_c is None else float(result.aftan_c),
+        "acceptance": acceptance,
     }
     (out_dir / "summary.yaml").write_text(yaml.safe_dump(summary, sort_keys=False), encoding="utf-8")
     print(f"quicklook saved to {out_dir}")

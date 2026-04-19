@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 
 from .extract_braided import (
+    _extract_centerline_from_body_bins,
+    _orthogonal_widths,
     compute_braided_body_mask,
     compute_braided_zone_metrics,
     cumulative_path_length,
@@ -227,6 +229,115 @@ def _truth_metrics_from_geometry(
         "area_proj_contour_true_px2": body_contour_area_px2,
         "area_proj_definition_gap_true_px2": float(area_proj_true_px2 - body_contour_area_px2),
         "body_mask_area_true_px2": body_mask_area_true_px2,
+        "body_mask_attachment_leak_fraction_true": 0.0,
+        "x_peak_norm_true": zone_metrics.x_peak_norm,
+        "taper_left_true_px": zone_metrics.taper_left_px,
+        "taper_right_true_px": zone_metrics.taper_right_px,
+        "landing_zone_left_true_px": zone_metrics.landing_zone_left_px,
+        "landing_zone_right_true_px": zone_metrics.landing_zone_right_px,
+        "transition_zone_left_true_px": zone_metrics.transition_zone_left_px,
+        "transition_zone_right_true_px": zone_metrics.transition_zone_right_px,
+        "compaction_zone_length_true_px": zone_metrics.compaction_zone_length_px,
+        "zone_symmetry_true": zone_metrics.zone_symmetry,
+    }
+
+
+def truth_metrics_from_body_mask(
+    body_mask: np.ndarray,
+    taper_threshold_ratio: float,
+    compaction_threshold_ratio: float,
+    *,
+    width_sampling_step_px: float = 4.0,
+    centerline_smooth_window: int = 7,
+) -> dict[str, float]:
+    mask = (np.asarray(body_mask) > 0).astype(np.uint8) * 255
+    rows, cols = np.where(mask > 0)
+    if len(rows) < 4:
+        raise RuntimeError("braided truth body mask too small")
+
+    body_pixel_xy = np.column_stack([cols, rows]).astype(float)
+    body_center_xy = body_pixel_xy.mean(axis=0)
+    centered = body_pixel_xy - body_center_xy[None, :]
+    _, _, vh = np.linalg.svd(centered, full_matrices=False)
+    body_axis = vh[0]
+    if body_axis[0] < 0.0:
+        body_axis = -body_axis
+    body_normal = np.array([-body_axis[1], body_axis[0]], dtype=float)
+    body_proj = centered @ body_axis
+    body_normal_proj = centered @ body_normal
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        raise RuntimeError("braided truth contour not found")
+    contour_xy = max(contours, key=cv2.contourArea)[:, 0, :].astype(float)
+
+    centerline_xy, _ = _extract_centerline_from_body_bins(
+        mask,
+        smooth_window=max(3, int(centerline_smooth_window)),
+        step_px=max(float(width_sampling_step_px), 1.0),
+    )
+    width_profile_px, _ = _orthogonal_widths(mask, centerline_xy)
+    valid = np.isfinite(width_profile_px) & np.all(np.isfinite(centerline_xy), axis=1)
+    if np.count_nonzero(valid) < 3:
+        raise RuntimeError("braided truth width profile unavailable")
+    centerline_xy = centerline_xy[valid]
+    width_profile_px = width_profile_px[valid]
+
+    curve_positions_px = cumulative_path_length(centerline_xy)
+    diameter_true_px = float(np.nanmax(width_profile_px))
+    peak_idx = int(np.nanargmax(width_profile_px))
+    body_profile_mask = compute_braided_body_mask(
+        width_profile_px=width_profile_px,
+        peak_idx=peak_idx,
+        diameter_max_px=diameter_true_px,
+    )
+    body_curve_positions_px = curve_positions_px[body_profile_mask]
+    axis_span = (
+        float(body_curve_positions_px[-1] - body_curve_positions_px[0])
+        if len(body_curve_positions_px) >= 2
+        else 0.0
+    )
+
+    body_centerline_xy = centerline_xy[body_profile_mask]
+    body_centerline_center = body_centerline_xy.mean(axis=0)
+    centerline_proj = (body_centerline_xy - body_centerline_center[None, :]) @ body_axis
+    axis_alt_span = float(np.max(centerline_proj) - np.min(centerline_proj)) if len(centerline_proj) else 0.0
+
+    positions_curve_rel = curve_positions_px - float(body_curve_positions_px[0])
+    area_proj_true_px2 = (
+        float(np.trapezoid(width_profile_px[body_profile_mask], positions_curve_rel[body_profile_mask]))
+        if np.count_nonzero(body_profile_mask) >= 2
+        else float("nan")
+    )
+    contour_area_true_px2 = float(cv2.contourArea(max(contours, key=cv2.contourArea)))
+    zone_metrics = compute_braided_zone_metrics(
+        positions=positions_curve_rel,
+        width_profile_px=width_profile_px,
+        body_mask=body_profile_mask,
+        diameter_max_px=diameter_true_px,
+        taper_threshold_ratio=taper_threshold_ratio,
+        compaction_threshold_ratio=compaction_threshold_ratio,
+    )
+    peak_support = width_profile_px[body_profile_mask] >= 0.95 * diameter_true_px
+    peak_body_pos = positions_curve_rel[body_profile_mask][peak_support]
+    diameter_peak_span_true_px = float(peak_body_pos[-1] - peak_body_pos[0]) if len(peak_body_pos) >= 2 else 0.0
+
+    return {
+        "length_env_true_px": float(np.max(body_proj) - np.min(body_proj)),
+        "length_axis_true_px": axis_span,
+        "length_axis_alt_true_px": axis_alt_span,
+        "length_axis_definition_gap_true_px": float(abs(axis_span - axis_alt_span)),
+        "diameter_true_px": diameter_true_px,
+        "diameter_max_orth_true_px": diameter_true_px,
+        "diameter_max_thickness_true_px": diameter_true_px,
+        "diameter_max_feret_true_px": float(np.max(body_normal_proj) - np.min(body_normal_proj)),
+        "diameter_p95_true_px": float(np.nanpercentile(width_profile_px[body_profile_mask], 95)),
+        "diameter_peak_span_true_px": diameter_peak_span_true_px,
+        "diameter_peak_pos_norm_true": zone_metrics.x_peak_norm,
+        "area_proj_true_px2": area_proj_true_px2,
+        "area_proj_contour_true_px2": contour_area_true_px2,
+        "area_proj_definition_gap_true_px2": float(area_proj_true_px2 - contour_area_true_px2),
+        "body_mask_area_true_px2": float(np.count_nonzero(mask > 0)),
         "body_mask_attachment_leak_fraction_true": 0.0,
         "x_peak_norm_true": zone_metrics.x_peak_norm,
         "taper_left_true_px": zone_metrics.taper_left_px,
