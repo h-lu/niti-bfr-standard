@@ -30,9 +30,15 @@
 
 其中:
 
-- `A` 是 formal 主量
-- `B` 与 `C` 是对照量
+- `A / B / C` 代表 braided 的三条并行分析路线
+- 当前实现默认只把 `A` 作为 braided `formal Af` 的放行主量
+- `B` 与 `C` 当前主要作为对照量与交叉验证量
 - 对外表述可写成 `A:length_axis`、`B:diameter_max`、`C:area_proj`
+
+这里要明确区分:
+
+- “当前实现默认 formal 放行 `A`” 属于实现状态
+- “A / B / C 长期并行保留并比较” 属于项目的方法学目标
 
 ## 1. 方法边界
 
@@ -244,9 +250,9 @@
 ## 5A. `YY/T 1771` 对齐的 braided formal Af 定义
 
 如果项目目标是把 braided 也纳入与 `wire-like` 类似的
-`YY/T 1771-aligned` Af 工作流, 当前最稳妥的正式定义应为:
+`YY/T 1771-aligned` Af 工作流, 当前实现里最稳妥的正式定义应为:
 
-- 正式主量固定为 `length_axis(T)`
+- 当前默认 formal 主量为 `length_axis(T)`
 - 该量表示二维投影下 braided 试样的主轴功能长度
 - 升温恢复时, 该量对当前对象应单调减小
 - 正式恢复率定义为:

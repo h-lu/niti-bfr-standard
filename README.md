@@ -2,32 +2,42 @@
 
 面向 NiTi 镍钛“弯曲-自由恢复”试验的最小软件方案仓库。
 
-当前仅覆盖一类对象: `弯曲针头恢复到直`。
+当前仓库已同时包含两类对象的最小工作流:
 
-目标是把三条算法路线逐步打通:
+- `wire-like`
+- `braided`
+
+项目长期目标是把三条算法路线 `A / B / C` 在两类对象上都保留、比较并逐步打通，而不是把仓库收缩成单对象、单 demo 或单一路线。
+
+其中:
+
+- `quicklook` 是快速检查趋势、稳定性和 QC 的输出模式
+- `formal Af` 是满足准入条件时才允许给出正式 `Af-95 / Af-tan` 的输出模式
+- `formal Af` 是输出模式，不等于“项目只允许保留一种算法”
+
+对 `wire-like`，当前最小实现的三条路线是:
 
 1. 路线 A: 端点/针尖主导的位移或弦长法
 2. 路线 B: 主轮廓 + 单弯段拟合法
 3. 路线 C: 全局形状 + 时间连续性的增强法
 
-这个最小方案同时包含两套输入:
+这个最小方案当前同时包含两套输入:
 
 1. `真实视频 quicklook`: 针对 `data/wire-like.mp4` 做基础几何提取
 2. `合成基准数据`: 用一个符合物理约束的单弯针模型生成温度曲线、视频和真值，作为系统测试/校准数据
 
-当前仓库也开始把第二类 `braided device` 对象纳入一条
-`YY/T 1771` 对齐的 BFR 工作流:
-
-- 对 `wire-like` 对象, 正式主量固定为 `kappa_fit(T)`
-- 对 `braided` 对象, 正式主量固定为 `length_axis(T)`
-
-为便于像 `wire-like` 的路线 A/B/C 那样简洁讨论 braided 三条主量, 当前约定:
+当前仓库也已把第二类 `braided device` 对象纳入一条
+`YY/T 1771` 对齐的 BFR 工作流，并同样按 A / B / C 三类几何视角组织量测:
 
 - braided `A = length_axis(T)`
 - braided `B = diameter_max(T)`
 - braided `C = area_proj(T)`
 
-其中 `A` 是 formal 主量, `B/C` 是对照量。
+需要特别区分长期方法学目标和当前实现状态:
+
+- 从长期方法学上, `A / B / C` 是 braided 的三条并行分析路线, 用于交叉验证和稳健性对照。
+- 从当前实现状态上, braided 的 `formal Af` 默认仍只放行 `A:length_axis(T)`；`B/C` 当前主要作为 quicklook 与 formal 对照量。
+- 同理, `wire-like` 当前正式主量默认仍是 `kappa_fit(T)`，这属于当前实现状态，不应误读为项目长期只保留单一 formal 视角。
 
 这里的“对齐”指:
 
@@ -46,7 +56,7 @@
 - 单主弯段主导形状变化
 - 升温时曲率 `kappa(T)` 单调下降并最终逼近 0
 
-当前仓库中的路线状态是:
+当前仓库中的 `wire-like` 路线状态是:
 
 - 路线 A: 已实现，直接从针体组件/轮廓提取固定端与自由端，输出 `x_route_a(T)`
 - 路线 B: 已实现，提取主骨架路径计算 `x_fit(T)`，并对主弯段拟合得到 `kappa_fit(T)`
@@ -209,7 +219,7 @@ python3 scripts/analyze_wire_like.py
 - [v0.1-summary.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/v0.1-summary.md)
   其中总结了当前针型对象是否算“已解决”、A/B/C 的推荐用法、demo 的理论值，以及真实实验还需要补哪些输入。
 - [v0.2-scope-guard.md](docs/v0.2-scope-guard.md)
-  下阶段只收敛 `formal Af` 的边界、准入条件与正式主量，不继续扩算法范围。
+该文档记录的是 `wire-like v0.2` 阶段的 formal 收敛任务；当前项目级长期原则以 [AGENTS.md](/Users/wangxq/Documents/niti-bfr-standard-2/AGENTS.md) 为准。
 
 第二类对象当前提供独立 quicklook 脚本:
 

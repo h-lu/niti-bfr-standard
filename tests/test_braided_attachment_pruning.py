@@ -7,6 +7,7 @@ import numpy as np
 
 from niti_bfr.extract_braided import (
     BraidedExtractionConfig,
+    _attachment_leak_area_px2,
     _prune_attachment_candidates_from_component,
 )
 
@@ -56,6 +57,35 @@ class AttachmentPruningTests(unittest.TestCase):
 
         self.assertTrue(np.array_equal(cleaned, component))
         self.assertEqual(np.count_nonzero(rejected), 0)
+
+    def test_attachment_leak_area_ignores_detached_end_attachments(self) -> None:
+        attachment_mask = np.zeros((80, 180), dtype=np.uint8)
+        cv2.rectangle(attachment_mask, (0, 35), (14, 45), 255, -1)
+        cv2.rectangle(attachment_mask, (165, 35), (179, 45), 255, -1)
+
+        leak_area = _attachment_leak_area_px2(
+            attachment_mask,
+            body_center_xy=np.array([90.0, 40.0]),
+            body_axis=np.array([1.0, 0.0]),
+            body_positions=np.array([-60.0, 60.0]),
+            diameter_max_px=40.0,
+        )
+
+        self.assertEqual(leak_area, 0.0)
+
+    def test_attachment_leak_area_counts_side_band_inside_body_span(self) -> None:
+        attachment_mask = np.zeros((80, 180), dtype=np.uint8)
+        cv2.rectangle(attachment_mask, (70, 10), (110, 24), 255, -1)
+
+        leak_area = _attachment_leak_area_px2(
+            attachment_mask,
+            body_center_xy=np.array([90.0, 40.0]),
+            body_axis=np.array([1.0, 0.0]),
+            body_positions=np.array([-60.0, 60.0]),
+            diameter_max_px=40.0,
+        )
+
+        self.assertGreater(leak_area, 0.0)
 
 
 if __name__ == "__main__":

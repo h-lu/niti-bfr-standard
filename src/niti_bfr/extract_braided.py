@@ -1093,6 +1093,30 @@ def _attachment_metrics(
     }
 
 
+def _attachment_leak_area_px2(
+    attachment_mask: np.ndarray,
+    body_center_xy: np.ndarray,
+    body_axis: np.ndarray,
+    body_positions: np.ndarray,
+    diameter_max_px: float,
+) -> float:
+    rows, cols = np.where(attachment_mask > 0)
+    if len(rows) == 0 or len(body_positions) == 0:
+        return 0.0
+
+    points_xy = np.column_stack([cols, rows]).astype(float)
+    proj_axis, proj_normal = _project_points(points_xy, body_center_xy, body_axis)
+    body_span_px = float(body_positions[-1] - body_positions[0]) if len(body_positions) >= 2 else 0.0
+    axis_margin_px = max(4.0, 0.02 * max(body_span_px, diameter_max_px, 1.0))
+    normal_limit_px = max(6.0, 0.60 * max(diameter_max_px, 1.0))
+    in_body_span = (
+        (proj_axis >= float(body_positions[0]) - axis_margin_px)
+        & (proj_axis <= float(body_positions[-1]) + axis_margin_px)
+    )
+    near_body_axis = np.abs(proj_normal) <= normal_limit_px
+    return float(np.count_nonzero(in_body_span & near_body_axis))
+
+
 def _prune_attachment_candidates_from_component(
     component: np.ndarray,
     body_tube_prior_mask: np.ndarray,
@@ -1410,7 +1434,14 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
     component_area_px2 = float(np.count_nonzero(source_component > 0))
     excluded_attachment_mask = cv2.subtract(source_component, body_tube_mask)
     excluded_attachment_area_px2 = float(np.count_nonzero(excluded_attachment_mask > 0))
-    body_mask_attachment_leak_fraction = float(excluded_attachment_area_px2 / max(component_area_px2, 1.0))
+    attachment_leak_area_px2 = _attachment_leak_area_px2(
+        excluded_attachment_mask,
+        body_center_xy=body_center_xy,
+        body_axis=body_axis,
+        body_positions=body_positions,
+        diameter_max_px=diameter_max_orth_px,
+    )
+    body_mask_attachment_leak_fraction = float(attachment_leak_area_px2 / max(component_area_px2, 1.0))
     attachment_metrics = _attachment_metrics(
         excluded_attachment_mask,
         body_center_xy=body_center_xy,
