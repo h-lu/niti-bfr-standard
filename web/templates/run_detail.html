@@ -51,7 +51,7 @@
             <div>实际模式</div><div>{{ run['actual_mode'] or '-' }}</div>
             <div>视频</div><div>{{ run['video_filename'] }}</div>
             <div>温度 CSV</div><div>{{ run['temperature_filename'] or '-' }}</div>
-            <div>formal metric</div><div>{{ run['formal_metric_label'] or '-' }}</div>
+            <div>formal metric</div><div>{% if run['actual_mode'] == 'formal_af' %}{{ run['formal_metric_label'] or '-' }}{% else %}-{% endif %}</div>
             <div>gate reason</div><div>{{ run['formal_gate_reason'] or '-' }}</div>
             <div>Af-95</div><div>{% if run['af95_c'] is not none %}{{ '%.2f'|format(run['af95_c']) }} C{% else %}-{% endif %}</div>
             <div>Af-tan</div><div>{% if run['aftan_c'] is not none %}{{ '%.2f'|format(run['aftan_c']) }} C{% else %}-{% endif %}</div>

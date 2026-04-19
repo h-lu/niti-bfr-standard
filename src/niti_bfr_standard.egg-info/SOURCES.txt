@@ -2,10 +2,12 @@ README.md
 pyproject.toml
 src/niti_bfr/__init__.py
 src/niti_bfr/extract.py
+src/niti_bfr/extract_braided.py
 src/niti_bfr/metrics.py
 src/niti_bfr/model.py
 src/niti_bfr/pipeline.py
 src/niti_bfr/synth.py
+src/niti_bfr/synth_braided.py
 src/niti_bfr/temporal.py
 src/niti_bfr/webapp.py
 src/niti_bfr_standard.egg-info/PKG-INFO

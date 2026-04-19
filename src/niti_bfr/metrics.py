@@ -15,6 +15,28 @@ def recovery_ratio(x: np.ndarray, x_m: float, x_a: float) -> np.ndarray:
     return np.clip((x - x_m) / denom, 0.0, 1.0)
 
 
+def infer_metric_direction(
+    values: np.ndarray,
+    *,
+    head_fraction: float = 0.1,
+    tail_fraction: float = 0.1,
+    default_increasing: bool = True,
+    min_relative_change: float = 0.02,
+) -> bool:
+    values = np.asarray(values, dtype=float)
+    valid = values[np.isfinite(values)]
+    if len(valid) < 4:
+        return bool(default_increasing)
+    head_count = max(2, int(np.ceil(len(valid) * float(head_fraction))))
+    tail_count = max(2, int(np.ceil(len(valid) * float(tail_fraction))))
+    head = float(np.nanmedian(valid[:head_count]))
+    tail = float(np.nanmedian(valid[-tail_count:]))
+    scale = max(float(np.nanmax(valid) - np.nanmin(valid)), abs(head), abs(tail), 1e-9)
+    if abs(tail - head) < float(min_relative_change) * scale:
+        return bool(default_increasing)
+    return bool(tail > head)
+
+
 def _sigmoid_x(temp_c: np.ndarray, x_m: float, x_a: float, t0: float, w: float) -> np.ndarray:
     return x_m + (x_a - x_m) / (1.0 + np.exp(-(temp_c - t0) / w))
 

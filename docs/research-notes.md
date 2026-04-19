@@ -200,3 +200,22 @@
 - 路线 A 端点作为弱约束
 - 时间方向的双向平滑
 - 对 `x` 和 `kappa` 的单调投影
+
+## 7. 第二类对象的独立研究入口
+
+当前仓库已经新增第二类对象的独立调研文档:
+
+- [braided-device-survey.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-device-survey.md)
+
+该文档面向“编织网状器械 / braided device”这一类新对象，记录了:
+
+- 对象判断
+- 可测指标定义
+- 方法设计对照表
+- 公开论文、GitHub 和商业软件资料
+- 当前预计采用的独立方案
+
+当前建议是:
+
+- 第二类对象不要复用针型对象的 `kappa(T)` 主线
+- 应独立采用“包络 + 轴向宽度剖面 + 局部密度代理”的方法体系

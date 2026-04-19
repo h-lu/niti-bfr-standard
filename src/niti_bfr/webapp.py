@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -16,8 +15,21 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .extract_braided import BraidedExtractionConfig
 from .extract import ExtractionConfig
-from .pipeline import AnalysisResult, analyze_video
+from .pipeline import (
+    AnalysisResult,
+    BRAIDED_METRIC_ALIAS_TO_KEY,
+    BRAIDED_METRIC_KEY_TO_ALIAS,
+    analyze_braided_video_quicklook,
+    analyze_video,
+)
+from .synth_braided import (
+    BraidedSyntheticModel,
+    BraidedSyntheticModelConfig,
+    BraidedSyntheticRenderConfig,
+    write_braided_synthetic_dataset,
+)
 from .synth import SyntheticRenderConfig, build_model_from_dict, generate_temperature_schedule, write_synthetic_dataset
 from .temporal import RouteCConfig
 
@@ -47,6 +59,12 @@ SAMPLE_RUNS: dict[str, dict[str, str]] = {
         "label": "合成示例 formal Af",
         "description": "现场生成一组仓库自带 synthetic demo，再用温度真值跑 formal Af。",
         "preset": "demo",
+        "requested_mode": "formal_af",
+    },
+    "braided_synthetic_formal": {
+        "label": "braided 合成 formal Af",
+        "description": "现场生成一组 braided synthetic demo，再用温度真值跑 formal Af。",
+        "preset": "braided_demo",
         "requested_mode": "formal_af",
     },
 }
@@ -103,8 +121,8 @@ async def create_run(
     _ensure_storage()
     if requested_mode not in {"quicklook", "formal_af"}:
         raise HTTPException(status_code=400, detail="invalid requested_mode")
-    if preset != "wire_like":
-        raise HTTPException(status_code=400, detail="only wire_like is currently supported")
+    if preset not in {"wire_like", "braided_like"}:
+        raise HTTPException(status_code=400, detail="unsupported preset")
     if not video_file.filename:
         raise HTTPException(status_code=400, detail="video file is required")
 
@@ -232,9 +250,6 @@ def _execute_run(run_id: str) -> None:
     try:
         _update_run(run_id, {"status": "running", "error_text": None})
         config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
-        extraction_cfg = _build_extraction_config(config, run["preset"])
-        route_c = RouteCConfig(**config["analysis"].get("wire_like_extraction", {}).get("route_c", {}))
-
         run_dir = Path(run["run_dir"])
         inputs_dir = run_dir / "inputs"
         outputs_dir = run_dir / "outputs"
@@ -243,12 +258,24 @@ def _execute_run(run_id: str) -> None:
         if run["requested_mode"] == "formal_af" and run["temperature_filename"]:
             temperature_path = inputs_dir / run["temperature_filename"]
 
-        result = analyze_video(
-            video_path,
-            extraction=extraction_cfg,
-            temperature_csv=temperature_path,
-            route_c=route_c,
-        )
+        if run["preset"] in {"wire_like", "demo"}:
+            extraction_cfg = _build_wire_extraction_config(config, run["preset"])
+            route_c = RouteCConfig(**config["analysis"].get("wire_like_extraction", {}).get("route_c", {}))
+            result = analyze_video(
+                video_path,
+                extraction=extraction_cfg,
+                temperature_csv=temperature_path,
+                route_c=route_c,
+            )
+        elif run["preset"] in {"braided_like", "braided_demo"}:
+            extraction_cfg = _build_braided_extraction_config(config)
+            result = analyze_braided_video_quicklook(
+                video_path,
+                extraction=extraction_cfg,
+                temperature_csv=temperature_path,
+            )
+        else:
+            raise RuntimeError(f"unsupported preset: {run['preset']}")
 
         result.series.to_csv(outputs_dir / "analysis.csv", index=False)
         summary = _build_summary(run, result)
@@ -260,7 +287,7 @@ def _execute_run(run_id: str) -> None:
             {
                 "status": "completed",
                 "actual_mode": result.mode,
-                "formal_metric_label": result.formal_metric_label,
+                "formal_metric_label": _public_formal_metric_label(result),
                 "formal_gate_reason": result.formal_gate_reason,
                 "af95_c": result.af95_c,
                 "aftan_c": result.aftan_c,
@@ -271,13 +298,19 @@ def _execute_run(run_id: str) -> None:
         _update_run(run_id, {"status": "failed", "error_text": str(exc)})
 
 
+def _public_formal_metric_label(result: AnalysisResult) -> str | None:
+    return result.formal_metric_label if result.mode == "formal_af" else None
+
+
 def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
     series = result.series
+    public_formal_metric_label = _public_formal_metric_label(result)
     summary: dict[str, Any] = {
         "run_id": run["id"],
+        "preset": run["preset"],
         "requested_mode": run["requested_mode"],
         "actual_mode": result.mode,
-        "formal_metric_label": result.formal_metric_label,
+        "formal_metric_label": public_formal_metric_label,
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": result.af95_c,
         "aftan_c": result.aftan_c,
@@ -286,9 +319,42 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "video_filename": run["video_filename"],
         "temperature_filename": run["temperature_filename"],
     }
+    if str(run["preset"]).startswith("braided"):
+        summary["metric_aliases"] = BRAIDED_METRIC_ALIAS_TO_KEY
+        summary["metric_display_labels"] = {
+            key: f"{alias}:{key}" for alias, key in BRAIDED_METRIC_ALIAS_TO_KEY.items()
+        }
+        if public_formal_metric_label is not None:
+            summary["formal_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(public_formal_metric_label)
+        if result.primary_metric_label is not None:
+            summary["primary_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.primary_metric_label)
     if "temperature_c" in series.columns and series["temperature_c"].notna().any():
         summary["temperature_c_min"] = float(series["temperature_c"].min())
         summary["temperature_c_max"] = float(series["temperature_c"].max())
+    if "length_axis_px" in series.columns:
+        summary["length_axis_median_px"] = float(series["length_axis_px"].median())
+    if "length_axis_body_bins_px" in series.columns:
+        summary["length_axis_body_bins_median_px"] = float(series["length_axis_body_bins_px"].median())
+    if "diameter_max_px" in series.columns:
+        summary["diameter_max_median_px"] = float(series["diameter_max_px"].median())
+    if "diameter_p95_px" in series.columns:
+        summary["diameter_p95_median_px"] = float(series["diameter_p95_px"].median())
+    if "diameter_mid_median_px" in series.columns:
+        summary["diameter_mid_median_px"] = float(series["diameter_mid_median_px"].median())
+    if "diameter_mid_p90_px" in series.columns:
+        summary["diameter_mid_p90_median_px"] = float(series["diameter_mid_p90_px"].median())
+    if "area_proj_px2" in series.columns:
+        summary["area_proj_median_px2"] = float(series["area_proj_px2"].median())
+    if "body_mask_area_px2" in series.columns:
+        summary["body_mask_area_median_px2"] = float(series["body_mask_area_px2"].median())
+    if "length_axis_disagreement_px" in series.columns:
+        summary["length_axis_definition_gap_median_px"] = float(series["length_axis_disagreement_px"].median())
+    if "body_mask_attachment_leak_fraction" in series.columns:
+        summary["body_mask_attachment_leak_fraction_median"] = float(series["body_mask_attachment_leak_fraction"].median())
+    if "endpoint_jump_px" in series.columns:
+        summary["endpoint_jump_p95_px"] = float(series["endpoint_jump_px"].quantile(0.95))
+    if "axis_peak_position_stability" in series.columns:
+        summary["axis_peak_position_stability_p95"] = float(series["axis_peak_position_stability"].quantile(0.95))
     if result.metric_reports:
         summary["metric_reports"] = {
             key: {
@@ -303,6 +369,8 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
 
 
 def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
+    import matplotlib.pyplot as plt
+
     series = result.series
     if series.empty:
         return
@@ -330,6 +398,70 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "quicklook_kappa_vs_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "length_env_px", "length_axis_px"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["length_env_px"], label="envelope length", linewidth=1.8)
+        plt.plot(series["time_sec"], series["length_axis_px"], label="A:length_axis", linewidth=1.8)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Length (px)")
+        plt.title("Braided lengths over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "quicklook_lengths_vs_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "diameter_max_px"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["diameter_max_px"], label="B:diameter_max", linewidth=1.8)
+        if "diameter_mid_median_px" in series.columns:
+            plt.plot(series["time_sec"], series["diameter_mid_median_px"], label="mid-window median", linewidth=1.4)
+        if "diameter_mid_p90_px" in series.columns:
+            plt.plot(series["time_sec"], series["diameter_mid_p90_px"], label="mid-window p90 proxy", linewidth=1.4)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Diameter (px)")
+        plt.title("Braided D_max over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "quicklook_diameter_vs_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "area_proj_px2"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["area_proj_px2"], label="C:area_proj", linewidth=1.8)
+        if "area_proj_contour_width_integral_px2" in series.columns:
+            plt.plot(series["time_sec"], series["area_proj_contour_width_integral_px2"], label="contour-width integral", linewidth=1.4)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Projected area integral (px^2)")
+        plt.title("Braided A_proj over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "quicklook_area_vs_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "body_mask_area_px2", "length_axis_disagreement_px"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["body_mask_area_px2"], label="body mask area", linewidth=1.8)
+        plt.plot(series["time_sec"], series["length_axis_disagreement_px"], label="axis definition gap", linewidth=1.8)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Body/QC metric")
+        plt.title("Braided body-only QC over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "quicklook_body_qc_vs_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "foreshortening_axis", "foreshortening_env"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["foreshortening_axis"], label="FS axis", linewidth=1.8)
+        plt.plot(series["time_sec"], series["foreshortening_env"], label="FS env", linewidth=1.8)
+        plt.xlabel("Time (s)")
+        plt.ylabel("Foreshortening")
+        plt.title("Braided foreshortening over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "quicklook_foreshortening_vs_time.png", dpi=160)
         plt.close(fig)
 
     if "temperature_c" not in series.columns or not series["temperature_c"].notna().any():
@@ -364,8 +496,51 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         fig.savefig(out_dir / "kappa_vs_temperature.png", dpi=160)
         plt.close(fig)
 
+    if {"temperature_c", "length_axis_recovery", "length_env_recovery", "diameter_max_recovery", "area_proj_recovery"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="A recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["length_env_recovery"], label="env recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="B recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="C recovery", linewidth=1.8)
+        if result.mode == "formal_af" and result.af95_c is not None:
+            plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"Af-95 {result.af95_c:.2f}C")
+        if result.mode == "formal_af" and result.aftan_c is not None:
+            plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=f"Af-tan {result.aftan_c:.2f}C")
+        plt.xlabel("Temperature (C)")
+        plt.ylabel("Recovery ratio")
+        plt.title("Braided recovery over temperature")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "braided_recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
 
-def _build_extraction_config(config: dict[str, Any], preset: str) -> ExtractionConfig:
+    if {"temperature_c", "length_env_px", "length_axis_px", "diameter_max_px"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["length_env_px"], label="env length", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["length_axis_px"], label="A", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["diameter_max_px"], label="B", linewidth=1.8)
+        plt.xlabel("Temperature (C)")
+        plt.ylabel("Length / diameter (px)")
+        plt.title("Braided A/B and envelope over temperature")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "braided_geometry_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+    if {"temperature_c", "body_mask_area_px2", "length_axis_disagreement_px", "diameter_peak_pos_norm"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["body_mask_area_px2"], label="body mask area", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["length_axis_disagreement_px"], label="axis definition gap", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["diameter_peak_pos_norm"], label="peak pos norm", linewidth=1.8)
+        plt.xlabel("Temperature (C)")
+        plt.ylabel("Body/QC metric")
+        plt.title("Braided body-only QC over temperature")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "braided_body_qc_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+def _build_wire_extraction_config(config: dict[str, Any], preset: str) -> ExtractionConfig:
     analysis = config["analysis"]
     raw = analysis.get("wire_like_extraction") if preset == "wire_like" else None
     if raw is None:
@@ -386,6 +561,36 @@ def _build_extraction_config(config: dict[str, Any], preset: str) -> ExtractionC
         fit_path_fraction_min=float(raw.get("fit_path_fraction_min", 0.42)),
         fit_curvature_threshold_ratio=float(raw.get("fit_curvature_threshold_ratio", 0.28)),
         fit_margin_prefer_quadratic=float(raw.get("fit_margin_prefer_quadratic", 0.05)),
+    )
+
+
+def _build_braided_extraction_config(config: dict[str, Any]) -> BraidedExtractionConfig:
+    raw = config["analysis"].get("braided_device_extraction")
+    if raw is None:
+        raise RuntimeError("missing braided extraction preset")
+    return BraidedExtractionConfig(
+        roi_xyxy=tuple(raw["roi_xyxy"]),
+        blur_ksize=int(raw["blur_ksize"]),
+        threshold_dark=int(raw["threshold_dark"]),
+        open_kernel=int(raw["open_kernel"]),
+        close_kernel=int(raw["close_kernel"]),
+        min_component_area=int(raw.get("min_component_area", 200)),
+        width_sampling_step_px=float(raw.get("width_sampling_step_px", 4.0)),
+        taper_threshold_ratio=float(raw.get("taper_threshold_ratio", 0.25)),
+        compaction_threshold_ratio=float(raw.get("compaction_threshold_ratio", 0.75)),
+        qc_max_segments=int(raw.get("qc_max_segments", 15)),
+        tube_radius_scale=float(raw.get("tube_radius_scale", 1.0)),
+        body_min_halfwidth_px=float(raw.get("body_min_halfwidth_px", 3.0)),
+        centerline_smooth_window=int(raw.get("centerline_smooth_window", 7)),
+        diameter_peak_threshold_ratio=float(raw.get("diameter_peak_threshold_ratio", 0.95)),
+        attachment_min_area_px2=int(raw.get("attachment_min_area_px2", 24)),
+        attachment_orientation_mismatch_deg=float(raw.get("attachment_orientation_mismatch_deg", 35.0)),
+        attachment_far_axis_distance_ratio=float(raw.get("attachment_far_axis_distance_ratio", 0.78)),
+        attachment_short_axis_span_ratio=float(raw.get("attachment_short_axis_span_ratio", 0.18)),
+        attachment_short_normal_span_ratio=float(raw.get("attachment_short_normal_span_ratio", 0.55)),
+        attachment_prune_dilate_kernel=int(raw.get("attachment_prune_dilate_kernel", 1)),
+        diameter_proxy_window_start_norm=float(raw.get("diameter_proxy_window_start_norm", 0.6)),
+        diameter_proxy_window_end_norm=float(raw.get("diameter_proxy_window_end_norm", 0.8)),
     )
 
 
@@ -427,6 +632,71 @@ def _prepare_sample_inputs(sample_id: str, inputs_dir: Path) -> dict[str, str | 
             "requested_mode": "formal_af",
             "video_filename": "synthetic.mp4",
             "temperature_filename": "temperature_truth.csv",
+        }
+
+    if sample_id == "braided_synthetic_formal":
+        config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+        synth_cfg = config["braided_synthetic"]
+        render_cfg = BraidedSyntheticRenderConfig(
+            image_width=int(synth_cfg["image_width"]),
+            image_height=int(synth_cfg["image_height"]),
+            fps=int(synth_cfg["fps"]),
+            duration_sec=float(synth_cfg["duration_sec"]),
+            background_gray=int(synth_cfg["render"]["background_gray"]),
+            body_gray=int(synth_cfg["render"]["body_gray"]),
+            wire_gray=int(synth_cfg["render"]["wire_gray"]),
+            outline_gray=int(synth_cfg["render"]["outline_gray"]),
+            braid_spacing_px=int(synth_cfg["render"]["braid_spacing_px"]),
+            wire_thickness_px=int(synth_cfg["render"]["wire_thickness_px"]),
+            outline_thickness_px=int(synth_cfg["render"]["outline_thickness_px"]),
+            support_gray=int(synth_cfg["render"]["support_gray"]),
+            support_length_px=int(synth_cfg["render"]["support_length_px"]),
+            support_radius_px=int(synth_cfg["render"]["support_radius_px"]),
+            tip_cap_gray=int(synth_cfg["render"]["tip_cap_gray"]),
+            tip_cap_length_px=int(synth_cfg["render"]["tip_cap_length_px"]),
+            tip_cap_radius_px=int(synth_cfg["render"]["tip_cap_radius_px"]),
+            noise_sigma=float(synth_cfg["render"]["noise_sigma"]),
+            blur_sigma=float(synth_cfg["render"]["blur_sigma"]),
+        )
+        model = BraidedSyntheticModel(
+            BraidedSyntheticModelConfig(
+                center_xy=tuple(float(v) for v in synth_cfg["center_xy"]),
+                length_m_px=float(synth_cfg["length_m_px"]),
+                length_a_px=float(synth_cfg["length_a_px"]),
+                diameter_m_px=float(synth_cfg["diameter_m_px"]),
+                diameter_a_px=float(synth_cfg["diameter_a_px"]),
+                transition_temp_c=float(synth_cfg["transition_temp_c"]),
+                transition_width_c=float(synth_cfg["transition_width_c"]),
+                peak_shift_norm=float(synth_cfg["peak_shift_norm"]),
+                left_profile_power=float(synth_cfg["left_profile_power"]),
+                right_profile_power=float(synth_cfg["right_profile_power"]),
+                bow_m_px=float(synth_cfg["bow_m_px"]),
+                bow_a_px=float(synth_cfg["bow_a_px"]),
+                axis_angle_m_deg=float(synth_cfg["axis_angle_m_deg"]),
+                axis_angle_a_deg=float(synth_cfg["axis_angle_a_deg"]),
+                center_shift_a_xy=tuple(float(v) for v in synth_cfg["center_shift_a_xy"]),
+            )
+        )
+        schedule = generate_temperature_schedule(
+            fps=render_cfg.fps,
+            duration_sec=render_cfg.duration_sec,
+            start_c=float(synth_cfg["temperature"]["start_c"]),
+            end_c=float(synth_cfg["temperature"]["end_c"]),
+        )
+        braided_extraction_cfg = _build_braided_extraction_config(config)
+        write_braided_synthetic_dataset(
+            inputs_dir,
+            model,
+            render_cfg,
+            schedule,
+            taper_threshold_ratio=braided_extraction_cfg.taper_threshold_ratio,
+            compaction_threshold_ratio=braided_extraction_cfg.compaction_threshold_ratio,
+        )
+        return {
+            "preset": "braided_demo",
+            "requested_mode": "formal_af",
+            "video_filename": "synthetic.mp4",
+            "temperature_filename": "truth.csv",
         }
 
     raise ValueError(f"unsupported sample_id: {sample_id}")
