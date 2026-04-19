@@ -104,7 +104,7 @@ def _make_overlay(frame_bgr: np.ndarray, extraction_cfg: BraidedExtractionConfig
     label = (
         f"axis={geom.length_axis_px:.1f}|bins={geom.length_axis_body_bins_px:.1f}|alt={geom.length_axis_alt_px:.1f}px "
         f"Dmax={geom.diameter_max_px:.1f}|p90={geom.diameter_mid_p90_px:.1f}px "
-        f"Aproj={geom.area_proj_px2:.0f}|AcontourInt={geom.area_proj_contour_width_integral_px2:.0f}px2"
+        f"Cproj={geom.area_proj_px2:.0f}|contourInt={geom.area_proj_contour_width_integral_px2:.0f}px2"
     )
     cv2.putText(overlay, label, (x0 + 8, max(24, y0 + 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2, cv2.LINE_AA)
     return overlay
@@ -215,11 +215,12 @@ def main() -> None:
         label="diameter_true",
         increasing=True,
     )
+    area_increasing = infer_metric_direction(truth["area_proj_true_px2"].to_numpy(), default_increasing=True)
     truth_area_eval = evaluate_metric(
         truth["temperature_c"].to_numpy(),
         truth["area_proj_true_px2"].to_numpy(),
         label="area_proj_true",
-        increasing=infer_metric_direction(truth["area_proj_true_px2"].to_numpy(), default_increasing=True),
+        increasing=area_increasing,
     )
     measured_axis_eval = evaluate_metric(
         result.series["temperature_c"].to_numpy(),
@@ -237,7 +238,7 @@ def main() -> None:
         result.series["temperature_c"].to_numpy(),
         result.series["area_proj_px2"].to_numpy(),
         label="area_proj_measured",
-        increasing=infer_metric_direction(result.series["area_proj_px2"].to_numpy(), default_increasing=True),
+        increasing=area_increasing,
     )
     diameter_threshold_sweep: dict[str, dict[str, float]] = {}
     for threshold_delta in (-8, 0, 8):
@@ -319,11 +320,11 @@ def main() -> None:
     plt.close()
 
     plt.figure(figsize=(8, 4.8))
-    plt.plot(truth["temperature_c"], truth["length_axis_definition_gap_true_px"], label="axis gap true", linewidth=2)
-    plt.plot(result.series["temperature_c"], result.series["length_axis_disagreement_px"], label="axis gap measured", alpha=0.85)
+    plt.plot(result.series["temperature_c"], result.series["length_axis_disagreement_px"], label="axis gap measured", linewidth=1.9)
+    plt.plot(result.series["temperature_c"], result.series["centerline_disagreement"], label="axis gap / A", alpha=0.85)
     plt.xlabel("Temperature (C)")
-    plt.ylabel("Definition gap (px)")
-    plt.title("Braided axis definition gap")
+    plt.ylabel("Centerline QC")
+    plt.title("Braided axis definition QC")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_dir / "axis_definition_gap_vs_temperature.png", dpi=160)
@@ -385,8 +386,6 @@ def main() -> None:
     error_summary = {
         "length_env_mae_px": _mean_abs_error(result.series["length_env_px"], truth["length_env_true_px"]),
         "length_axis_mae_px": _mean_abs_error(result.series["length_axis_px"], truth["length_axis_true_px"]),
-        "length_axis_alt_mae_px": _mean_abs_error(result.series["length_axis_alt_px"], truth["length_axis_alt_true_px"]),
-        "axis_definition_gap_px": _mean_abs_error(result.series["length_axis_disagreement_px"], truth["length_axis_definition_gap_true_px"]),
         "diameter_max_mae_px": _mean_abs_error(result.series["diameter_max_px"], truth["diameter_true_px"]),
         "diameter_peak_pos_norm_mae": _mean_abs_error(result.series["diameter_peak_pos_norm"], truth["diameter_peak_pos_norm_true"]),
         "area_proj_mae_px2": _mean_abs_error(result.series["area_proj_px2"], truth["area_proj_true_px2"]),

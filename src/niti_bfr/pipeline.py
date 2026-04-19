@@ -130,70 +130,79 @@ def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvalu
 def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
     area_eval_col = "area_proj_formal_px2" if "area_proj_formal_px2" in series.columns else "area_proj_px2"
-    valid = series.dropna(
-        subset=[
-            "temperature_c",
-            "length_env_px",
-            axis_eval_col,
-            "diameter_max_px",
-            area_eval_col,
-        ]
-    )
-    area_increasing = infer_metric_direction(valid[area_eval_col].to_numpy(), default_increasing=True)
-    reports = {
-        "length_env": evaluate_metric(
-            valid["temperature_c"].to_numpy(),
-            valid["length_env_px"].to_numpy(),
+    length_env_valid = series.dropna(subset=["temperature_c", "length_env_px"])
+    length_axis_valid = series.dropna(subset=["temperature_c", axis_eval_col])
+    diameter_valid = series.dropna(subset=["temperature_c", "diameter_max_px"])
+    area_valid = series.dropna(subset=["temperature_c", area_eval_col])
+
+    reports: dict[str, MetricEvaluation] = {}
+    if len(length_env_valid) >= 4:
+        reports["length_env"] = evaluate_metric(
+            length_env_valid["temperature_c"].to_numpy(),
+            length_env_valid["length_env_px"].to_numpy(),
             label="length_env",
             increasing=False,
-        ),
-        "length_axis": evaluate_metric(
-            valid["temperature_c"].to_numpy(),
-            valid[axis_eval_col].to_numpy(),
+        )
+    if len(length_axis_valid) >= 4:
+        reports["length_axis"] = evaluate_metric(
+            length_axis_valid["temperature_c"].to_numpy(),
+            length_axis_valid[axis_eval_col].to_numpy(),
             label="length_axis",
             increasing=False,
-        ),
-        "diameter_max": evaluate_metric(
-            valid["temperature_c"].to_numpy(),
-            valid["diameter_max_px"].to_numpy(),
+        )
+    if len(diameter_valid) >= 4:
+        reports["diameter_max"] = evaluate_metric(
+            diameter_valid["temperature_c"].to_numpy(),
+            diameter_valid["diameter_max_px"].to_numpy(),
             label="diameter_max",
             increasing=True,
-        ),
-        "area_proj": evaluate_metric(
-            valid["temperature_c"].to_numpy(),
-            valid[area_eval_col].to_numpy(),
+        )
+    if len(area_valid) >= 4:
+        area_increasing = infer_metric_direction(area_valid[area_eval_col].to_numpy(), default_increasing=True)
+        reports["area_proj"] = evaluate_metric(
+            area_valid["temperature_c"].to_numpy(),
+            area_valid[area_eval_col].to_numpy(),
             label="area_proj",
             increasing=area_increasing,
-        ),
-    }
-    length_env_eval = reports["length_env"]
-    length_axis_eval = reports["length_axis"]
-    diameter_eval = reports["diameter_max"]
-    area_eval = reports["area_proj"]
-    series["length_env_recovery"] = recovery_ratio_directional(
-        series["length_env_px"].to_numpy(),
-        -length_env_eval.fit.x_m,
-        -length_env_eval.fit.x_a,
-        increasing=False,
-    )
-    series["length_axis_recovery"] = recovery_ratio_directional(
-        series[axis_eval_col].to_numpy(),
-        -length_axis_eval.fit.x_m,
-        -length_axis_eval.fit.x_a,
-        increasing=False,
-    )
-    series["diameter_max_recovery"] = recovery_ratio_directional(
-        series["diameter_max_px"].to_numpy(),
-        diameter_eval.fit.x_m,
-        diameter_eval.fit.x_a,
-        increasing=True,
-    )
-    series["area_proj_recovery"] = recovery_ratio_directional(
-        series[area_eval_col].to_numpy(),
-        area_eval.fit.x_m,
-        area_eval.fit.x_a,
-        increasing=area_eval.increasing,
-    )
+        )
+
+    series["length_env_recovery"] = np.nan
+    series["length_axis_recovery"] = np.nan
+    series["diameter_max_recovery"] = np.nan
+    series["area_proj_recovery"] = np.nan
+
+    length_env_eval = reports.get("length_env")
+    if length_env_eval is not None:
+        series["length_env_recovery"] = recovery_ratio_directional(
+            series["length_env_px"].to_numpy(),
+            -length_env_eval.fit.x_m,
+            -length_env_eval.fit.x_a,
+            increasing=False,
+        )
+    length_axis_eval = reports.get("length_axis")
+    if length_axis_eval is not None:
+        series["length_axis_recovery"] = recovery_ratio_directional(
+            series[axis_eval_col].to_numpy(),
+            -length_axis_eval.fit.x_m,
+            -length_axis_eval.fit.x_a,
+            increasing=False,
+        )
+    diameter_eval = reports.get("diameter_max")
+    if diameter_eval is not None:
+        series["diameter_max_recovery"] = recovery_ratio_directional(
+            series["diameter_max_px"].to_numpy(),
+            diameter_eval.fit.x_m,
+            diameter_eval.fit.x_a,
+            increasing=True,
+        )
+    area_eval = reports.get("area_proj")
+    if area_eval is not None:
+        series["area_proj_recovery"] = recovery_ratio_directional(
+            series[area_eval_col].to_numpy(),
+            area_eval.fit.x_m,
+            area_eval.fit.x_a,
+            increasing=area_eval.increasing,
+        )
     return reports
 
 
@@ -201,6 +210,15 @@ def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
     if series.empty:
         return series
     augmented = series.copy()
+
+    def _rowwise_nanmax(values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=float)
+        finite = np.isfinite(values)
+        safe = np.where(finite, values, -np.inf)
+        out = np.max(safe, axis=1)
+        out[~np.any(finite, axis=1)] = np.nan
+        return out
+
     if "length_axis_px" in augmented.columns:
         augmented["length_axis_formal_px"] = augmented["length_axis_px"]
     if "area_proj_px2" in augmented.columns:
@@ -221,20 +239,18 @@ def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
         augmented["anchor_jump_px"] = anchor_jump
         augmented["tip_jump_px"] = tip_jump
         if "endpoint_jump_px" in augmented.columns:
-            augmented["endpoint_jump_px"] = np.nanmax(
-                np.column_stack([augmented["endpoint_jump_px"].to_numpy(dtype=float), anchor_jump, tip_jump]),
-                axis=1,
+            augmented["endpoint_jump_px"] = _rowwise_nanmax(
+                np.column_stack([augmented["endpoint_jump_px"].to_numpy(dtype=float), anchor_jump, tip_jump])
             )
         else:
-            augmented["endpoint_jump_px"] = np.nanmax(np.column_stack([anchor_jump, tip_jump]), axis=1)
+            augmented["endpoint_jump_px"] = _rowwise_nanmax(np.column_stack([anchor_jump, tip_jump]))
     if "diameter_peak_pos_norm" in augmented.columns:
         stability = np.full(len(augmented), np.nan, dtype=float)
         if len(augmented) >= 2:
             stability[1:] = np.abs(np.diff(augmented["diameter_peak_pos_norm"].to_numpy(dtype=float)))
         if "axis_peak_position_stability" in augmented.columns:
-            augmented["axis_peak_position_stability"] = np.nanmax(
-                np.column_stack([augmented["axis_peak_position_stability"].to_numpy(dtype=float), stability]),
-                axis=1,
+            augmented["axis_peak_position_stability"] = _rowwise_nanmax(
+                np.column_stack([augmented["axis_peak_position_stability"].to_numpy(dtype=float), stability])
             )
         else:
             augmented["axis_peak_position_stability"] = stability
@@ -264,6 +280,9 @@ def _formal_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) 
 
 def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) -> tuple[bool, str | None]:
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
+    axis_report = reports.get("length_axis")
+    if axis_report is None:
+        return False, "insufficient_axis_points"
     valid = series.dropna(subset=["temperature_c", axis_eval_col, "length_axis_recovery", "quality"])
     if len(valid) < 15:
         return False, "insufficient_axis_points"
@@ -272,7 +291,6 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
     if quality_median < 0.10:
         return False, "unstable_axis_extraction"
 
-    axis_report = reports["length_axis"]
     if axis_report.monotonic_violation_fraction > 0.25:
         return False, "length_axis_not_monotonic_enough"
 

@@ -72,7 +72,7 @@ def _make_overlay(frame_bgr: np.ndarray, extraction_cfg: BraidedExtractionConfig
     label = (
         f"axis={geom.length_axis_px:.1f}|bins={geom.length_axis_body_bins_px:.1f}|alt={geom.length_axis_alt_px:.1f}px "
         f"Dmax={geom.diameter_max_px:.1f}|p90={geom.diameter_mid_p90_px:.1f}px "
-        f"Aproj={geom.area_proj_px2:.0f}px2 leak={geom.body_mask_attachment_leak_fraction:.2f}"
+        f"Cproj={geom.area_proj_px2:.0f}px2 leak={geom.body_mask_attachment_leak_fraction:.2f}"
     )
     cv2.putText(overlay, label, (x0 + 8, max(24, y0 + 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2, cv2.LINE_AA)
     return overlay
@@ -254,12 +254,12 @@ def main() -> None:
             plt.close()
 
         plt.figure(figsize=(8, 4.8))
-        plt.plot(result.series["temperature_c"], result.series["area_proj_px2"], linewidth=1.8, label="C")
         plt.plot(result.series["temperature_c"], result.series["length_axis_px"], linewidth=1.6, label="A")
         plt.plot(result.series["temperature_c"], result.series["diameter_max_px"], linewidth=1.6, label="B")
+        plt.plot(result.series["temperature_c"], result.series["length_env_px"], linewidth=1.4, label="env")
         plt.xlabel("Temperature (C)")
-        plt.ylabel("Projected geometry")
-        plt.title(f"{video_path.name} braided core metrics over temperature")
+        plt.ylabel("Length / diameter (px)")
+        plt.title(f"{video_path.name} braided A/B over temperature")
         plt.legend()
         plt.tight_layout()
         plt.savefig(out_dir / "core_metrics_vs_temperature.png", dpi=160)

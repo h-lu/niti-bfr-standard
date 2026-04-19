@@ -420,7 +420,7 @@ def _clip_component_to_axis_span(
     keep = (proj_axis >= float(clip_min)) & (proj_axis <= float(clip_max))
     clipped = _mask_from_pixels(component.shape, pixel_local_xy[keep])
     if np.count_nonzero(clipped) < int(min_area):
-        return component.copy()
+        raise RuntimeError("braided axis-span clip too small")
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     clipped = cv2.morphologyEx(clipped, cv2.MORPH_CLOSE, kernel)
     return _largest_component(clipped, min_area=max(16, int(min_area * 0.4)))
@@ -963,9 +963,11 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
 
     clip_min = float(body_positions[0]) - 0.5 * step_px
     clip_max = float(body_positions[-1]) + 0.5 * step_px
+    prior_rows, prior_cols = np.where(body_tube_prior_mask > 0)
+    prior_pixel_xy = np.column_stack([prior_cols, prior_rows]).astype(float)
     body_tube_mask = _clip_component_to_axis_span(
-        component=component,
-        pixel_local_xy=pixel_local_xy,
+        component=body_tube_prior_mask,
+        pixel_local_xy=prior_pixel_xy,
         center_xy=body_center_xy,
         axis=body_axis,
         clip_min=clip_min,
@@ -1136,9 +1138,7 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
     )
     peak_span_pos = body_positions_rel_px[peak_support]
     diameter_peak_span_px = float(peak_span_pos[-1] - peak_span_pos[0]) if len(peak_span_pos) >= 2 else 0.0
-    # Single-frame extraction cannot measure temporal stability; downstream QC
-    # fills this with frame-to-frame peak-position drift.
-    axis_peak_position_stability = 0.0
+    axis_peak_position_stability = float("nan")
 
     area_proj_px2 = _integrate_projected_area_px2(
         positions=orth_curve_pos_rel_px,

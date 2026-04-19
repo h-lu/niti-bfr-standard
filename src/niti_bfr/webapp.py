@@ -315,8 +315,11 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "video_filename": run["video_filename"],
         "temperature_filename": run["temperature_filename"],
     }
-    if run["preset"] == "braided_device":
+    if str(run["preset"]).startswith("braided"):
         summary["metric_aliases"] = BRAIDED_METRIC_ALIAS_TO_KEY
+        summary["metric_display_labels"] = {
+            key: f"{alias}:{key}" for alias, key in BRAIDED_METRIC_ALIAS_TO_KEY.items()
+        }
         if result.formal_metric_label is not None:
             summary["formal_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.formal_metric_label)
         if result.primary_metric_label is not None:
@@ -505,15 +508,14 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         fig.savefig(out_dir / "braided_recovery_vs_temperature.png", dpi=160)
         plt.close(fig)
 
-    if {"temperature_c", "length_env_px", "length_axis_px", "diameter_max_px", "area_proj_px2"}.issubset(series.columns):
+    if {"temperature_c", "length_env_px", "length_axis_px", "diameter_max_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
         plt.plot(series["temperature_c"], series["length_env_px"], label="env length", linewidth=1.8)
         plt.plot(series["temperature_c"], series["length_axis_px"], label="A", linewidth=1.8)
         plt.plot(series["temperature_c"], series["diameter_max_px"], label="B", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["area_proj_px2"], label="C", linewidth=1.8)
         plt.xlabel("Temperature (C)")
-        plt.ylabel("Projected geometry (px)")
-        plt.title("Braided geometry over temperature")
+        plt.ylabel("Length / diameter (px)")
+        plt.title("Braided A/B and envelope over temperature")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "braided_geometry_vs_temperature.png", dpi=160)
