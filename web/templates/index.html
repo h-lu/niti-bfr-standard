@@ -33,7 +33,7 @@
       <div class="topline">
         <div>
           <h1>NiTi BFR 最小分析台</h1>
-          <p class="muted">先做能用版，只支持 wire-like，对应“上传 → 跑任务 → 看结果 → 查历史”。</p>
+          <p class="muted">当前前端同时支持 wire-like 和 braided-like 两类对象，对应“上传 → 跑任务 → 看结果 → 查历史”。</p>
         </div>
         <a href="{{ request.url_for('history') }}">查看全部历史</a>
       </div>
@@ -41,7 +41,7 @@
       <div class="grid">
         <section class="card">
           <h2>新建分析</h2>
-          <p class="muted">quicklook 不依赖温度文件，formal Af 需要温度同步 CSV，若条件不够会自动降级。</p>
+          <p class="muted">quicklook 只给几何 / QC 快检。formal Af 需要温度同步 CSV，若 formal gate 不通过会明确降级为 quicklook。</p>
           <form action="{{ request.url_for('create_run') }}" method="post" enctype="multipart/form-data">
             <label for="run_name">任务名（可选）</label>
             <input id="run_name" name="run_name" type="text" placeholder="例如：批次 A 第一次试跑">
@@ -60,8 +60,10 @@
 
             <label for="preset">对象预设</label>
             <select id="preset" name="preset">
-              <option value="wire_like">wire_like</option>
+              <option value="wire_like">{{ preset_label('wire_like') }}</option>
+              <option value="braided_like">{{ preset_label('braided_like') }}</option>
             </select>
+            <div class="muted" style="margin-top: 6px;">wire-like 走位移/曲率链，braided-like 走 A/B/C + body-only QC 链。</div>
 
             <button type="submit">创建任务</button>
           </form>
@@ -74,7 +76,8 @@
           <form action="{{ request.url_for('create_sample_run') }}" method="post" style="margin-bottom: 14px;">
             <input type="hidden" name="sample_id" value="{{ sample_id }}">
             <div style="font-weight: 700; margin-bottom: 4px;">{{ sample["label"] }}</div>
-            <div class="muted" style="margin-bottom: 8px;">{{ sample["description"] }}</div>
+            <div class="muted" style="margin-bottom: 4px;">{{ sample["description"] }}</div>
+            <div class="muted" style="margin-bottom: 8px;">{{ preset_label(sample['preset']) }} · {{ mode_label(sample['requested_mode']) }}</div>
             <button type="submit">直接运行这个示例</button>
           </form>
           {% endfor %}
@@ -98,17 +101,16 @@
                 <td>{{ run["created_at"][:19].replace("T", " ") }}</td>
                 <td>
                   <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
-                  <div class="muted">{{ run["requested_mode"] }} / {{ run["preset"] }}</div>
+                  <div class="muted">{{ preset_label(run['preset']) }} · 请求 {{ mode_label(run['requested_mode']) }}</div>
                 </td>
                 <td><span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span></td>
                 <td>
                   {% if run["actual_mode"] %}
-                    <div>{{ run["actual_mode"] }}</div>
+                    <div>实际 {{ mode_label(run['actual_mode']) }}</div>
                   {% endif %}
+                  <div class="muted">{{ run_result_hint(run) }}</div>
                   {% if run["af95_c"] is not none %}
                     <div class="muted">Af-95 {{ "%.2f"|format(run["af95_c"]) }} C</div>
-                  {% elif run["formal_gate_reason"] %}
-                    <div class="muted">{{ run["formal_gate_reason"] }}</div>
                   {% endif %}
                 </td>
               </tr>

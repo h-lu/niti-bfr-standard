@@ -45,10 +45,13 @@
         <section class="card">
           <h2>任务状态</h2>
           <p><span class="pill status-{{ run['status'] }}">{{ run['status'] }}</span></p>
+          <p class="muted">{{ preset_description(run['preset']) }}</p>
           <div class="kv">
             <div>创建时间</div><div>{{ run['created_at'] }}</div>
-            <div>请求模式</div><div>{{ run['requested_mode'] }}</div>
-            <div>实际模式</div><div>{{ run['actual_mode'] or '-' }}</div>
+            <div>对象预设</div><div>{{ preset_label(run['preset']) }}</div>
+            <div>请求模式</div><div>{{ mode_label(run['requested_mode']) }}</div>
+            <div>实际模式</div><div>{{ mode_label(run['actual_mode']) if run['actual_mode'] else '-' }}</div>
+            <div>结果说明</div><div>{{ run_result_hint(run) }}</div>
             <div>视频</div><div>{{ run['video_filename'] }}</div>
             <div>温度 CSV</div><div>{{ run['temperature_filename'] or '-' }}</div>
             <div>formal metric</div><div>{% if run['actual_mode'] == 'formal_af' %}{{ run['formal_metric_label'] or '-' }}{% else %}-{% endif %}</div>
@@ -76,6 +79,15 @@
 
         <section class="card">
           <h2>结果摘要</h2>
+          <p class="muted">
+            {% if run['actual_mode'] == 'formal_af' %}
+              当前页面展示的是 formal Af 结果，前提是 gate 已放行。
+            {% elif run['requested_mode'] == 'formal_af' %}
+              这次请求想跑 formal Af，但实际只放行到了 quicklook，所以这里展示的是降级后的 quicklook 结果。
+            {% else %}
+              这次展示的是 quicklook 结果，主要用于几何 / QC 快检。
+            {% endif %}
+          </p>
           {% if summary %}
           <pre>{{ summary | tojson(indent=2) }}</pre>
           {% else %}

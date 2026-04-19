@@ -50,22 +50,62 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 SAMPLE_RUNS: dict[str, dict[str, str]] = {
     "wire_like_quicklook": {
-        "label": "仓库示例 quicklook",
+        "label": "wire-like quicklook",
         "description": "直接使用仓库里的 data/wire-like.mp4 做 quicklook。",
         "preset": "wire_like",
         "requested_mode": "quicklook",
     },
     "synthetic_formal": {
-        "label": "合成示例 formal Af",
+        "label": "wire-like 合成 formal Af",
         "description": "现场生成一组仓库自带 synthetic demo，再用温度真值跑 formal Af。",
         "preset": "demo",
         "requested_mode": "formal_af",
+    },
+    "braided_synthetic_quicklook": {
+        "label": "braided 合成 quicklook",
+        "description": "现场生成一组 braided synthetic demo，不接温度文件，只看 braided 几何与 QC 快检。",
+        "preset": "braided_demo",
+        "requested_mode": "quicklook",
     },
     "braided_synthetic_formal": {
         "label": "braided 合成 formal Af",
         "description": "现场生成一组 braided synthetic demo，再用温度真值跑 formal Af。",
         "preset": "braided_demo",
         "requested_mode": "formal_af",
+    },
+}
+
+PRESET_DISPLAY: dict[str, dict[str, str]] = {
+    "wire_like": {
+        "label": "wire-like",
+        "family": "wire",
+        "description": "细丝 / 针样对象，主 formal 量是 kappa_fit。",
+    },
+    "demo": {
+        "label": "wire-like synthetic demo",
+        "family": "wire",
+        "description": "仓库内置的 wire-like 合成 demo。",
+    },
+    "braided_like": {
+        "label": "braided-like",
+        "family": "braided",
+        "description": "编织网状器械对象，quicklook 看 A/B/C 与 body-only QC。",
+    },
+    "braided_demo": {
+        "label": "braided synthetic demo",
+        "family": "braided",
+        "description": "仓库内置的 braided 合成 demo。",
+    },
+}
+
+MODE_DISPLAY: dict[str, dict[str, str]] = {
+    "quicklook": {
+        "label": "quicklook",
+        "description": "只给几何 / QC 快检，不自动等同于正式 Af 结论。",
+    },
+    "formal_af": {
+        "label": "formal Af",
+        "description": "需要温度同步，并且 formal gate 放行后才成立。",
     },
 }
 
@@ -83,6 +123,46 @@ def _startup() -> None:
     _ensure_storage()
 
 
+def _preset_label(preset: str | None) -> str:
+    if preset is None:
+        return "-"
+    return PRESET_DISPLAY.get(preset, {}).get("label", preset)
+
+
+def _preset_description(preset: str | None) -> str:
+    if preset is None:
+        return ""
+    return PRESET_DISPLAY.get(preset, {}).get("description", "")
+
+
+def _mode_label(mode: str | None) -> str:
+    if mode is None:
+        return "-"
+    return MODE_DISPLAY.get(mode, {}).get("label", mode)
+
+
+def _mode_description(mode: str | None) -> str:
+    if mode is None:
+        return ""
+    return MODE_DISPLAY.get(mode, {}).get("description", "")
+
+
+def _run_result_hint(run: sqlite3.Row | dict[str, Any]) -> str:
+    requested_mode = run["requested_mode"]
+    actual_mode = run["actual_mode"]
+    gate_reason = run["formal_gate_reason"]
+    status = run.get("status") if isinstance(run, dict) else run["status"]
+    if status in {"queued", "running"}:
+        return "任务执行中，等待实际结果。"
+    if actual_mode == "formal_af":
+        return "formal Af 已放行。"
+    if requested_mode == "formal_af" and actual_mode == "quicklook":
+        return f"formal Af 未放行，当前按 quicklook 展示（{gate_reason or 'gate_closed'}）。"
+    if actual_mode == "quicklook":
+        return "当前结果是 quicklook。"
+    return gate_reason or "-"
+
+
 @app.get("/")
 def home(request: Request) -> Any:
     runs = _list_runs(limit=12)
@@ -91,6 +171,13 @@ def home(request: Request) -> Any:
         {
             "runs": runs,
             "sample_runs": SAMPLE_RUNS,
+            "preset_display": PRESET_DISPLAY,
+            "mode_display": MODE_DISPLAY,
+            "preset_label": _preset_label,
+            "preset_description": _preset_description,
+            "mode_label": _mode_label,
+            "mode_description": _mode_description,
+            "run_result_hint": _run_result_hint,
             "request": request,
         },
     )
@@ -103,6 +190,9 @@ def history(request: Request) -> Any:
         "history.html",
         {
             "runs": runs,
+            "preset_label": _preset_label,
+            "mode_label": _mode_label,
+            "run_result_hint": _run_result_hint,
             "request": request,
         },
     )
@@ -233,6 +323,11 @@ def run_detail(request: Request, run_id: str) -> Any:
             "image_files": image_files,
             "download_files": download_files,
             "refresh": run["status"] in {"queued", "running"},
+            "preset_label": _preset_label,
+            "preset_description": _preset_description,
+            "mode_label": _mode_label,
+            "mode_description": _mode_description,
+            "run_result_hint": _run_result_hint,
         },
     )
 
@@ -634,7 +729,7 @@ def _prepare_sample_inputs(sample_id: str, inputs_dir: Path) -> dict[str, str | 
             "temperature_filename": "temperature_truth.csv",
         }
 
-    if sample_id == "braided_synthetic_formal":
+    if sample_id in {"braided_synthetic_quicklook", "braided_synthetic_formal"}:
         config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
         synth_cfg = config["braided_synthetic"]
         render_cfg = BraidedSyntheticRenderConfig(
@@ -694,9 +789,9 @@ def _prepare_sample_inputs(sample_id: str, inputs_dir: Path) -> dict[str, str | 
         )
         return {
             "preset": "braided_demo",
-            "requested_mode": "formal_af",
+            "requested_mode": "quicklook" if sample_id == "braided_synthetic_quicklook" else "formal_af",
             "video_filename": "synthetic.mp4",
-            "temperature_filename": "truth.csv",
+            "temperature_filename": None if sample_id == "braided_synthetic_quicklook" else "truth.csv",
         }
 
     raise ValueError(f"unsupported sample_id: {sample_id}")
