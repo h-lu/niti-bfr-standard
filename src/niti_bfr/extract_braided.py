@@ -913,6 +913,14 @@ def _path_support_fraction(mask: np.ndarray, points_xy: np.ndarray) -> float:
     return float(np.mean(supported))
 
 
+def _path_axis_span(points_xy: np.ndarray, axis_xy: np.ndarray) -> float:
+    if len(points_xy) == 0:
+        return 0.0
+    axis = _unit_direction(np.asarray(axis_xy, dtype=float))
+    proj = np.asarray(points_xy, dtype=float) @ axis
+    return float(np.max(proj) - np.min(proj))
+
+
 def _endpoint_gap(primary_xy: np.ndarray, secondary_xy: np.ndarray) -> float:
     if len(primary_xy) == 0 or len(secondary_xy) == 0:
         return float("nan")
@@ -934,23 +942,36 @@ def _select_centerline_paths(
     body_mask: np.ndarray,
     candidates: dict[str, np.ndarray],
 ) -> tuple[str, np.ndarray, str, np.ndarray]:
+    rows, cols = np.where(body_mask > 0)
+    if len(rows) < 2:
+        raise RuntimeError("braided body pixels unavailable for centerline selection")
+    _, body_axis, _, _ = _principal_axis(np.column_stack([cols, rows]).astype(float))
+
     lengths: dict[str, float] = {}
     supports: dict[str, float] = {}
+    axis_spans: dict[str, float] = {}
     for name, points_xy in candidates.items():
         length_px = _path_length(points_xy)
         if not np.isfinite(length_px) or length_px <= 1e-9:
             continue
         lengths[name] = length_px
         supports[name] = _path_support_fraction(body_mask, points_xy)
+        axis_spans[name] = _path_axis_span(points_xy, body_axis)
     if len(lengths) < 2:
         raise RuntimeError("braided centerline candidates unavailable")
 
-    median_length_px = float(np.median(np.asarray(list(lengths.values()), dtype=float)))
+    max_axis_span_px = max(axis_spans.values())
+    span_floor_px = 0.85 * max_axis_span_px
+    eligible_primary_names = [name for name, span_px in axis_spans.items() if span_px >= span_floor_px]
+    if not eligible_primary_names:
+        eligible_primary_names = list(lengths)
+
+    median_length_px = float(np.median(np.asarray([lengths[name] for name in eligible_primary_names], dtype=float)))
     primary_preference = {"body_bins": 0, "skeleton": 1, "prior": 2}
     secondary_preference = {"skeleton": 0, "body_bins": 1, "prior": 2}
 
     primary_name = min(
-        lengths,
+        eligible_primary_names,
         key=lambda name: (
             abs(lengths[name] - median_length_px) / max(median_length_px, 1e-9),
             1.0 - supports[name],
@@ -960,7 +981,9 @@ def _select_centerline_paths(
     primary_xy = candidates[primary_name]
     primary_length_px = lengths[primary_name]
 
-    secondary_names = [name for name in lengths if name != primary_name]
+    secondary_names = [name for name in eligible_primary_names if name != primary_name]
+    if not secondary_names:
+        secondary_names = [name for name in lengths if name != primary_name]
     secondary_name = min(
         secondary_names,
         key=lambda name: (

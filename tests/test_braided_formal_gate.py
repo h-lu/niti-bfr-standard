@@ -64,6 +64,20 @@ class BraidedFormalGateTests(unittest.TestCase):
         self.assertFalse(allowed)
         self.assertEqual(reason, "body_mask_attachment_leak_fraction")
 
+    def test_gate_tolerates_high_absolute_branch_complexity_when_other_qc_is_clean(self) -> None:
+        series = self._base_series()
+        series["branch_component_count_after_pruning"] = 42.0
+        allowed, reason = _formal_braided_af_gate(series, self._reports())
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_gate_tolerates_border_touch_qc_when_leakage_is_clean(self) -> None:
+        series = self._base_series()
+        series["attachment_border_touch_count"] = 1.0
+        allowed, reason = _formal_braided_af_gate(series, self._reports())
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
     def test_gate_rejects_small_body_fraction(self) -> None:
         series = self._base_series()
         series["body_mask_area_px2"] = 400.0

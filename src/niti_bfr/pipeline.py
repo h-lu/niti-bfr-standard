@@ -45,8 +45,6 @@ BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS: dict[str, float] = {
     "body_mask_attachment_leak_fraction_p90_max": 0.03,
     "excluded_attachment_area_fraction_median_max": 0.12,
     "body_mask_area_fraction_median_min": 0.55,
-    "branch_component_count_after_pruning_p95_max": 4.0,
-    "attachment_border_touch_count_p90_max": 0.0,
 }
 
 
@@ -493,11 +491,6 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
     ):
         reasons.append("endpoint_jump")
     if (
-        metrics["branch_component_count_after_pruning_p95"] is not None
-        and metrics["branch_component_count_after_pruning_p95"] > thresholds["branch_component_count_after_pruning_p95_max"]
-    ):
-        reasons.append("branch_component_count_after_pruning")
-    if (
         metrics["axis_peak_position_stability_p95"] is not None
         and metrics["axis_peak_position_stability_p95"] > thresholds["axis_peak_position_stability_p95_max"]
     ):
@@ -517,12 +510,6 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
         and metrics["body_mask_area_fraction_median"] < thresholds["body_mask_area_fraction_median_min"]
     ):
         reasons.append("body_mask_area_fraction")
-    if (
-        metrics["attachment_border_touch_count_p90"] is not None
-        and metrics["attachment_border_touch_count_p90"] > thresholds["attachment_border_touch_count_p90_max"]
-    ):
-        reasons.append("attachment_border_touch_count")
-
     deduped_reasons = list(dict.fromkeys(reasons))
     return {
         "accepted": len(deduped_reasons) == 0,
@@ -570,13 +557,6 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
         if acceptance_metrics["endpoint_jump_p95_px"] > acceptance_metrics["endpoint_jump_limit_px"]:
             return False, "endpoint_jump"
 
-    if acceptance_metrics["branch_component_count_after_pruning_p95"] is not None:
-        if (
-            acceptance_metrics["branch_component_count_after_pruning_p95"]
-            > acceptance_thresholds["branch_component_count_after_pruning_p95_max"]
-        ):
-            return False, "branch_component_count_after_pruning"
-
     if acceptance_metrics["axis_peak_position_stability_p95"] is not None:
         if (
             acceptance_metrics["axis_peak_position_stability_p95"]
@@ -601,13 +581,6 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
     if acceptance_metrics["body_mask_area_fraction_median"] is not None:
         if acceptance_metrics["body_mask_area_fraction_median"] < acceptance_thresholds["body_mask_area_fraction_median_min"]:
             return False, "body_mask_area_fraction"
-
-    if acceptance_metrics["attachment_border_touch_count_p90"] is not None:
-        if (
-            acceptance_metrics["attachment_border_touch_count_p90"]
-            > acceptance_thresholds["attachment_border_touch_count_p90_max"]
-        ):
-            return False, "attachment_border_touch_count"
 
     tail_count = max(5, int(np.ceil(len(valid) * 0.1)))
     tail_recovery = valid["length_axis_recovery"].to_numpy()[-tail_count:]

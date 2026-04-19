@@ -49,6 +49,21 @@ class BraidedCenterlineSelectionTests(unittest.TestCase):
         self.assertLess(np.linalg.norm(primary_xy[0] - secondary_xy[0]), 1.0)
         self.assertLess(np.linalg.norm(primary_xy[-1] - secondary_xy[-1]), 1.0)
 
+    def test_select_centerline_paths_rejects_low_span_skeleton_even_if_length_matches(self) -> None:
+        mask = np.ones((64, 96), dtype=np.uint8) * 255
+        candidates = {
+            "body_bins": np.array([[8.0, 32.0], [28.0, 31.0], [48.0, 31.0], [68.0, 32.0], [88.0, 33.0]], dtype=float),
+            "skeleton": np.array([[38.0, 44.0], [42.0, 36.0], [46.0, 28.0], [50.0, 20.0], [54.0, 12.0]], dtype=float),
+            "prior": np.array([[10.0, 31.5], [30.0, 31.0], [50.0, 31.0], [70.0, 31.5], [90.0, 32.0]], dtype=float),
+        }
+
+        primary_name, primary_xy, secondary_name, secondary_xy = _select_centerline_paths(mask, candidates)
+
+        self.assertEqual(primary_name, "body_bins")
+        self.assertEqual(secondary_name, "prior")
+        self.assertTrue(np.array_equal(primary_xy, candidates["body_bins"]))
+        self.assertTrue(np.array_equal(secondary_xy, candidates["prior"]))
+
 
 if __name__ == "__main__":
     unittest.main()
