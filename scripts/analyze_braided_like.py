@@ -117,6 +117,11 @@ def main() -> None:
         centerline_smooth_window=int(extraction_params.get("centerline_smooth_window", 7)),
         diameter_peak_threshold_ratio=float(extraction_params.get("diameter_peak_threshold_ratio", 0.95)),
         attachment_min_area_px2=int(extraction_params.get("attachment_min_area_px2", 24)),
+        attachment_orientation_mismatch_deg=float(extraction_params.get("attachment_orientation_mismatch_deg", 35.0)),
+        attachment_far_axis_distance_ratio=float(extraction_params.get("attachment_far_axis_distance_ratio", 0.78)),
+        attachment_short_axis_span_ratio=float(extraction_params.get("attachment_short_axis_span_ratio", 0.18)),
+        attachment_short_normal_span_ratio=float(extraction_params.get("attachment_short_normal_span_ratio", 0.55)),
+        attachment_prune_dilate_kernel=int(extraction_params.get("attachment_prune_dilate_kernel", 1)),
         diameter_proxy_window_start_norm=float(extraction_params.get("diameter_proxy_window_start_norm", 0.6)),
         diameter_proxy_window_end_norm=float(extraction_params.get("diameter_proxy_window_end_norm", 0.8)),
     )

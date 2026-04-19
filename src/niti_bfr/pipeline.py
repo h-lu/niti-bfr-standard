@@ -211,6 +211,11 @@ def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
         return series
     augmented = series.copy()
 
+    if "branch_component_count_after_pruning" in augmented.columns and "branch_count_after_pruning" not in augmented.columns:
+        augmented["branch_count_after_pruning"] = augmented["branch_component_count_after_pruning"]
+    if "branch_count_after_pruning" in augmented.columns and "branch_component_count_after_pruning" not in augmented.columns:
+        augmented["branch_component_count_after_pruning"] = augmented["branch_count_after_pruning"]
+
     def _rowwise_nanmax(values: np.ndarray) -> np.ndarray:
         values = np.asarray(values, dtype=float)
         finite = np.isfinite(values)
@@ -311,9 +316,14 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
         if float(np.nanpercentile(valid["endpoint_jump_px"], 95)) > endpoint_limit:
             return False, "endpoint_jump"
 
-    if "branch_count_after_pruning" in valid.columns:
-        if float(np.nanpercentile(valid["branch_count_after_pruning"], 95)) > 4.0:
-            return False, "branch_count_after_pruning"
+    branch_qc_col = None
+    if "branch_component_count_after_pruning" in valid.columns:
+        branch_qc_col = "branch_component_count_after_pruning"
+    elif "branch_count_after_pruning" in valid.columns:
+        branch_qc_col = "branch_count_after_pruning"
+    if branch_qc_col is not None:
+        if float(np.nanpercentile(valid[branch_qc_col], 95)) > 4.0:
+            return False, "branch_component_count_after_pruning"
 
     if "axis_peak_position_stability" in valid.columns:
         if float(np.nanpercentile(valid["axis_peak_position_stability"], 95)) > 0.18:
@@ -521,6 +531,7 @@ def analyze_braided_video_quicklook(
                 "transition_zone_right_px": geom.transition_zone_right_px,
                 "compaction_zone_length_px": geom.compaction_zone_length_px,
                 "zone_symmetry": geom.zone_symmetry,
+                "branch_component_count_after_pruning": geom.branch_component_count_after_pruning,
                 "branch_count_after_pruning": geom.branch_count_after_pruning,
                 "endpoint_jump_px": geom.endpoint_jump_px,
                 "axis_peak_position_stability": geom.axis_peak_position_stability,
@@ -574,6 +585,7 @@ def analyze_braided_video_quicklook(
                 "transition_zone_right_px": np.nan,
                 "compaction_zone_length_px": np.nan,
                 "zone_symmetry": np.nan,
+                "branch_component_count_after_pruning": np.nan,
                 "branch_count_after_pruning": np.nan,
                 "endpoint_jump_px": np.nan,
                 "axis_peak_position_stability": np.nan,

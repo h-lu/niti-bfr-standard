@@ -88,7 +88,7 @@
   - 在 `pipeline.py` 的 braided formal gate 中新增：
     - `centerline_disagreement`
     - `endpoint_jump`
-    - `branch_count_after_pruning`
+    - `branch_component_count_after_pruning`
     - `axis_peak_position_stability`
 - 验收：
   - 对附件干扰明显的序列，formal gate 能主动拒绝结果。

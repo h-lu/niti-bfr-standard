@@ -195,7 +195,7 @@ def _truth_metrics_from_geometry(
     body_contour_area_px2 = float(cv2.contourArea(max(contours, key=cv2.contourArea))) if contours else body_mask_area_true_px2
     positions_curve_rel = curve_positions_px - float(body_curve_positions_px[0])
     area_proj_true_px2 = (
-        float(np.trapz(width_profile_px[body_mask], positions_curve_rel[body_mask]))
+        float(np.trapezoid(width_profile_px[body_mask], positions_curve_rel[body_mask]))
         if np.count_nonzero(body_mask) >= 2
         else float("nan")
     )
