@@ -9,8 +9,28 @@ import pandas as pd
 
 from .extract_braided import BraidedExtractionConfig, extract_braided_geometry
 from .extract import ExtractionConfig, extract_geometry
-from .metrics import MetricEvaluation, RecoveryFit, evaluate_metric, recovery_ratio_directional
+from .metrics import (
+    MetricEvaluation,
+    RecoveryFit,
+    evaluate_metric,
+    infer_metric_direction,
+    recovery_ratio_directional,
+)
 from .temporal import RouteCConfig, apply_route_c
+
+BRAIDED_METRIC_ALIAS_TO_KEY = {
+    "A": "length_axis",
+    "B": "diameter_max",
+    "C": "area_proj",
+}
+
+BRAIDED_METRIC_KEY_TO_ALIAS = {value: key for key, value in BRAIDED_METRIC_ALIAS_TO_KEY.items()}
+
+BRAIDED_METRIC_DISPLAY = {
+    "length_axis": "A:length_axis",
+    "diameter_max": "B:diameter_max",
+    "area_proj": "C:area_proj",
+}
 
 
 @dataclass
@@ -108,15 +128,18 @@ def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvalu
 
 
 def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
+    axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
+    area_eval_col = "area_proj_formal_px2" if "area_proj_formal_px2" in series.columns else "area_proj_px2"
     valid = series.dropna(
         subset=[
             "temperature_c",
             "length_env_px",
-            "length_axis_px",
+            axis_eval_col,
             "diameter_max_px",
-            "area_proj_px2",
+            area_eval_col,
         ]
     )
+    area_increasing = infer_metric_direction(valid[area_eval_col].to_numpy(), default_increasing=True)
     reports = {
         "length_env": evaluate_metric(
             valid["temperature_c"].to_numpy(),
@@ -126,7 +149,7 @@ def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, Met
         ),
         "length_axis": evaluate_metric(
             valid["temperature_c"].to_numpy(),
-            valid["length_axis_px"].to_numpy(),
+            valid[axis_eval_col].to_numpy(),
             label="length_axis",
             increasing=False,
         ),
@@ -138,9 +161,9 @@ def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, Met
         ),
         "area_proj": evaluate_metric(
             valid["temperature_c"].to_numpy(),
-            valid["area_proj_px2"].to_numpy(),
+            valid[area_eval_col].to_numpy(),
             label="area_proj",
-            increasing=True,
+            increasing=area_increasing,
         ),
     }
     length_env_eval = reports["length_env"]
@@ -154,7 +177,7 @@ def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, Met
         increasing=False,
     )
     series["length_axis_recovery"] = recovery_ratio_directional(
-        series["length_axis_px"].to_numpy(),
+        series[axis_eval_col].to_numpy(),
         -length_axis_eval.fit.x_m,
         -length_axis_eval.fit.x_a,
         increasing=False,
@@ -166,10 +189,10 @@ def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, Met
         increasing=True,
     )
     series["area_proj_recovery"] = recovery_ratio_directional(
-        series["area_proj_px2"].to_numpy(),
+        series[area_eval_col].to_numpy(),
         area_eval.fit.x_m,
         area_eval.fit.x_a,
-        increasing=True,
+        increasing=area_eval.increasing,
     )
     return reports
 
@@ -178,6 +201,10 @@ def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
     if series.empty:
         return series
     augmented = series.copy()
+    if "length_axis_px" in augmented.columns:
+        augmented["length_axis_formal_px"] = augmented["length_axis_px"]
+    if "area_proj_px2" in augmented.columns:
+        augmented["area_proj_formal_px2"] = augmented["area_proj_px2"]
     if "length_axis_px" in augmented.columns and "length_axis_alt_px" in augmented.columns:
         augmented["centerline_disagreement"] = augmented["length_axis_disagreement_px"] / augmented["length_axis_px"].clip(lower=1e-9)
     elif "length_axis_disagreement_px" not in augmented.columns:
@@ -236,7 +263,8 @@ def _formal_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) 
 
 
 def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) -> tuple[bool, str | None]:
-    valid = series.dropna(subset=["temperature_c", "length_axis_px", "length_axis_recovery", "quality"])
+    axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
+    valid = series.dropna(subset=["temperature_c", axis_eval_col, "length_axis_recovery", "quality"])
     if len(valid) < 15:
         return False, "insufficient_axis_points"
 
@@ -261,7 +289,7 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
             return False, "centerline_disagreement"
 
     if "endpoint_jump_px" in valid.columns:
-        endpoint_limit = max(12.0, 0.08 * float(np.nanmedian(valid["length_axis_px"])))
+        endpoint_limit = max(12.0, 0.08 * float(np.nanmedian(valid[axis_eval_col])))
         if float(np.nanpercentile(valid["endpoint_jump_px"], 95)) > endpoint_limit:
             return False, "endpoint_jump"
 
@@ -439,6 +467,7 @@ def analyze_braided_video_quicklook(
                 "length_env_px": geom.length_env_px,
                 "length_axis_px": geom.length_axis_px,
                 "length_axis_skeleton_px": geom.length_axis_skeleton_px,
+                "length_axis_body_bins_px": geom.length_axis_body_bins_px,
                 "length_axis_alt_px": geom.length_axis_alt_px,
                 "length_axis_disagreement_px": geom.length_axis_disagreement_px,
                 "centerline_disagreement": geom.centerline_disagreement,
@@ -447,9 +476,12 @@ def analyze_braided_video_quicklook(
                 "diameter_max_thickness_px": geom.diameter_max_thickness_px,
                 "diameter_max_feret_px": geom.diameter_max_feret_px,
                 "diameter_p95_px": geom.diameter_p95_px,
+                "diameter_mid_median_px": geom.diameter_mid_median_px,
+                "diameter_mid_p90_px": geom.diameter_mid_p90_px,
                 "diameter_peak_span_px": geom.diameter_peak_span_px,
                 "diameter_peak_pos_norm": geom.diameter_peak_pos_norm,
                 "area_proj_px2": geom.area_proj_px2,
+                "area_proj_contour_width_integral_px2": geom.area_proj_contour_width_integral_px2,
                 "area_proj_contour_px2": geom.area_proj_contour_px2,
                 "area_proj_definition_gap_px2": geom.area_proj_definition_gap_px2,
                 "body_mask_area_px2": geom.body_mask_area_px2,
@@ -488,6 +520,7 @@ def analyze_braided_video_quicklook(
                 "length_env_px": np.nan,
                 "length_axis_px": np.nan,
                 "length_axis_skeleton_px": np.nan,
+                "length_axis_body_bins_px": np.nan,
                 "length_axis_alt_px": np.nan,
                 "length_axis_disagreement_px": np.nan,
                 "centerline_disagreement": np.nan,
@@ -496,9 +529,12 @@ def analyze_braided_video_quicklook(
                 "diameter_max_thickness_px": np.nan,
                 "diameter_max_feret_px": np.nan,
                 "diameter_p95_px": np.nan,
+                "diameter_mid_median_px": np.nan,
+                "diameter_mid_p90_px": np.nan,
                 "diameter_peak_span_px": np.nan,
                 "diameter_peak_pos_norm": np.nan,
                 "area_proj_px2": np.nan,
+                "area_proj_contour_width_integral_px2": np.nan,
                 "area_proj_contour_px2": np.nan,
                 "area_proj_definition_gap_px2": np.nan,
                 "body_mask_area_px2": np.nan,

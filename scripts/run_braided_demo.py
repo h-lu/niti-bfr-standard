@@ -14,8 +14,13 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from niti_bfr.extract_braided import BraidedExtractionConfig, extract_braided_geometry
-from niti_bfr.metrics import evaluate_metric
-from niti_bfr.pipeline import analyze_braided_video_quicklook
+from niti_bfr.metrics import evaluate_metric, infer_metric_direction
+from niti_bfr.pipeline import (
+    BRAIDED_METRIC_ALIAS_TO_KEY,
+    BRAIDED_METRIC_DISPLAY,
+    BRAIDED_METRIC_KEY_TO_ALIAS,
+    analyze_braided_video_quicklook,
+)
 from niti_bfr.synth import generate_temperature_schedule
 from niti_bfr.synth_braided import (
     BraidedSyntheticModel,
@@ -32,6 +37,15 @@ def _mean_abs_error(measured: np.ndarray, truth: np.ndarray) -> float:
     if not np.any(valid):
         return float("nan")
     return float(np.mean(np.abs(measured[valid] - truth[valid])))
+
+
+def _axis_eval_series(series) -> np.ndarray:
+    col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
+    return series[col].to_numpy()
+
+
+def _braided_alias(metric_key: str) -> str:
+    return BRAIDED_METRIC_KEY_TO_ALIAS.get(metric_key, metric_key)
 
 
 def _load_frame(video_path: Path, frame_idx: int) -> np.ndarray:
@@ -88,9 +102,9 @@ def _make_overlay(frame_bgr: np.ndarray, extraction_cfg: BraidedExtractionConfig
         if np.all(np.isfinite(point_xy)):
             cv2.circle(overlay, np.round(point_xy).astype(int), 4, color, -1)
     label = (
-        f"axis={geom.length_axis_px:.1f}/{geom.length_axis_alt_px:.1f}px "
-        f"D={geom.diameter_max_orth_px:.1f}|{geom.diameter_p95_px:.1f}px "
-        f"A={geom.area_proj_px2:.0f}px2 body={geom.body_mask_area_px2:.0f}px2"
+        f"axis={geom.length_axis_px:.1f}|bins={geom.length_axis_body_bins_px:.1f}|alt={geom.length_axis_alt_px:.1f}px "
+        f"Dmax={geom.diameter_max_px:.1f}|p90={geom.diameter_mid_p90_px:.1f}px "
+        f"Aproj={geom.area_proj_px2:.0f}|AcontourInt={geom.area_proj_contour_width_integral_px2:.0f}px2"
     )
     cv2.putText(overlay, label, (x0 + 8, max(24, y0 + 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2, cv2.LINE_AA)
     return overlay
@@ -163,6 +177,8 @@ def main() -> None:
         centerline_smooth_window=int(extraction_params.get("centerline_smooth_window", 7)),
         diameter_peak_threshold_ratio=float(extraction_params.get("diameter_peak_threshold_ratio", 0.95)),
         attachment_min_area_px2=int(extraction_params.get("attachment_min_area_px2", 24)),
+        diameter_proxy_window_start_norm=float(extraction_params.get("diameter_proxy_window_start_norm", 0.6)),
+        diameter_proxy_window_end_norm=float(extraction_params.get("diameter_proxy_window_end_norm", 0.8)),
     )
 
     out_dir = ROOT / "outputs" / "braided_demo"
@@ -203,11 +219,11 @@ def main() -> None:
         truth["temperature_c"].to_numpy(),
         truth["area_proj_true_px2"].to_numpy(),
         label="area_proj_true",
-        increasing=True,
+        increasing=infer_metric_direction(truth["area_proj_true_px2"].to_numpy(), default_increasing=True),
     )
     measured_axis_eval = evaluate_metric(
         result.series["temperature_c"].to_numpy(),
-        result.series["length_axis_px"].to_numpy(),
+        _axis_eval_series(result.series),
         label="length_axis_measured",
         increasing=False,
     )
@@ -221,7 +237,7 @@ def main() -> None:
         result.series["temperature_c"].to_numpy(),
         result.series["area_proj_px2"].to_numpy(),
         label="area_proj_measured",
-        increasing=True,
+        increasing=infer_metric_direction(result.series["area_proj_px2"].to_numpy(), default_increasing=True),
     )
     diameter_threshold_sweep: dict[str, dict[str, float]] = {}
     for threshold_delta in (-8, 0, 8):
@@ -248,9 +264,9 @@ def main() -> None:
 
     plt.figure(figsize=(8, 4.8))
     plt.plot(truth["temperature_c"], truth["length_env_true_px"], label="envelope length true", linewidth=2, alpha=0.85)
-    plt.plot(truth["temperature_c"], truth["length_axis_true_px"], label="axis length true", linewidth=2, alpha=0.85)
+    plt.plot(truth["temperature_c"], truth["length_axis_true_px"], label="A true", linewidth=2, alpha=0.85)
     plt.plot(result.series["temperature_c"], result.series["length_env_px"], label="envelope length", alpha=0.8)
-    plt.plot(result.series["temperature_c"], result.series["length_axis_px"], label="axis length", alpha=0.8)
+    plt.plot(result.series["temperature_c"], result.series["length_axis_px"], label="A measured", alpha=0.8)
     plt.xlabel("Temperature (C)")
     plt.ylabel("Length (px)")
     plt.title("Braided demo length comparison")
@@ -260,24 +276,32 @@ def main() -> None:
     plt.close()
 
     plt.figure(figsize=(8, 4.8))
-    plt.plot(truth["temperature_c"], truth["diameter_true_px"], label="diameter true", linewidth=2)
-    plt.plot(result.series["temperature_c"], result.series["diameter_max_orth_px"], label="diameter orth", alpha=0.85)
-    plt.plot(result.series["temperature_c"], result.series["diameter_p95_px"], label="diameter p95", alpha=0.8)
+    plt.plot(truth["temperature_c"], truth["diameter_true_px"], label="B true", linewidth=2)
+    plt.plot(result.series["temperature_c"], result.series["diameter_max_px"], label="B measured", alpha=0.9)
+    plt.plot(result.series["temperature_c"], result.series["diameter_mid_p90_px"], label="mid-window p90 proxy", alpha=0.8)
+    plt.plot(result.series["temperature_c"], result.series["diameter_mid_median_px"], label="mid-window median", alpha=0.75)
+    plt.plot(result.series["temperature_c"], result.series["diameter_p95_px"], label="diameter body p95", alpha=0.75)
     plt.plot(result.series["temperature_c"], result.series["diameter_max_thickness_px"], label="diameter thickness", alpha=0.75)
     plt.xlabel("Temperature (C)")
     plt.ylabel("Diameter (px)")
-    plt.title("Braided demo diameter comparison")
+    plt.title("Braided demo D_max vs width proxies")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_dir / "diameter_vs_temperature.png", dpi=160)
     plt.close()
 
     plt.figure(figsize=(8, 4.8))
-    plt.plot(truth["temperature_c"], truth["area_proj_true_px2"], label="A_proj true", linewidth=2)
-    plt.plot(result.series["temperature_c"], result.series["area_proj_px2"], label="A_proj measured", alpha=0.85)
+    plt.plot(truth["temperature_c"], truth["area_proj_true_px2"], label="C true", linewidth=2)
+    plt.plot(result.series["temperature_c"], result.series["area_proj_px2"], label="C measured", alpha=0.85)
+    plt.plot(
+        result.series["temperature_c"],
+        result.series["area_proj_contour_width_integral_px2"],
+        label="contour-width integral",
+        alpha=0.7,
+    )
     plt.xlabel("Temperature (C)")
     plt.ylabel("Projected area (px^2)")
-    plt.title("Braided demo projected area comparison")
+    plt.title("Braided demo A_proj vs truth area")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_dir / "area_vs_temperature.png", dpi=160)
@@ -331,10 +355,10 @@ def main() -> None:
 
     if {"length_axis_recovery", "length_env_recovery", "diameter_max_recovery", "area_proj_recovery"}.issubset(result.series.columns):
         plt.figure(figsize=(8, 4.8))
-        plt.plot(result.series["temperature_c"], result.series["length_axis_recovery"], label="axis recovery", linewidth=2)
+        plt.plot(result.series["temperature_c"], result.series["length_axis_recovery"], label="A recovery", linewidth=2)
         plt.plot(result.series["temperature_c"], result.series["length_env_recovery"], label="env recovery", linewidth=1.8)
-        plt.plot(result.series["temperature_c"], result.series["diameter_max_recovery"], label="diameter recovery", linewidth=1.8)
-        plt.plot(result.series["temperature_c"], result.series["area_proj_recovery"], label="area recovery", linewidth=1.8)
+        plt.plot(result.series["temperature_c"], result.series["diameter_max_recovery"], label="B recovery", linewidth=1.8)
+        plt.plot(result.series["temperature_c"], result.series["area_proj_recovery"], label="C recovery", linewidth=1.8)
         plt.xlabel("Temperature (C)")
         plt.ylabel("Recovery ratio")
         plt.title("Braided demo recovery comparison")
@@ -382,10 +406,14 @@ def main() -> None:
     }
     summary = {
         "demo_output": str(out_dir),
+        "metric_aliases": BRAIDED_METRIC_ALIAS_TO_KEY,
+        "metric_display_labels": BRAIDED_METRIC_DISPLAY,
         "truth_frames": int(len(truth)),
         "mode": result.mode,
         "formal_metric_label": result.formal_metric_label,
+        "formal_metric_alias": None if result.formal_metric_label is None else _braided_alias(result.formal_metric_label),
         "primary_metric_label": result.primary_metric_label,
+        "primary_metric_alias": None if result.primary_metric_label is None else _braided_alias(result.primary_metric_label),
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": None if result.af95_c is None else float(result.af95_c),
         "aftan_c": None if result.aftan_c is None else float(result.aftan_c),
@@ -405,6 +433,7 @@ def main() -> None:
         "measured_area_aftan_c": float(measured_area_eval.aftan_c),
         "af_comparison": {
             "length_axis": {
+                "alias": "A",
                 "measured_af95_c": float(measured_axis_eval.af95_c),
                 "truth_af95_c": float(truth_axis_eval.af95_c),
                 "af95_error_c": float(measured_axis_eval.af95_c - truth_axis_eval.af95_c),
@@ -413,6 +442,7 @@ def main() -> None:
                 "aftan_error_c": float(measured_axis_eval.aftan_c - truth_axis_eval.aftan_c),
             },
             "diameter_max": {
+                "alias": "B",
                 "measured_af95_c": float(measured_diameter_eval.af95_c),
                 "truth_af95_c": float(truth_diameter_eval.af95_c),
                 "af95_error_c": float(measured_diameter_eval.af95_c - truth_diameter_eval.af95_c),
@@ -421,6 +451,36 @@ def main() -> None:
                 "aftan_error_c": float(measured_diameter_eval.aftan_c - truth_diameter_eval.aftan_c),
             },
             "area_proj": {
+                "alias": "C",
+                "measured_af95_c": float(measured_area_eval.af95_c),
+                "truth_af95_c": float(truth_area_eval.af95_c),
+                "af95_error_c": float(measured_area_eval.af95_c - truth_area_eval.af95_c),
+                "measured_aftan_c": float(measured_area_eval.aftan_c),
+                "truth_aftan_c": float(truth_area_eval.aftan_c),
+                "aftan_error_c": float(measured_area_eval.aftan_c - truth_area_eval.aftan_c),
+            },
+        },
+        "af_comparison_by_alias": {
+            "A": {
+                "metric_key": "length_axis",
+                "measured_af95_c": float(measured_axis_eval.af95_c),
+                "truth_af95_c": float(truth_axis_eval.af95_c),
+                "af95_error_c": float(measured_axis_eval.af95_c - truth_axis_eval.af95_c),
+                "measured_aftan_c": float(measured_axis_eval.aftan_c),
+                "truth_aftan_c": float(truth_axis_eval.aftan_c),
+                "aftan_error_c": float(measured_axis_eval.aftan_c - truth_axis_eval.aftan_c),
+            },
+            "B": {
+                "metric_key": "diameter_max",
+                "measured_af95_c": float(measured_diameter_eval.af95_c),
+                "truth_af95_c": float(truth_diameter_eval.af95_c),
+                "af95_error_c": float(measured_diameter_eval.af95_c - truth_diameter_eval.af95_c),
+                "measured_aftan_c": float(measured_diameter_eval.aftan_c),
+                "truth_aftan_c": float(truth_diameter_eval.aftan_c),
+                "aftan_error_c": float(measured_diameter_eval.aftan_c - truth_diameter_eval.aftan_c),
+            },
+            "C": {
+                "metric_key": "area_proj",
                 "measured_af95_c": float(measured_area_eval.af95_c),
                 "truth_af95_c": float(truth_area_eval.af95_c),
                 "af95_error_c": float(measured_area_eval.af95_c - truth_area_eval.af95_c),

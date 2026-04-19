@@ -18,7 +18,13 @@ from fastapi.templating import Jinja2Templates
 
 from .extract_braided import BraidedExtractionConfig
 from .extract import ExtractionConfig
-from .pipeline import AnalysisResult, analyze_braided_video_quicklook, analyze_video
+from .pipeline import (
+    AnalysisResult,
+    BRAIDED_METRIC_ALIAS_TO_KEY,
+    BRAIDED_METRIC_KEY_TO_ALIAS,
+    analyze_braided_video_quicklook,
+    analyze_video,
+)
 from .synth_braided import (
     BraidedSyntheticModel,
     BraidedSyntheticModelConfig,
@@ -309,15 +315,27 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "video_filename": run["video_filename"],
         "temperature_filename": run["temperature_filename"],
     }
+    if run["preset"] == "braided_device":
+        summary["metric_aliases"] = BRAIDED_METRIC_ALIAS_TO_KEY
+        if result.formal_metric_label is not None:
+            summary["formal_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.formal_metric_label)
+        if result.primary_metric_label is not None:
+            summary["primary_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.primary_metric_label)
     if "temperature_c" in series.columns and series["temperature_c"].notna().any():
         summary["temperature_c_min"] = float(series["temperature_c"].min())
         summary["temperature_c_max"] = float(series["temperature_c"].max())
     if "length_axis_px" in series.columns:
         summary["length_axis_median_px"] = float(series["length_axis_px"].median())
+    if "length_axis_body_bins_px" in series.columns:
+        summary["length_axis_body_bins_median_px"] = float(series["length_axis_body_bins_px"].median())
     if "diameter_max_px" in series.columns:
         summary["diameter_max_median_px"] = float(series["diameter_max_px"].median())
     if "diameter_p95_px" in series.columns:
         summary["diameter_p95_median_px"] = float(series["diameter_p95_px"].median())
+    if "diameter_mid_median_px" in series.columns:
+        summary["diameter_mid_median_px"] = float(series["diameter_mid_median_px"].median())
+    if "diameter_mid_p90_px" in series.columns:
+        summary["diameter_mid_p90_median_px"] = float(series["diameter_mid_p90_px"].median())
     if "area_proj_px2" in series.columns:
         summary["area_proj_median_px2"] = float(series["area_proj_px2"].median())
     if "body_mask_area_px2" in series.columns:
@@ -376,7 +394,7 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
     if {"time_sec", "length_env_px", "length_axis_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
         plt.plot(series["time_sec"], series["length_env_px"], label="envelope length", linewidth=1.8)
-        plt.plot(series["time_sec"], series["length_axis_px"], label="axis length", linewidth=1.8)
+        plt.plot(series["time_sec"], series["length_axis_px"], label="A:length_axis", linewidth=1.8)
         plt.xlabel("Time (s)")
         plt.ylabel("Length (px)")
         plt.title("Braided lengths over time")
@@ -387,10 +405,14 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"time_sec", "diameter_max_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["diameter_max_px"], label="diameter_max", linewidth=1.8)
+        plt.plot(series["time_sec"], series["diameter_max_px"], label="B:diameter_max", linewidth=1.8)
+        if "diameter_mid_median_px" in series.columns:
+            plt.plot(series["time_sec"], series["diameter_mid_median_px"], label="mid-window median", linewidth=1.4)
+        if "diameter_mid_p90_px" in series.columns:
+            plt.plot(series["time_sec"], series["diameter_mid_p90_px"], label="mid-window p90 proxy", linewidth=1.4)
         plt.xlabel("Time (s)")
         plt.ylabel("Diameter (px)")
-        plt.title("Braided diameter over time")
+        plt.title("Braided D_max over time")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "quicklook_diameter_vs_time.png", dpi=160)
@@ -398,10 +420,12 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"time_sec", "area_proj_px2"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["area_proj_px2"], label="A_proj", linewidth=1.8)
+        plt.plot(series["time_sec"], series["area_proj_px2"], label="C:area_proj", linewidth=1.8)
+        if "area_proj_contour_width_integral_px2" in series.columns:
+            plt.plot(series["time_sec"], series["area_proj_contour_width_integral_px2"], label="contour-width integral", linewidth=1.4)
         plt.xlabel("Time (s)")
-        plt.ylabel("Projected area (px^2)")
-        plt.title("Braided projected area over time")
+        plt.ylabel("Projected area integral (px^2)")
+        plt.title("Braided A_proj over time")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "quicklook_area_vs_time.png", dpi=160)
@@ -465,10 +489,10 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"temperature_c", "length_axis_recovery", "length_env_recovery", "diameter_max_recovery", "area_proj_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="axis recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="A recovery", linewidth=1.8)
         plt.plot(series["temperature_c"], series["length_env_recovery"], label="env recovery", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="diameter recovery", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="area recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="B recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="C recovery", linewidth=1.8)
         if result.mode == "formal_af" and result.af95_c is not None:
             plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"Af-95 {result.af95_c:.2f}C")
         if result.mode == "formal_af" and result.aftan_c is not None:
@@ -484,9 +508,9 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
     if {"temperature_c", "length_env_px", "length_axis_px", "diameter_max_px", "area_proj_px2"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
         plt.plot(series["temperature_c"], series["length_env_px"], label="env length", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["length_axis_px"], label="axis length", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["diameter_max_px"], label="diameter_max", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["area_proj_px2"], label="A_proj", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["length_axis_px"], label="A", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["diameter_max_px"], label="B", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["area_proj_px2"], label="C", linewidth=1.8)
         plt.xlabel("Temperature (C)")
         plt.ylabel("Projected geometry (px)")
         plt.title("Braided geometry over temperature")
@@ -552,6 +576,8 @@ def _build_braided_extraction_config(config: dict[str, Any]) -> BraidedExtractio
         centerline_smooth_window=int(raw.get("centerline_smooth_window", 7)),
         diameter_peak_threshold_ratio=float(raw.get("diameter_peak_threshold_ratio", 0.95)),
         attachment_min_area_px2=int(raw.get("attachment_min_area_px2", 24)),
+        diameter_proxy_window_start_norm=float(raw.get("diameter_proxy_window_start_norm", 0.6)),
+        diameter_proxy_window_end_norm=float(raw.get("diameter_proxy_window_end_norm", 0.8)),
     )
 
 

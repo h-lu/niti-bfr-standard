@@ -70,9 +70,9 @@ def _make_overlay(frame_bgr: np.ndarray, extraction_cfg: BraidedExtractionConfig
         if np.all(np.isfinite(point_xy)):
             cv2.circle(overlay, np.round(point_xy).astype(int), 4, color, -1)
     label = (
-        f"axis={geom.length_axis_px:.1f}/{geom.length_axis_alt_px:.1f}px "
-        f"D={geom.diameter_max_orth_px:.1f}|{geom.diameter_p95_px:.1f}px "
-        f"A={geom.area_proj_px2:.0f}px2 leak={geom.body_mask_attachment_leak_fraction:.2f}"
+        f"axis={geom.length_axis_px:.1f}|bins={geom.length_axis_body_bins_px:.1f}|alt={geom.length_axis_alt_px:.1f}px "
+        f"Dmax={geom.diameter_max_px:.1f}|p90={geom.diameter_mid_p90_px:.1f}px "
+        f"Aproj={geom.area_proj_px2:.0f}px2 leak={geom.body_mask_attachment_leak_fraction:.2f}"
     )
     cv2.putText(overlay, label, (x0 + 8, max(24, y0 + 24)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (40, 40, 40), 2, cv2.LINE_AA)
     return overlay
@@ -117,6 +117,8 @@ def main() -> None:
         centerline_smooth_window=int(extraction_params.get("centerline_smooth_window", 7)),
         diameter_peak_threshold_ratio=float(extraction_params.get("diameter_peak_threshold_ratio", 0.95)),
         attachment_min_area_px2=int(extraction_params.get("attachment_min_area_px2", 24)),
+        diameter_proxy_window_start_norm=float(extraction_params.get("diameter_proxy_window_start_norm", 0.6)),
+        diameter_proxy_window_end_norm=float(extraction_params.get("diameter_proxy_window_end_norm", 0.8)),
     )
 
     video_path = args.video.resolve()
@@ -132,6 +134,8 @@ def main() -> None:
     result.series["length_env_smooth"] = result.series["length_env_px"].rolling(window=11, center=True, min_periods=1).median()
     result.series["length_axis_smooth"] = result.series["length_axis_px"].rolling(window=11, center=True, min_periods=1).median()
     result.series["diameter_max_smooth"] = result.series["diameter_max_px"].rolling(window=11, center=True, min_periods=1).median()
+    if "diameter_mid_median_px" in result.series.columns:
+        result.series["diameter_mid_median_smooth"] = result.series["diameter_mid_median_px"].rolling(window=11, center=True, min_periods=1).median()
     result.series["area_proj_smooth_px2"] = result.series["area_proj_px2"].rolling(window=11, center=True, min_periods=1).median()
     result.series["compaction_zone_smooth"] = result.series["compaction_zone_length_px"].rolling(window=11, center=True, min_periods=1).median()
     result.series["body_mask_area_smooth_px2"] = result.series["body_mask_area_px2"].rolling(window=11, center=True, min_periods=1).median()
@@ -141,8 +145,8 @@ def main() -> None:
     plt.figure(figsize=(8, 4.8))
     plt.plot(result.series["time_sec"], result.series["length_env_px"], linewidth=1.0, alpha=0.25, label="envelope raw")
     plt.plot(result.series["time_sec"], result.series["length_env_smooth"], linewidth=2.0, label="envelope median smooth")
-    plt.plot(result.series["time_sec"], result.series["length_axis_px"], linewidth=1.0, alpha=0.25, label="axis raw")
-    plt.plot(result.series["time_sec"], result.series["length_axis_smooth"], linewidth=2.0, label="axis median smooth")
+    plt.plot(result.series["time_sec"], result.series["length_axis_px"], linewidth=1.0, alpha=0.25, label="A raw")
+    plt.plot(result.series["time_sec"], result.series["length_axis_smooth"], linewidth=2.0, label="A smooth")
     plt.xlabel("Time (s)")
     plt.ylabel("Length (px)")
     plt.title(f"{video_path.name} braided quicklook lengths")
@@ -152,22 +156,24 @@ def main() -> None:
     plt.close()
 
     plt.figure(figsize=(8, 4.8))
-    plt.plot(result.series["time_sec"], result.series["diameter_max_px"], linewidth=1.0, alpha=0.25, label="Dmax raw")
-    plt.plot(result.series["time_sec"], result.series["diameter_max_smooth"], linewidth=2.0, label="Dmax median smooth")
+    plt.plot(result.series["time_sec"], result.series["diameter_max_px"], linewidth=1.0, alpha=0.25, label="B raw")
+    plt.plot(result.series["time_sec"], result.series["diameter_max_smooth"], linewidth=2.0, label="B smooth")
+    if "diameter_mid_median_smooth" in result.series.columns:
+        plt.plot(result.series["time_sec"], result.series["diameter_mid_median_smooth"], linewidth=1.7, label="mid-window median smooth")
     plt.xlabel("Time (s)")
     plt.ylabel("Diameter (px)")
-    plt.title(f"{video_path.name} braided quicklook max diameter")
+    plt.title(f"{video_path.name} braided quicklook D_max")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_dir / "diameter_vs_time.png", dpi=160)
     plt.close()
 
     plt.figure(figsize=(8, 4.8))
-    plt.plot(result.series["time_sec"], result.series["area_proj_px2"], linewidth=1.0, alpha=0.25, label="A_proj raw")
-    plt.plot(result.series["time_sec"], result.series["area_proj_smooth_px2"], linewidth=2.0, label="A_proj median smooth")
+    plt.plot(result.series["time_sec"], result.series["area_proj_px2"], linewidth=1.0, alpha=0.25, label="C raw")
+    plt.plot(result.series["time_sec"], result.series["area_proj_smooth_px2"], linewidth=2.0, label="C smooth")
     plt.xlabel("Time (s)")
-    plt.ylabel("Projected area (px^2)")
-    plt.title(f"{video_path.name} braided quicklook projected area")
+    plt.ylabel("Projected area integral (px^2)")
+    plt.title(f"{video_path.name} braided quicklook A_proj")
     plt.legend()
     plt.tight_layout()
     plt.savefig(out_dir / "area_vs_time.png", dpi=160)
@@ -224,7 +230,7 @@ def main() -> None:
     if "temperature_c" in result.series.columns and result.series["temperature_c"].notna().any():
         plt.figure(figsize=(8, 4.8))
         plt.plot(result.series["temperature_c"], result.series["length_env_px"], linewidth=1.4, label="envelope length")
-        plt.plot(result.series["temperature_c"], result.series["length_axis_px"], linewidth=1.8, label="axis length")
+        plt.plot(result.series["temperature_c"], result.series["length_axis_px"], linewidth=1.8, label="A")
         plt.xlabel("Temperature (C)")
         plt.ylabel("Length (px)")
         plt.title(f"{video_path.name} braided length over temperature")
@@ -235,10 +241,10 @@ def main() -> None:
 
         if {"length_axis_recovery", "length_env_recovery", "diameter_max_recovery", "area_proj_recovery"}.issubset(result.series.columns):
             plt.figure(figsize=(8, 4.8))
-            plt.plot(result.series["temperature_c"], result.series["length_axis_recovery"], linewidth=2.0, label="axis recovery")
+            plt.plot(result.series["temperature_c"], result.series["length_axis_recovery"], linewidth=2.0, label="A recovery")
             plt.plot(result.series["temperature_c"], result.series["length_env_recovery"], linewidth=1.7, label="envelope recovery")
-            plt.plot(result.series["temperature_c"], result.series["diameter_max_recovery"], linewidth=1.7, label="diameter recovery")
-            plt.plot(result.series["temperature_c"], result.series["area_proj_recovery"], linewidth=1.7, label="area recovery")
+            plt.plot(result.series["temperature_c"], result.series["diameter_max_recovery"], linewidth=1.7, label="B recovery")
+            plt.plot(result.series["temperature_c"], result.series["area_proj_recovery"], linewidth=1.7, label="C recovery")
             plt.xlabel("Temperature (C)")
             plt.ylabel("Recovery ratio")
             plt.title(f"{video_path.name} braided recovery over temperature")
@@ -248,9 +254,9 @@ def main() -> None:
             plt.close()
 
         plt.figure(figsize=(8, 4.8))
-        plt.plot(result.series["temperature_c"], result.series["area_proj_px2"], linewidth=1.8, label="A_proj")
-        plt.plot(result.series["temperature_c"], result.series["length_axis_px"], linewidth=1.6, label="L_axis")
-        plt.plot(result.series["temperature_c"], result.series["diameter_max_px"], linewidth=1.6, label="D_max")
+        plt.plot(result.series["temperature_c"], result.series["area_proj_px2"], linewidth=1.8, label="C")
+        plt.plot(result.series["temperature_c"], result.series["length_axis_px"], linewidth=1.6, label="A")
+        plt.plot(result.series["temperature_c"], result.series["diameter_max_px"], linewidth=1.6, label="B")
         plt.xlabel("Temperature (C)")
         plt.ylabel("Projected geometry")
         plt.title(f"{video_path.name} braided core metrics over temperature")
@@ -281,11 +287,18 @@ def main() -> None:
         cv2.imwrite(str(preview_dir / f"frame_{frame_idx:04d}.png"), overlay)
 
     summary = {
+        "metric_aliases": {
+            "A": "length_axis",
+            "B": "diameter_max",
+            "C": "area_proj",
+        },
         "frames": frame_count,
         "length_env_median_px": float(result.series["length_env_px"].median()),
         "length_axis_median_px": float(result.series["length_axis_px"].median()),
         "diameter_max_median_px": float(result.series["diameter_max_px"].median()),
         "diameter_p95_median_px": float(result.series["diameter_p95_px"].median()),
+        "diameter_mid_median_px": float(result.series["diameter_mid_median_px"].median()),
+        "diameter_mid_p90_median_px": float(result.series["diameter_mid_p90_px"].median()),
         "area_proj_median_px2": float(result.series["area_proj_px2"].median()),
         "body_mask_area_median_px2": float(result.series["body_mask_area_px2"].median()),
         "length_axis_definition_gap_median_px": float(result.series["length_axis_disagreement_px"].median()),
@@ -308,7 +321,9 @@ def main() -> None:
         "axis_peak_position_stability_p95": float(result.series["axis_peak_position_stability"].quantile(0.95)),
         "mode": result.mode,
         "formal_metric_label": result.formal_metric_label,
+        "formal_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.formal_metric_label),
         "primary_metric_label": result.primary_metric_label,
+        "primary_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.primary_metric_label),
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": None if result.af95_c is None else float(result.af95_c),
         "aftan_c": None if result.aftan_c is None else float(result.aftan_c),

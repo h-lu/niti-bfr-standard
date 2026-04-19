@@ -15,6 +15,27 @@
 1. `真实视频 quicklook`: 针对 `data/wire-like.mp4` 做基础几何提取
 2. `合成基准数据`: 用一个符合物理约束的单弯针模型生成温度曲线、视频和真值，作为系统测试/校准数据
 
+当前仓库也开始把第二类 `braided device` 对象纳入一条
+`YY/T 1771` 对齐的 BFR 工作流:
+
+- 对 `wire-like` 对象, 正式主量固定为 `kappa_fit(T)`
+- 对 `braided` 对象, 正式主量固定为 `length_axis(T)`
+
+为便于像 `wire-like` 的路线 A/B/C 那样简洁讨论 braided 三条主量, 当前约定:
+
+- braided `A = length_axis(T)`
+- braided `B = diameter_max(T)`
+- braided `C = area_proj(T)`
+
+其中 `A` 是 formal 主量, `B/C` 是对照量。
+
+这里的“对齐”指:
+
+- 对齐 `YY/T 1771 / ASTM F2082` 的“恢复量 vs 温度 -> Af-95 / Af-tan”大框架
+- 不意味着 braided 成品整体已经天然落在原始 `wire / tube / strip` 适用范围内
+- 对 braided 的对外口径更适合写成 `YY/T 1771-aligned BFR workflow`
+- 不应把它写成“braided finished product 已被原始标准逐字覆盖”
+
 ## 最小物理模型
 
 当前把针头近似为:
@@ -180,6 +201,8 @@ python3 scripts/analyze_wire_like.py
 
 - [braided-device-survey.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-device-survey.md)
   该文档用于记录“编织网状器械 / braided device”这类新对象的资料整理、主量设计，以及预计采用的独立算法路线。
+- [braided-video-formal-method.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-video-formal-method.md)
+  该文档用于钉死“只有视频输入”条件下 braided device 的正式方法边界、术语口径，以及当前仓库应采用的主量与不能越界声称的内容。
 
 当前最小方案的封版结论见:
 
@@ -194,12 +217,39 @@ python3 scripts/analyze_wire_like.py
 python3 scripts/analyze_braided_like.py /path/to/video.mp4
 ```
 
+若已有同步温度文件, 也可直接走 braided 的 `formal Af` 通道:
+
+```bash
+python3 scripts/analyze_braided_like.py /path/to/video.mp4 --temperature-csv /path/to/temperature.csv
+```
+
 该脚本当前仅用于 `braided device` 风格对象的:
 
 - 包络长度 quicklook
 - 主轴长度 quicklook
 - 最大直径与左右收口定位
 - QC 叠加帧导出
+
+当满足温度同步、完整高温平台、主轴长度稳定提取等条件时, 该脚本还可输出:
+
+- `length_axis(T)` 主量对应的 `Af-95`
+- `length_axis(T)` 主量对应的 `Af-tan`
+- `length_axis / length_env / diameter_max` 的恢复曲线对照
+
+按当前方法学定义，这条 braided 路线的正式目标不是 `virtual deployment`，而是:
+
+- `video-only 2D geometric measurement and zone analysis`
+
+若需要与 `YY/T 1771` 的 Af 框架对齐, 当前 braided 路线采用的正式解释是:
+
+- 用二维投影 `length_axis(T)` 作为 braided 试样的主恢复量
+- 把 `R_axis(T) = (L_M - L_axis(T)) / (L_M - L_A)` 作为正式恢复率
+- 再按 `Af-95` 与 `Af-tan` 计算正式结果
+- `length_env`、`diameter_max` 和分区量仅作对照, 不参与正式主量竞争
+
+当前脚本仍是这条正式路线的最小实现 / quicklook 入口；正式口径与后续升级方向以
+[braided-video-formal-method.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-video-formal-method.md)
+为准。
 
 ## 通俗解释
 
