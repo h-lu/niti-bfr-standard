@@ -162,6 +162,29 @@ python3 scripts/run_demo.py
 python3 scripts/run_braided_demo.py
 ```
 
+运行 braided calibration benchmarks:
+
+```bash
+python3 scripts/run_braided_benchmarks.py
+```
+
+这会默认生成两个额外的 synthetic benchmark:
+
+- `outputs/braided_demo_asymmetric`
+- `outputs/braided_demo_attachment_stress`
+
+它们与 `braided_demo` 使用同一套 truth / analysis / QC 输出口径，但分别强调:
+
+- 峰值偏移与左右不对称下的分区 / 峰位校准
+- support / tip attachment 更强、对比度更低时的 body-only / threshold 稳定性校准
+
+若要列出全部 benchmark 或连同基线一起运行:
+
+```bash
+python3 scripts/run_braided_benchmarks.py --list
+python3 scripts/run_braided_benchmarks.py --all
+```
+
 生成 demo 的路线 A / B 计算过程视频:
 
 ```bash

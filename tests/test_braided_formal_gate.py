@@ -27,7 +27,9 @@ class BraidedFormalGateTests(unittest.TestCase):
                 "length_axis_recovery": recovery,
                 "quality": np.full(n, 0.9),
                 "centerline_disagreement": np.full(n, 0.01),
+                "endpoint_gap_alt_centerline_px": np.full(n, 2.0),
                 "endpoint_jump_px": np.full(n, 2.0),
+                "endpoint_frame_jump_px": np.full(n, 2.0),
                 "branch_component_count_after_pruning": np.zeros(n),
                 "axis_peak_position_stability": np.full(n, 0.02),
                 "body_mask_attachment_leak_fraction": np.zeros(n),
@@ -100,10 +102,21 @@ class BraidedFormalGateTests(unittest.TestCase):
     def test_gate_rejects_endpoint_fraction_instability_below_px_floor(self) -> None:
         series = self._base_series()
         series["length_axis_formal_px"] = 100.0
+        series["endpoint_gap_alt_centerline_px"] = 10.5
         series["endpoint_jump_px"] = 10.5
         allowed, reason = _formal_braided_af_gate(series, self._reports())
         self.assertFalse(allowed)
         self.assertEqual(reason, "endpoint_jump")
+
+    def test_real_video_gate_rejects_large_frame_jump_but_synthetic_profile_can_tolerate_it(self) -> None:
+        series = self._base_series()
+        series["endpoint_frame_jump_px"] = 10.5
+        allowed_real, reason_real = _formal_braided_af_gate(series, self._reports(), acceptance_profile="real_video")
+        allowed_synth, reason_synth = _formal_braided_af_gate(series, self._reports(), acceptance_profile="synthetic")
+        self.assertFalse(allowed_real)
+        self.assertEqual(reason_real, "endpoint_frame_jump")
+        self.assertTrue(allowed_synth)
+        self.assertIsNone(reason_synth)
 
     def test_gate_tolerates_subpixel_axis_jitter(self) -> None:
         series = self._base_series()
@@ -161,7 +174,8 @@ class BraidedFormalGateTests(unittest.TestCase):
         self.assertEqual(acceptance["reasons"], [])
         self.assertEqual(acceptance["metrics"]["valid_frames"], 20)
         self.assertAlmostEqual(acceptance["metrics"]["endpoint_jump_limit_px"], 12.0)
-        self.assertAlmostEqual(acceptance["thresholds"]["endpoint_jump_fraction_p95_max"], 0.08)
+        self.assertAlmostEqual(acceptance["metrics"]["endpoint_frame_jump_limit_px"], 12.0)
+        self.assertAlmostEqual(acceptance["thresholds"]["endpoint_gap_alt_centerline_fraction_p95_max"], 0.08)
         self.assertAlmostEqual(acceptance["thresholds"]["axis_monotonic_violation_fraction_max"], 0.20)
 
 
@@ -173,7 +187,9 @@ class PublicSummaryTests(unittest.TestCase):
                 "quality": np.full(12, 0.8),
                 "length_axis_px": np.full(12, 120.0),
                 "centerline_disagreement": np.full(12, 0.01),
+                "endpoint_gap_alt_centerline_px": np.full(12, 2.0),
                 "endpoint_jump_px": np.full(12, 2.0),
+                "endpoint_frame_jump_px": np.full(12, 14.0),
                 "body_mask_attachment_leak_fraction": np.full(12, 0.06),
             }
         )
@@ -187,6 +203,12 @@ class PublicSummaryTests(unittest.TestCase):
             mode="quicklook",
             formal_metric_label="length_axis",
             formal_gate_reason="body_mask_attachment_leak_fraction",
+            provisional_metric_label="length_axis",
+            provisional_af95_c=61.0,
+            provisional_aftan_c=58.0,
+            reportability_status="reportable_with_warning",
+            warning_codes=["body_mask_attachment_leak_fraction"],
+            acceptance_profile="real_video",
         )
         self.assertIsNone(_public_formal_metric_label(result))
         summary = _build_summary(
@@ -201,6 +223,9 @@ class PublicSummaryTests(unittest.TestCase):
         )
         self.assertIsNone(summary["formal_metric_label"])
         self.assertEqual(summary["actual_mode"], "quicklook")
+        self.assertEqual(summary["reportability_status"], "reportable_with_warning")
+        self.assertEqual(summary["provisional_metric_label"], "length_axis")
+        self.assertEqual(summary["provisional_af95_c"], 61.0)
         self.assertEqual(summary["formal_gate_reason"], "body_mask_attachment_leak_fraction")
         self.assertEqual(summary["formal_qc_scope"], "current braided formal-gate QC snapshot; not an overall A/B/C verdict")
         self.assertEqual(summary["formal_candidate_metrics"][0]["label"], "length_axis")

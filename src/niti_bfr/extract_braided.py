@@ -80,6 +80,7 @@ class BraidedExtractionResult:
     branch_component_count_after_pruning: int
     branch_count_after_pruning: int
     centerline_disagreement: float
+    endpoint_gap_alt_centerline_px: float
     endpoint_jump_px: float
     axis_peak_position_stability: float
     quality: float
@@ -1370,7 +1371,8 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
 
     anchor_local = centerline_local[0]
     tip_local = centerline_local[-1]
-    endpoint_jump_px = _endpoint_gap(centerline_local, alt_centerline_local)
+    endpoint_gap_alt_centerline_px = _endpoint_gap(centerline_local, alt_centerline_local)
+    endpoint_jump_px = endpoint_gap_alt_centerline_px
 
     distance_map = cv2.distanceTransform(body_tube_mask, cv2.DIST_L2, 5)
     thickness_widths_px = np.asarray([2.0 * _nearest_distance(distance_map, point_xy) for point_xy in centerline_local], dtype=float)
@@ -1471,7 +1473,12 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
             0.30 * np.count_nonzero(np.isfinite(width_profile_trimmed_px)) / max(len(width_profile_trimmed_px), 1)
             + 0.25 * body_mask_area_px2 / max(component_area_px2, 1.0)
             + 0.20 * np.clip(1.0 - centerline_disagreement / 0.20, 0.0, 1.0)
-            + 0.15 * np.clip(1.0 - endpoint_jump_px / max(18.0, 0.10 * max(length_axis_px, 1.0)), 0.0, 1.0)
+            + 0.15
+            * np.clip(
+                1.0 - endpoint_gap_alt_centerline_px / max(18.0, 0.10 * max(length_axis_px, 1.0)),
+                0.0,
+                1.0,
+            )
             + 0.10 * np.clip(1.0 - body_mask_attachment_leak_fraction / 0.12, 0.0, 1.0),
             0.0,
             1.0,
@@ -1535,6 +1542,7 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
         branch_component_count_after_pruning=int(branch_component_count_after_pruning),
         branch_count_after_pruning=int(branch_component_count_after_pruning),
         centerline_disagreement=float(centerline_disagreement),
+        endpoint_gap_alt_centerline_px=float(endpoint_gap_alt_centerline_px),
         endpoint_jump_px=float(endpoint_jump_px),
         axis_peak_position_stability=float(axis_peak_position_stability),
         quality=quality,

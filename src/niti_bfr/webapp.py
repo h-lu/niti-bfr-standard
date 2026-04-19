@@ -153,11 +153,14 @@ def _run_result_hint(run: sqlite3.Row | dict[str, Any]) -> str:
     requested_mode = run["requested_mode"]
     actual_mode = run["actual_mode"]
     gate_reason = run["formal_gate_reason"]
+    reportability_status = run.get("reportability_status") if isinstance(run, dict) else run["reportability_status"] if "reportability_status" in run.keys() else None
     status = run.get("status") if isinstance(run, dict) else run["status"]
     if status in {"queued", "running"}:
         return "任务执行中，等待实际结果。"
     if actual_mode == "formal_af":
         return "formal Af 已放行。"
+    if requested_mode == "formal_af" and reportability_status == "reportable_with_warning":
+        return f"formal Af 未放行，但已给出带警告的 provisional 结果（{gate_reason or 'gate_closed'}）。"
     if requested_mode == "formal_af" and actual_mode == "quicklook":
         return f"formal Af 未放行，当前按 quicklook 展示（{gate_reason or 'gate_closed'}）。"
     if actual_mode == "quicklook":
@@ -379,6 +382,7 @@ def _execute_run(run_id: str) -> None:
                 video_path,
                 extraction=extraction_cfg,
                 temperature_csv=temperature_path,
+                acceptance_profile="synthetic" if run["preset"] == "braided_demo" else "real_video",
             )
         else:
             raise RuntimeError(f"unsupported preset: {run['preset']}")
@@ -416,10 +420,16 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "preset": run["preset"],
         "requested_mode": run["requested_mode"],
         "actual_mode": result.mode,
+        "reportability_status": result.reportability_status,
+        "warning_codes": result.warning_codes or [],
+        "acceptance_profile": result.acceptance_profile,
         "formal_metric_label": public_formal_metric_label,
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": result.af95_c,
         "aftan_c": result.aftan_c,
+        "provisional_metric_label": result.provisional_metric_label,
+        "provisional_af95_c": result.provisional_af95_c,
+        "provisional_aftan_c": result.provisional_aftan_c,
         "frames": int(series["frame"].max()) + 1 if not series.empty else 0,
         "quality_median": float(series["quality"].median()) if "quality" in series else None,
         "video_filename": run["video_filename"],
@@ -442,7 +452,12 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
             summary["formal_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(public_formal_metric_label)
         if result.primary_metric_label is not None:
             summary["primary_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.primary_metric_label)
-        summary["formal_qc"] = compute_braided_acceptance(series)
+        if result.provisional_metric_label is not None:
+            summary["provisional_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.provisional_metric_label)
+        summary["formal_qc"] = compute_braided_acceptance(
+            series,
+            acceptance_profile=result.acceptance_profile or "real_video",
+        )
     if "temperature_c" in series.columns and series["temperature_c"].notna().any():
         summary["temperature_c_min"] = float(series["temperature_c"].min())
         summary["temperature_c_max"] = float(series["temperature_c"].max())
@@ -468,6 +483,8 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         summary["body_mask_attachment_leak_fraction_median"] = float(series["body_mask_attachment_leak_fraction"].median())
     if "endpoint_jump_px" in series.columns:
         summary["endpoint_jump_p95_px"] = float(series["endpoint_jump_px"].quantile(0.95))
+    if "endpoint_frame_jump_px" in series.columns:
+        summary["endpoint_frame_jump_p95_px"] = float(series["endpoint_frame_jump_px"].quantile(0.95))
     if "axis_peak_position_stability" in series.columns:
         summary["axis_peak_position_stability_p95"] = float(series["axis_peak_position_stability"].quantile(0.95))
     if result.metric_reports:
@@ -589,8 +606,22 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         plt.plot(series["temperature_c"], series["x_route_c_recovery"], label="route C recovery", linewidth=1.8)
         if result.mode == "formal_af" and result.af95_c is not None:
             plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"Af-95 {result.af95_c:.2f}C")
+        elif result.provisional_af95_c is not None:
+            plt.axvline(
+                result.provisional_af95_c,
+                color="tab:green",
+                linestyle=":",
+                label=f"provisional Af-95 {result.provisional_af95_c:.2f}C",
+            )
         if result.mode == "formal_af" and result.aftan_c is not None:
             plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=f"Af-tan {result.aftan_c:.2f}C")
+        elif result.provisional_aftan_c is not None:
+            plt.axvline(
+                result.provisional_aftan_c,
+                color="tab:red",
+                linestyle=":",
+                label=f"provisional Af-tan {result.provisional_aftan_c:.2f}C",
+            )
         plt.xlabel("Temperature (C)")
         plt.ylabel("Recovery ratio")
         plt.title("Recovery over temperature")
@@ -619,8 +650,22 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         plt.plot(series["temperature_c"], series["area_proj_recovery"], label="C recovery", linewidth=1.8)
         if result.mode == "formal_af" and result.af95_c is not None:
             plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"Af-95 {result.af95_c:.2f}C")
+        elif result.provisional_af95_c is not None:
+            plt.axvline(
+                result.provisional_af95_c,
+                color="tab:green",
+                linestyle=":",
+                label=f"provisional Af-95 {result.provisional_af95_c:.2f}C",
+            )
         if result.mode == "formal_af" and result.aftan_c is not None:
             plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=f"Af-tan {result.aftan_c:.2f}C")
+        elif result.provisional_aftan_c is not None:
+            plt.axvline(
+                result.provisional_aftan_c,
+                color="tab:red",
+                linestyle=":",
+                label=f"provisional Af-tan {result.provisional_aftan_c:.2f}C",
+            )
         plt.xlabel("Temperature (C)")
         plt.ylabel("Recovery ratio")
         plt.title("Braided recovery over temperature")

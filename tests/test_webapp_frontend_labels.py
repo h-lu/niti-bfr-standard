@@ -21,10 +21,11 @@ class WebappFrontendLabelTests(unittest.TestCase):
             "requested_mode": "formal_af",
             "actual_mode": "quicklook",
             "formal_gate_reason": "body_mask_attachment_leak_fraction",
+            "reportability_status": "reportable_with_warning",
         }
         hint = _run_result_hint(run)
         self.assertIn("formal Af 未放行", hint)
-        self.assertIn("quicklook", hint)
+        self.assertIn("provisional", hint)
 
     def test_result_hint_shows_formal_success(self) -> None:
         run = {

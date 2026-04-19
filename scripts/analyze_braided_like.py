@@ -291,7 +291,7 @@ def main() -> None:
         overlay = _make_overlay(frame, extraction_cfg)
         cv2.imwrite(str(preview_dir / f"frame_{frame_idx:04d}.png"), overlay)
 
-    formal_qc = compute_braided_acceptance(result.series)
+    formal_qc = compute_braided_acceptance(result.series, acceptance_profile=result.acceptance_profile or "real_video")
     summary = {
         "metric_aliases": {
             "A": "length_axis",
@@ -332,15 +332,23 @@ def main() -> None:
         "quality_median": float(result.series["quality"].median()),
         "quality_lt_0_5_fraction": float((result.series["quality"] < 0.5).mean()),
         "endpoint_jump_p95_px": float(result.series["endpoint_jump_px"].quantile(0.95)),
+        "endpoint_frame_jump_p95_px": float(result.series["endpoint_frame_jump_px"].quantile(0.95)),
         "axis_peak_position_stability_p95": float(result.series["axis_peak_position_stability"].quantile(0.95)),
         "mode": result.mode,
+        "reportability_status": result.reportability_status,
+        "warning_codes": result.warning_codes,
+        "acceptance_profile": result.acceptance_profile,
         "formal_metric_label": result.formal_metric_label,
         "formal_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.formal_metric_label),
         "primary_metric_label": result.primary_metric_label,
         "primary_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.primary_metric_label),
+        "provisional_metric_label": result.provisional_metric_label,
+        "provisional_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.provisional_metric_label),
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": None if result.af95_c is None else float(result.af95_c),
         "aftan_c": None if result.aftan_c is None else float(result.aftan_c),
+        "provisional_af95_c": None if result.provisional_af95_c is None else float(result.provisional_af95_c),
+        "provisional_aftan_c": None if result.provisional_aftan_c is None else float(result.provisional_aftan_c),
         "formal_qc": formal_qc,
     }
     (out_dir / "summary.yaml").write_text(yaml.safe_dump(summary, sort_keys=False), encoding="utf-8")

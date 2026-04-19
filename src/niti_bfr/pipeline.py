@@ -35,18 +35,37 @@ BRAIDED_METRIC_DISPLAY = {
 
 BRAIDED_FORMAL_CANDIDATES = ("length_axis", "diameter_max")
 
-BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS: dict[str, float] = {
-    "min_valid_frames": 10.0,
-    "quality_median_min": 0.45,
-    "quality_lt_0_5_fraction_max": 0.20,
-    "axis_monotonic_violation_fraction_max": 0.20,
-    "centerline_disagreement_median_max": 0.08,
-    "endpoint_jump_fraction_p95_max": 0.08,
-    "endpoint_jump_px_floor": 12.0,
-    "axis_peak_position_stability_p95_max": 0.18,
-    "body_mask_attachment_leak_fraction_p90_max": 0.03,
-    "excluded_attachment_area_fraction_median_max": 0.12,
-    "body_mask_area_fraction_median_min": 0.55,
+BRAIDED_ACCEPTANCE_THRESHOLDS: dict[str, dict[str, float]] = {
+    "real_video": {
+        "min_valid_frames": 10.0,
+        "quality_median_min": 0.45,
+        "quality_lt_0_5_fraction_max": 0.20,
+        "axis_monotonic_violation_fraction_max": 0.20,
+        "centerline_disagreement_median_max": 0.08,
+        "endpoint_gap_alt_centerline_fraction_p95_max": 0.08,
+        "endpoint_gap_alt_centerline_px_floor": 12.0,
+        "endpoint_frame_jump_fraction_p95_max": 0.08,
+        "endpoint_frame_jump_px_floor": 12.0,
+        "axis_peak_position_stability_p95_max": 0.18,
+        "body_mask_attachment_leak_fraction_p90_max": 0.03,
+        "excluded_attachment_area_fraction_median_max": 0.12,
+        "body_mask_area_fraction_median_min": 0.55,
+    },
+    "synthetic": {
+        "min_valid_frames": 10.0,
+        "quality_median_min": 0.45,
+        "quality_lt_0_5_fraction_max": 0.20,
+        "axis_monotonic_violation_fraction_max": 0.20,
+        "centerline_disagreement_median_max": 0.08,
+        "endpoint_gap_alt_centerline_fraction_p95_max": 0.08,
+        "endpoint_gap_alt_centerline_px_floor": 12.0,
+        "endpoint_frame_jump_fraction_p95_max": 0.12,
+        "endpoint_frame_jump_px_floor": 20.0,
+        "axis_peak_position_stability_p95_max": 0.18,
+        "body_mask_attachment_leak_fraction_p90_max": 0.03,
+        "excluded_attachment_area_fraction_median_max": 0.12,
+        "body_mask_area_fraction_median_min": 0.55,
+    },
 }
 
 
@@ -61,6 +80,12 @@ class AnalysisResult:
     mode: str = "quicklook"
     formal_metric_label: str | None = None
     formal_gate_reason: str | None = None
+    provisional_metric_label: str | None = None
+    provisional_af95_c: float | None = None
+    provisional_aftan_c: float | None = None
+    reportability_status: str = "quicklook_only"
+    warning_codes: list[str] | None = None
+    acceptance_profile: str | None = None
 
 
 def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
@@ -245,6 +270,8 @@ def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
         augmented["length_axis_formal_px"] = augmented["length_axis_px"]
     if "area_proj_px2" in augmented.columns:
         augmented["area_proj_formal_px2"] = augmented["area_proj_px2"]
+    if "endpoint_gap_alt_centerline_px" not in augmented.columns and "endpoint_jump_px" in augmented.columns:
+        augmented["endpoint_gap_alt_centerline_px"] = augmented["endpoint_jump_px"].to_numpy(dtype=float)
     if "length_axis_px" in augmented.columns and "length_axis_alt_px" in augmented.columns:
         augmented["centerline_disagreement"] = augmented["length_axis_disagreement_px"] / augmented["length_axis_px"].clip(lower=1e-9)
     elif "length_axis_disagreement_px" not in augmented.columns:
@@ -260,15 +287,22 @@ def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
             tip_jump[1:] = np.linalg.norm(np.diff(tip, axis=0), axis=1)
         augmented["anchor_jump_px"] = anchor_jump
         augmented["tip_jump_px"] = tip_jump
-        if "endpoint_jump_px" in augmented.columns:
-            augmented["endpoint_jump_px"] = _rowwise_nanmax(
-                np.column_stack([augmented["endpoint_jump_px"].to_numpy(dtype=float), anchor_jump, tip_jump])
-            )
-        else:
-            augmented["endpoint_jump_px"] = _rowwise_nanmax(np.column_stack([anchor_jump, tip_jump]))
+        augmented["endpoint_frame_jump_px"] = _rowwise_nanmax(np.column_stack([anchor_jump, tip_jump]))
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in augmented.columns else "length_axis_px"
-    if axis_eval_col in augmented.columns and "endpoint_jump_px" in augmented.columns:
-        augmented["endpoint_jump_fraction"] = _safe_fraction(augmented["endpoint_jump_px"], augmented[axis_eval_col])
+    if axis_eval_col in augmented.columns:
+        if "endpoint_gap_alt_centerline_px" in augmented.columns:
+            augmented["endpoint_gap_alt_centerline_fraction"] = _safe_fraction(
+                augmented["endpoint_gap_alt_centerline_px"],
+                augmented[axis_eval_col],
+            )
+            # Keep the legacy endpoint_jump_* columns as aliases for same-frame centerline disagreement.
+            augmented["endpoint_jump_px"] = augmented["endpoint_gap_alt_centerline_px"]
+            augmented["endpoint_jump_fraction"] = augmented["endpoint_gap_alt_centerline_fraction"]
+        if "endpoint_frame_jump_px" in augmented.columns:
+            augmented["endpoint_frame_jump_fraction"] = _safe_fraction(
+                augmented["endpoint_frame_jump_px"],
+                augmented[axis_eval_col],
+            )
     if "diameter_peak_pos_norm" in augmented.columns:
         stability = np.full(len(augmented), np.nan, dtype=float)
         if len(augmented) >= 2:
@@ -370,16 +404,30 @@ def _braided_monotonic_violation_fraction(
     return float(np.mean(violations)) if len(diff) else 0.0
 
 
-def _braided_endpoint_jump_limit_px(series: pd.DataFrame, axis_eval_col: str) -> float | None:
+def _braided_acceptance_thresholds(profile: str) -> dict[str, float]:
+    if profile not in BRAIDED_ACCEPTANCE_THRESHOLDS:
+        available = ", ".join(sorted(BRAIDED_ACCEPTANCE_THRESHOLDS))
+        raise KeyError(f"unsupported braided acceptance profile: {profile} (available: {available})")
+    return {key: float(value) for key, value in BRAIDED_ACCEPTANCE_THRESHOLDS[profile].items()}
+
+
+def _braided_endpoint_limit_px(
+    series: pd.DataFrame,
+    axis_eval_col: str,
+    *,
+    thresholds: dict[str, float],
+    fraction_key: str,
+    floor_key: str,
+) -> float | None:
     if axis_eval_col not in series.columns:
         return None
     axis_median = _finite_median(series[axis_eval_col])
     if not np.isfinite(axis_median):
         return None
-    return float(max(BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS["endpoint_jump_px_floor"], 0.08 * axis_median))
+    return float(max(thresholds[floor_key], thresholds[fraction_key] * axis_median))
 
 
-def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
+def compute_braided_acceptance(series: pd.DataFrame, *, acceptance_profile: str = "real_video") -> dict[str, Any]:
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
     if axis_eval_col in series.columns and "quality" in series.columns:
         valid = series.dropna(subset=[axis_eval_col, "quality"])
@@ -395,6 +443,12 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
         "quality_lt_0_5_fraction": None,
         "axis_monotonic_violation_fraction": None,
         "centerline_disagreement_median": None,
+        "endpoint_gap_alt_centerline_p95_px": None,
+        "endpoint_gap_alt_centerline_fraction_p95": None,
+        "endpoint_gap_alt_centerline_limit_px": None,
+        "endpoint_frame_jump_p95_px": None,
+        "endpoint_frame_jump_fraction_p95": None,
+        "endpoint_frame_jump_limit_px": None,
         "endpoint_jump_p95_px": None,
         "endpoint_jump_fraction_p95": None,
         "endpoint_jump_limit_px": None,
@@ -405,7 +459,7 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
         "body_mask_area_fraction_median": None,
         "attachment_border_touch_count_p90": None,
     }
-    thresholds = {key: float(value) for key, value in BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS.items()}
+    thresholds = _braided_acceptance_thresholds(acceptance_profile)
 
     if len(valid) > 0:
         if "quality" in valid.columns:
@@ -422,15 +476,55 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
             )
         if "centerline_disagreement" in valid.columns:
             metrics["centerline_disagreement_median"] = _finite_value(_finite_median(valid["centerline_disagreement"]))
-        if "endpoint_jump_px" in valid.columns:
-            metrics["endpoint_jump_p95_px"] = _finite_value(_finite_percentile(valid["endpoint_jump_px"], 95))
-            endpoint_fraction = (
-                valid["endpoint_jump_fraction"]
-                if "endpoint_jump_fraction" in valid.columns
-                else _safe_fraction(valid["endpoint_jump_px"], valid[axis_eval_col])
+        endpoint_gap_col = "endpoint_gap_alt_centerline_px" if "endpoint_gap_alt_centerline_px" in valid.columns else "endpoint_jump_px"
+        endpoint_gap_fraction_col = (
+            "endpoint_gap_alt_centerline_fraction"
+            if "endpoint_gap_alt_centerline_fraction" in valid.columns
+            else "endpoint_jump_fraction"
+        )
+        if endpoint_gap_col in valid.columns:
+            metrics["endpoint_gap_alt_centerline_p95_px"] = _finite_value(_finite_percentile(valid[endpoint_gap_col], 95))
+            endpoint_gap_fraction = (
+                valid[endpoint_gap_fraction_col]
+                if endpoint_gap_fraction_col in valid.columns
+                else _safe_fraction(valid[endpoint_gap_col], valid[axis_eval_col])
             )
-            metrics["endpoint_jump_fraction_p95"] = _finite_value(_finite_percentile(endpoint_fraction, 95))
-            metrics["endpoint_jump_limit_px"] = _finite_value(_braided_endpoint_jump_limit_px(valid, axis_eval_col) or float("nan"))
+            metrics["endpoint_gap_alt_centerline_fraction_p95"] = _finite_value(
+                _finite_percentile(endpoint_gap_fraction, 95)
+            )
+            metrics["endpoint_gap_alt_centerline_limit_px"] = _finite_value(
+                _braided_endpoint_limit_px(
+                    valid,
+                    axis_eval_col,
+                    thresholds=thresholds,
+                    fraction_key="endpoint_gap_alt_centerline_fraction_p95_max",
+                    floor_key="endpoint_gap_alt_centerline_px_floor",
+                )
+                or float("nan")
+            )
+            metrics["endpoint_jump_p95_px"] = metrics["endpoint_gap_alt_centerline_p95_px"]
+            metrics["endpoint_jump_fraction_p95"] = metrics["endpoint_gap_alt_centerline_fraction_p95"]
+            metrics["endpoint_jump_limit_px"] = metrics["endpoint_gap_alt_centerline_limit_px"]
+        if "endpoint_frame_jump_px" in valid.columns:
+            metrics["endpoint_frame_jump_p95_px"] = _finite_value(_finite_percentile(valid["endpoint_frame_jump_px"], 95))
+            endpoint_frame_fraction = (
+                valid["endpoint_frame_jump_fraction"]
+                if "endpoint_frame_jump_fraction" in valid.columns
+                else _safe_fraction(valid["endpoint_frame_jump_px"], valid[axis_eval_col])
+            )
+            metrics["endpoint_frame_jump_fraction_p95"] = _finite_value(
+                _finite_percentile(endpoint_frame_fraction, 95)
+            )
+            metrics["endpoint_frame_jump_limit_px"] = _finite_value(
+                _braided_endpoint_limit_px(
+                    valid,
+                    axis_eval_col,
+                    thresholds=thresholds,
+                    fraction_key="endpoint_frame_jump_fraction_p95_max",
+                    floor_key="endpoint_frame_jump_px_floor",
+                )
+                or float("nan")
+            )
         branch_qc_col = None
         if "branch_component_count_after_pruning" in valid.columns:
             branch_qc_col = "branch_component_count_after_pruning"
@@ -482,16 +576,27 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
     ):
         reasons.append("centerline_disagreement")
     if (
-        metrics["endpoint_jump_fraction_p95"] is not None
-        and metrics["endpoint_jump_fraction_p95"] > thresholds["endpoint_jump_fraction_p95_max"]
+        metrics["endpoint_gap_alt_centerline_fraction_p95"] is not None
+        and metrics["endpoint_gap_alt_centerline_fraction_p95"] > thresholds["endpoint_gap_alt_centerline_fraction_p95_max"]
     ):
         reasons.append("endpoint_jump")
     elif (
-        metrics["endpoint_jump_p95_px"] is not None
-        and metrics["endpoint_jump_limit_px"] is not None
-        and metrics["endpoint_jump_p95_px"] > metrics["endpoint_jump_limit_px"]
+        metrics["endpoint_gap_alt_centerline_p95_px"] is not None
+        and metrics["endpoint_gap_alt_centerline_limit_px"] is not None
+        and metrics["endpoint_gap_alt_centerline_p95_px"] > metrics["endpoint_gap_alt_centerline_limit_px"]
     ):
         reasons.append("endpoint_jump")
+    if (
+        metrics["endpoint_frame_jump_fraction_p95"] is not None
+        and metrics["endpoint_frame_jump_fraction_p95"] > thresholds["endpoint_frame_jump_fraction_p95_max"]
+    ):
+        reasons.append("endpoint_frame_jump")
+    elif (
+        metrics["endpoint_frame_jump_p95_px"] is not None
+        and metrics["endpoint_frame_jump_limit_px"] is not None
+        and metrics["endpoint_frame_jump_p95_px"] > metrics["endpoint_frame_jump_limit_px"]
+    ):
+        reasons.append("endpoint_frame_jump")
     if (
         metrics["axis_peak_position_stability_p95"] is not None
         and metrics["axis_peak_position_stability_p95"] > thresholds["axis_peak_position_stability_p95_max"]
@@ -518,6 +623,7 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
         "reasons": deduped_reasons,
         "metrics": metrics,
         "thresholds": thresholds,
+        "acceptance_profile": acceptance_profile,
     }
 
 
@@ -566,11 +672,18 @@ def _braided_formal_candidate_score(
 def _select_braided_formal_metric(
     series: pd.DataFrame,
     reports: dict[str, MetricEvaluation],
+    *,
+    acceptance_profile: str = "real_video",
 ) -> tuple[str | None, str | None]:
     winners: list[tuple[tuple[float, float, float], str]] = []
     fallback_reason: str | None = None
     for metric_label in BRAIDED_FORMAL_CANDIDATES:
-        allowed, reason = _formal_braided_af_gate(series, reports, metric_label=metric_label)
+        allowed, reason = _formal_braided_af_gate(
+            series,
+            reports,
+            metric_label=metric_label,
+            acceptance_profile=acceptance_profile,
+        )
         if allowed:
             winners.append((_braided_formal_candidate_score(series, reports, metric_label), metric_label))
         elif metric_label == "length_axis":
@@ -585,9 +698,12 @@ def _formal_braided_af_gate(
     series: pd.DataFrame,
     reports: dict[str, MetricEvaluation],
     metric_label: str = "length_axis",
+    *,
+    acceptance_profile: str = "real_video",
 ) -> tuple[bool, str | None]:
     eval_col, recovery_col = _braided_metric_columns(metric_label)
     metric_report = reports.get(metric_label)
+    thresholds = _braided_acceptance_thresholds(acceptance_profile)
     if metric_report is None:
         return False, _braided_formal_reason(metric_label, "insufficient_points")
     valid = series.dropna(subset=["temperature_c", eval_col, recovery_col, "quality"])
@@ -608,11 +724,11 @@ def _formal_braided_af_gate(
     )
     if (
         metric_monotonic_violation is not None
-        and metric_monotonic_violation > BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS["axis_monotonic_violation_fraction_max"]
+        and metric_monotonic_violation > thresholds["axis_monotonic_violation_fraction_max"]
     ):
         return False, _braided_formal_reason(metric_label, "not_monotonic_enough")
 
-    acceptance = compute_braided_acceptance(valid)
+    acceptance = compute_braided_acceptance(valid, acceptance_profile=acceptance_profile)
     acceptance_metrics = acceptance["metrics"]
     acceptance_thresholds = acceptance["thresholds"]
 
@@ -620,12 +736,34 @@ def _formal_braided_af_gate(
         if acceptance_metrics["centerline_disagreement_median"] > acceptance_thresholds["centerline_disagreement_median_max"]:
             return False, "centerline_disagreement"
 
-    if acceptance_metrics["endpoint_jump_fraction_p95"] is not None:
-        if acceptance_metrics["endpoint_jump_fraction_p95"] > acceptance_thresholds["endpoint_jump_fraction_p95_max"]:
+    if acceptance_metrics["endpoint_gap_alt_centerline_fraction_p95"] is not None:
+        if (
+            acceptance_metrics["endpoint_gap_alt_centerline_fraction_p95"]
+            > acceptance_thresholds["endpoint_gap_alt_centerline_fraction_p95_max"]
+        ):
             return False, "endpoint_jump"
-    if acceptance_metrics["endpoint_jump_p95_px"] is not None and acceptance_metrics["endpoint_jump_limit_px"] is not None:
-        if acceptance_metrics["endpoint_jump_p95_px"] > acceptance_metrics["endpoint_jump_limit_px"]:
+    if (
+        acceptance_metrics["endpoint_gap_alt_centerline_p95_px"] is not None
+        and acceptance_metrics["endpoint_gap_alt_centerline_limit_px"] is not None
+    ):
+        if (
+            acceptance_metrics["endpoint_gap_alt_centerline_p95_px"]
+            > acceptance_metrics["endpoint_gap_alt_centerline_limit_px"]
+        ):
             return False, "endpoint_jump"
+    if acceptance_profile == "real_video":
+        if acceptance_metrics["endpoint_frame_jump_fraction_p95"] is not None:
+            if (
+                acceptance_metrics["endpoint_frame_jump_fraction_p95"]
+                > acceptance_thresholds["endpoint_frame_jump_fraction_p95_max"]
+            ):
+                return False, "endpoint_frame_jump"
+        if (
+            acceptance_metrics["endpoint_frame_jump_p95_px"] is not None
+            and acceptance_metrics["endpoint_frame_jump_limit_px"] is not None
+            and acceptance_metrics["endpoint_frame_jump_p95_px"] > acceptance_metrics["endpoint_frame_jump_limit_px"]
+        ):
+            return False, "endpoint_frame_jump"
 
     if acceptance_metrics["axis_peak_position_stability_p95"] is not None:
         if (
@@ -658,6 +796,23 @@ def _formal_braided_af_gate(
         return False, "missing_high_temp_plateau"
 
     return True, None
+
+
+def _select_braided_primary_metric(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) -> str | None:
+    candidates: list[tuple[tuple[float, float, float], str]] = []
+    for metric_label in BRAIDED_FORMAL_CANDIDATES:
+        metric_report = reports.get(metric_label)
+        if metric_report is None:
+            continue
+        eval_col, _ = _braided_metric_columns(metric_label)
+        valid = series.dropna(subset=["temperature_c", eval_col])
+        if len(valid) < 4:
+            continue
+        candidates.append((_braided_formal_candidate_score(series, reports, metric_label), metric_label))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
 
 
 def analyze_video(
@@ -799,6 +954,7 @@ def analyze_braided_video_quicklook(
     extraction: BraidedExtractionConfig,
     temperature_csv: str | Path | None = None,
     temperature_time_offset_sec: float = 0.0,
+    acceptance_profile: str = "real_video",
 ) -> AnalysisResult:
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -828,6 +984,7 @@ def analyze_braided_video_quicklook(
                 "length_axis_alt_px": geom.length_axis_alt_px,
                 "length_axis_disagreement_px": geom.length_axis_disagreement_px,
                 "centerline_disagreement": geom.centerline_disagreement,
+                "endpoint_gap_alt_centerline_px": geom.endpoint_gap_alt_centerline_px,
                 "diameter_max_px": geom.diameter_max_px,
                 "diameter_max_orth_px": geom.diameter_max_orth_px,
                 "diameter_max_thickness_px": geom.diameter_max_thickness_px,
@@ -882,6 +1039,7 @@ def analyze_braided_video_quicklook(
                 "length_axis_alt_px": np.nan,
                 "length_axis_disagreement_px": np.nan,
                 "centerline_disagreement": np.nan,
+                "endpoint_gap_alt_centerline_px": np.nan,
                 "diameter_max_px": np.nan,
                 "diameter_max_orth_px": np.nan,
                 "diameter_max_thickness_px": np.nan,
@@ -948,6 +1106,11 @@ def analyze_braided_video_quicklook(
     mode = "quicklook"
     formal_metric_label = None
     formal_gate_reason = "temperature_sync_missing"
+    provisional_metric_label = None
+    provisional_af95_c = None
+    provisional_aftan_c = None
+    reportability_status = "quicklook_only"
+    warning_codes: list[str] = []
 
     if temperature_csv is not None:
         temp = pd.read_csv(temperature_csv).copy()
@@ -973,7 +1136,17 @@ def analyze_braided_video_quicklook(
         if "temperature_c" not in merged.columns:
             raise ValueError("temperature file must contain temperature_c")
         metric_reports = _evaluate_braided_temperature_metrics(merged)
-        candidate_formal_metric_label, formal_gate_reason = _select_braided_formal_metric(merged, metric_reports)
+        provisional_metric_label = _select_braided_primary_metric(merged, metric_reports)
+        if provisional_metric_label is not None:
+            provisional_report = metric_reports[provisional_metric_label]
+            provisional_af95_c = provisional_report.af95_c
+            provisional_aftan_c = provisional_report.aftan_c
+            primary_metric_label = provisional_metric_label
+        candidate_formal_metric_label, formal_gate_reason = _select_braided_formal_metric(
+            merged,
+            metric_reports,
+            acceptance_profile=acceptance_profile,
+        )
         if candidate_formal_metric_label is not None:
             formal_metric_label = candidate_formal_metric_label
             formal_report = metric_reports[formal_metric_label]
@@ -983,6 +1156,12 @@ def analyze_braided_video_quicklook(
             primary_metric_label = formal_metric_label
             mode = "formal_af"
             formal_gate_reason = None
+            reportability_status = "formal"
+            warning_codes = []
+        elif provisional_metric_label is not None:
+            acceptance = compute_braided_acceptance(merged, acceptance_profile=acceptance_profile)
+            reportability_status = "reportable_with_warning"
+            warning_codes = acceptance["reasons"]
         series = merged
 
     return AnalysisResult(
@@ -995,4 +1174,10 @@ def analyze_braided_video_quicklook(
         mode=mode,
         formal_metric_label=formal_metric_label,
         formal_gate_reason=formal_gate_reason,
+        provisional_metric_label=provisional_metric_label,
+        provisional_af95_c=provisional_af95_c,
+        provisional_aftan_c=provisional_aftan_c,
+        reportability_status=reportability_status,
+        warning_codes=warning_codes,
+        acceptance_profile=acceptance_profile if temperature_csv is not None else None,
     )
