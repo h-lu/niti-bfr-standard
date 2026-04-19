@@ -19,6 +19,7 @@ from .extract_braided import BraidedExtractionConfig
 from .extract import ExtractionConfig
 from .pipeline import (
     AnalysisResult,
+    BRAIDED_FORMAL_CANDIDATES,
     BRAIDED_METRIC_ALIAS_TO_KEY,
     BRAIDED_METRIC_KEY_TO_ALIAS,
     analyze_braided_video_quicklook,
@@ -429,11 +430,19 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         summary["metric_display_labels"] = {
             key: f"{alias}:{key}" for alias, key in BRAIDED_METRIC_ALIAS_TO_KEY.items()
         }
+        summary["formal_candidate_metrics"] = [
+            {
+                "label": metric_label,
+                "alias": BRAIDED_METRIC_KEY_TO_ALIAS.get(metric_label),
+            }
+            for metric_label in BRAIDED_FORMAL_CANDIDATES
+        ]
+        summary["formal_qc_scope"] = "current braided formal-gate QC snapshot; not an overall A/B/C verdict"
         if public_formal_metric_label is not None:
             summary["formal_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(public_formal_metric_label)
         if result.primary_metric_label is not None:
             summary["primary_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.primary_metric_label)
-        summary["acceptance"] = compute_braided_acceptance(series)
+        summary["formal_qc"] = compute_braided_acceptance(series)
     if "temperature_c" in series.columns and series["temperature_c"].notna().any():
         summary["temperature_c_min"] = float(series["temperature_c"].min())
         summary["temperature_c_max"] = float(series["temperature_c"].max())

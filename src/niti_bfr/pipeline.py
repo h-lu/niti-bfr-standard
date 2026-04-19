@@ -33,6 +33,8 @@ BRAIDED_METRIC_DISPLAY = {
     "area_proj": "C:area_proj",
 }
 
+BRAIDED_FORMAL_CANDIDATES = ("length_axis", "diameter_max")
+
 BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS: dict[str, float] = {
     "min_valid_frames": 10.0,
     "quality_median_min": 0.45,
@@ -519,32 +521,100 @@ def compute_braided_acceptance(series: pd.DataFrame) -> dict[str, Any]:
     }
 
 
-def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) -> tuple[bool, str | None]:
-    axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
-    axis_report = reports.get("length_axis")
-    if axis_report is None:
-        return False, "insufficient_axis_points"
-    valid = series.dropna(subset=["temperature_c", axis_eval_col, "length_axis_recovery", "quality"])
+def _braided_metric_columns(metric_label: str) -> tuple[str, str]:
+    mapping = {
+        "length_axis": ("length_axis_formal_px", "length_axis_recovery"),
+        "diameter_max": ("diameter_max_px", "diameter_max_recovery"),
+        "area_proj": ("area_proj_formal_px2", "area_proj_recovery"),
+    }
+    if metric_label not in mapping:
+        raise KeyError(f"unsupported braided metric: {metric_label}")
+    return mapping[metric_label]
+
+
+def _braided_formal_reason(metric_label: str, suffix: str) -> str:
+    if metric_label == "length_axis":
+        mapping = {
+            "insufficient_points": "insufficient_axis_points",
+            "unstable_extraction": "unstable_axis_extraction",
+            "dynamic_range_too_small": "axis_dynamic_range_too_small",
+            "not_monotonic_enough": "length_axis_not_monotonic_enough",
+        }
+        return mapping.get(suffix, suffix)
+    return f"{metric_label}_{suffix}"
+
+
+def _braided_formal_candidate_score(
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation],
+    metric_label: str,
+) -> tuple[float, float, float]:
+    eval_col, _ = _braided_metric_columns(metric_label)
+    report = reports[metric_label]
+    valid = series.dropna(subset=["temperature_c", eval_col])
+    smoothed_monotonic = _braided_monotonic_violation_fraction(
+        valid["temperature_c"],
+        valid[eval_col],
+        increasing=report.increasing,
+    )
+    monotonic_score = float(smoothed_monotonic if smoothed_monotonic is not None else report.monotonic_violation_fraction)
+    fit_score = float(report.fit_rmse / max(report.dynamic_range, 1e-9))
+    preference = 0.0 if metric_label == "diameter_max" else 1.0
+    return monotonic_score, fit_score, preference
+
+
+def _select_braided_formal_metric(
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation],
+) -> tuple[str | None, str | None]:
+    winners: list[tuple[tuple[float, float, float], str]] = []
+    fallback_reason: str | None = None
+    for metric_label in BRAIDED_FORMAL_CANDIDATES:
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label=metric_label)
+        if allowed:
+            winners.append((_braided_formal_candidate_score(series, reports, metric_label), metric_label))
+        elif metric_label == "length_axis":
+            fallback_reason = reason
+    if winners:
+        winners.sort(key=lambda item: item[0])
+        return winners[0][1], None
+    return None, fallback_reason
+
+
+def _formal_braided_af_gate(
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation],
+    metric_label: str = "length_axis",
+) -> tuple[bool, str | None]:
+    eval_col, recovery_col = _braided_metric_columns(metric_label)
+    metric_report = reports.get(metric_label)
+    if metric_report is None:
+        return False, _braided_formal_reason(metric_label, "insufficient_points")
+    valid = series.dropna(subset=["temperature_c", eval_col, recovery_col, "quality"])
     if len(valid) < 15:
-        return False, "insufficient_axis_points"
+        return False, _braided_formal_reason(metric_label, "insufficient_points")
 
     quality_median = float(valid["quality"].median())
     if quality_median < 0.10:
-        return False, "unstable_axis_extraction"
+        return False, _braided_formal_reason(metric_label, "unstable_extraction")
 
-    if axis_report.dynamic_range < 5.0:
-        return False, "axis_dynamic_range_too_small"
+    if metric_report.dynamic_range < 5.0:
+        return False, _braided_formal_reason(metric_label, "dynamic_range_too_small")
+
+    metric_monotonic_violation = _braided_monotonic_violation_fraction(
+        valid["temperature_c"],
+        valid[eval_col],
+        increasing=metric_report.increasing,
+    )
+    if (
+        metric_monotonic_violation is not None
+        and metric_monotonic_violation > BRAIDED_REAL_VIDEO_ACCEPTANCE_THRESHOLDS["axis_monotonic_violation_fraction_max"]
+    ):
+        return False, _braided_formal_reason(metric_label, "not_monotonic_enough")
 
     acceptance = compute_braided_acceptance(valid)
     acceptance_metrics = acceptance["metrics"]
     acceptance_thresholds = acceptance["thresholds"]
-
-    if acceptance_metrics["axis_monotonic_violation_fraction"] is not None:
-        if (
-            acceptance_metrics["axis_monotonic_violation_fraction"]
-            > acceptance_thresholds["axis_monotonic_violation_fraction_max"]
-        ):
-            return False, "length_axis_not_monotonic_enough"
 
     if acceptance_metrics["centerline_disagreement_median"] is not None:
         if acceptance_metrics["centerline_disagreement_median"] > acceptance_thresholds["centerline_disagreement_median_max"]:
@@ -583,7 +653,7 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
             return False, "body_mask_area_fraction"
 
     tail_count = max(5, int(np.ceil(len(valid) * 0.1)))
-    tail_recovery = valid["length_axis_recovery"].to_numpy()[-tail_count:]
+    tail_recovery = valid[recovery_col].to_numpy()[-tail_count:]
     if float(np.nanmedian(tail_recovery)) < 0.90:
         return False, "missing_high_temp_plateau"
 
@@ -903,9 +973,8 @@ def analyze_braided_video_quicklook(
         if "temperature_c" not in merged.columns:
             raise ValueError("temperature file must contain temperature_c")
         metric_reports = _evaluate_braided_temperature_metrics(merged)
-        candidate_formal_metric_label = "length_axis"
-        formal_allowed, formal_gate_reason = _formal_braided_af_gate(merged, metric_reports)
-        if formal_allowed:
+        candidate_formal_metric_label, formal_gate_reason = _select_braided_formal_metric(merged, metric_reports)
+        if candidate_formal_metric_label is not None:
             formal_metric_label = candidate_formal_metric_label
             formal_report = metric_reports[formal_metric_label]
             fit = formal_report.fit

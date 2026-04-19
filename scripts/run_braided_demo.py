@@ -14,8 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from niti_bfr.extract_braided import BraidedExtractionConfig, extract_braided_geometry
-from niti_bfr.metrics import evaluate_metric, infer_metric_direction
+from niti_bfr.metrics import evaluate_metric, infer_metric_direction, summarize_numeric_sweep
 from niti_bfr.pipeline import (
+    BRAIDED_FORMAL_CANDIDATES,
     BRAIDED_METRIC_ALIAS_TO_KEY,
     BRAIDED_METRIC_DISPLAY,
     BRAIDED_METRIC_KEY_TO_ALIAS,
@@ -268,6 +269,10 @@ def main() -> None:
             "af95_error_c": float(sweep_eval.af95_c - truth_diameter_eval.af95_c),
             "aftan_error_c": float(sweep_eval.aftan_c - truth_diameter_eval.aftan_c),
         }
+    diameter_threshold_sensitivity = summarize_numeric_sweep(
+        diameter_threshold_sweep,
+        baseline_key=str(extraction_cfg.threshold_dark),
+    )
 
     plt.figure(figsize=(8, 4.8))
     plt.plot(truth["temperature_c"], truth["length_env_true_px"], label="envelope length true", linewidth=2, alpha=0.85)
@@ -393,6 +398,11 @@ def main() -> None:
         "length_env_mae_px": _mean_abs_error(result.series["length_env_px"], truth["length_env_true_px"]),
         "length_axis_mae_px": _mean_abs_error(result.series["length_axis_px"], truth["length_axis_true_px"]),
         "diameter_max_mae_px": _mean_abs_error(result.series["diameter_max_px"], truth["diameter_true_px"]),
+        "diameter_threshold_sensitivity_mae_px": diameter_threshold_sensitivity["baseline_max_delta"].get(
+            "diameter_max_mae_px"
+        ),
+        "diameter_threshold_sensitivity_af95_c": diameter_threshold_sensitivity["baseline_max_delta"].get("af95_c"),
+        "diameter_threshold_sensitivity_aftan_c": diameter_threshold_sensitivity["baseline_max_delta"].get("aftan_c"),
         "diameter_peak_pos_norm_mae": _mean_abs_error(result.series["diameter_peak_pos_norm"], truth["diameter_peak_pos_norm_true"]),
         "area_proj_mae_px2": _mean_abs_error(result.series["area_proj_px2"], truth["area_proj_true_px2"]),
         "area_proj_definition_gap_px2": _mean_abs_error(result.series["area_proj_definition_gap_px2"], truth["area_proj_definition_gap_true_px2"]),
@@ -409,11 +419,19 @@ def main() -> None:
         "compaction_zone_length_mae_px": _mean_abs_error(result.series["compaction_zone_length_px"], truth["compaction_zone_length_true_px"]),
         "zone_symmetry_mae": _mean_abs_error(result.series["zone_symmetry"], truth["zone_symmetry_true"]),
     }
-    acceptance = compute_braided_acceptance(result.series)
+    formal_qc = compute_braided_acceptance(result.series)
     summary = {
         "demo_output": str(out_dir),
         "metric_aliases": BRAIDED_METRIC_ALIAS_TO_KEY,
         "metric_display_labels": BRAIDED_METRIC_DISPLAY,
+        "formal_candidate_metrics": [
+            {
+                "label": metric_label,
+                "alias": _braided_alias(metric_label),
+            }
+            for metric_label in BRAIDED_FORMAL_CANDIDATES
+        ],
+        "formal_qc_scope": "current braided formal-gate QC snapshot; not an overall A/B/C verdict",
         "truth_frames": int(len(truth)),
         "mode": result.mode,
         "formal_metric_label": result.formal_metric_label,
@@ -500,8 +518,9 @@ def main() -> None:
         "centerline_disagreement_median": float(result.series["centerline_disagreement"].median()),
         "endpoint_jump_p95_px": float(result.series["endpoint_jump_px"].quantile(0.95)),
         "axis_peak_position_stability_p95": float(result.series["axis_peak_position_stability"].quantile(0.95)),
-        "acceptance": acceptance,
+        "formal_qc": formal_qc,
         "diameter_threshold_sweep": diameter_threshold_sweep,
+        "diameter_threshold_sensitivity": diameter_threshold_sensitivity,
         "error_summary": error_summary,
     }
     (out_dir / "analysis_metrics.json").write_text(

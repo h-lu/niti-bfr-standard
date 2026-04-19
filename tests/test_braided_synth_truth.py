@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from niti_bfr.extract_braided import compute_braided_body_mask, cumulative_path_length, rasterize_braided_body_tube_mask
+from niti_bfr.extract_braided import cumulative_path_length, rasterize_braided_body_tube_mask
 from niti_bfr.synth_braided import _truth_metrics_from_geometry, truth_metrics_from_body_mask
 
 
@@ -26,13 +26,11 @@ class BraidedSynthTruthTests(unittest.TestCase):
             image_shape=(96, 96),
         )
 
-        body_mask = compute_braided_body_mask(width_profile_px)
         curve_positions_px = cumulative_path_length(centerline_xy)
-        expected_axis_span = float(curve_positions_px[body_mask][-1] - curve_positions_px[body_mask][0])
-        expected_rel_positions = curve_positions_px - float(curve_positions_px[body_mask][0])
-        expected_area = float(np.trapezoid(width_profile_px[body_mask], expected_rel_positions[body_mask]))
+        expected_axis_span = float(curve_positions_px[-1] - curve_positions_px[0])
+        expected_rel_positions = curve_positions_px - float(curve_positions_px[0])
+        expected_area = float(np.trapezoid(width_profile_px, expected_rel_positions))
 
-        self.assertLess(expected_axis_span, float(curve_positions_px[-1]))
         self.assertTrue(np.isclose(truth["length_axis_true_px"], expected_axis_span))
         self.assertTrue(np.isclose(truth["area_proj_true_px2"], expected_area))
 

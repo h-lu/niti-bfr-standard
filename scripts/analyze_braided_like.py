@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from niti_bfr.extract_braided import BraidedExtractionConfig, extract_braided_geometry
-from niti_bfr.pipeline import analyze_braided_video_quicklook, compute_braided_acceptance
+from niti_bfr.pipeline import BRAIDED_FORMAL_CANDIDATES, analyze_braided_video_quicklook, compute_braided_acceptance
 
 
 def _load_frame(video_path: Path, frame_idx: int) -> np.ndarray:
@@ -291,13 +291,21 @@ def main() -> None:
         overlay = _make_overlay(frame, extraction_cfg)
         cv2.imwrite(str(preview_dir / f"frame_{frame_idx:04d}.png"), overlay)
 
-    acceptance = compute_braided_acceptance(result.series)
+    formal_qc = compute_braided_acceptance(result.series)
     summary = {
         "metric_aliases": {
             "A": "length_axis",
             "B": "diameter_max",
             "C": "area_proj",
         },
+        "formal_candidate_metrics": [
+            {
+                "label": metric_label,
+                "alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(metric_label),
+            }
+            for metric_label in BRAIDED_FORMAL_CANDIDATES
+        ],
+        "formal_qc_scope": "current braided formal-gate QC snapshot; not an overall A/B/C verdict",
         "frames": frame_count,
         "length_env_median_px": float(result.series["length_env_px"].median()),
         "length_axis_median_px": float(result.series["length_axis_px"].median()),
@@ -333,7 +341,7 @@ def main() -> None:
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": None if result.af95_c is None else float(result.af95_c),
         "aftan_c": None if result.aftan_c is None else float(result.aftan_c),
-        "acceptance": acceptance,
+        "formal_qc": formal_qc,
     }
     (out_dir / "summary.yaml").write_text(yaml.safe_dump(summary, sort_keys=False), encoding="utf-8")
     print(f"quicklook saved to {out_dir}")

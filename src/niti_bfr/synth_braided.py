@@ -10,7 +10,6 @@ import pandas as pd
 from .extract_braided import (
     _extract_centerline_from_body_bins,
     _orthogonal_widths,
-    compute_braided_body_mask,
     compute_braided_zone_metrics,
     cumulative_path_length,
     rasterize_braided_body_tube_mask,
@@ -152,6 +151,17 @@ def _project_span(points_xy: np.ndarray) -> tuple[np.ndarray, float, float]:
     return axis, float(np.min(proj)), float(np.max(proj))
 
 
+def _truth_body_profile_mask(width_profile_px: np.ndarray) -> np.ndarray:
+    width_profile_px = np.asarray(width_profile_px, dtype=float)
+    valid = np.isfinite(width_profile_px)
+    if not np.any(valid):
+        raise RuntimeError("braided truth width profile unavailable")
+    positive = valid & (width_profile_px > 1e-9)
+    if np.count_nonzero(positive) >= 2:
+        return positive
+    return valid
+
+
 def _truth_metrics_from_geometry(
     contour_xy: np.ndarray,
     centerline_xy: np.ndarray,
@@ -162,12 +172,7 @@ def _truth_metrics_from_geometry(
 ) -> dict[str, float]:
     curve_positions_px = cumulative_path_length(centerline_xy)
     diameter_true_px = float(np.nanmax(width_profile_px))
-    peak_idx = int(np.nanargmax(width_profile_px))
-    body_mask = compute_braided_body_mask(
-        width_profile_px=width_profile_px,
-        peak_idx=peak_idx,
-        diameter_max_px=diameter_true_px,
-    )
+    body_mask = _truth_body_profile_mask(width_profile_px)
     body_curve_positions_px = curve_positions_px[body_mask]
     axis_span = (
         float(body_curve_positions_px[-1] - body_curve_positions_px[0])
@@ -285,12 +290,7 @@ def truth_metrics_from_body_mask(
 
     curve_positions_px = cumulative_path_length(centerline_xy)
     diameter_true_px = float(np.nanmax(width_profile_px))
-    peak_idx = int(np.nanargmax(width_profile_px))
-    body_profile_mask = compute_braided_body_mask(
-        width_profile_px=width_profile_px,
-        peak_idx=peak_idx,
-        diameter_max_px=diameter_true_px,
-    )
+    body_profile_mask = _truth_body_profile_mask(width_profile_px)
     body_curve_positions_px = curve_positions_px[body_profile_mask]
     axis_span = (
         float(body_curve_positions_px[-1] - body_curve_positions_px[0])

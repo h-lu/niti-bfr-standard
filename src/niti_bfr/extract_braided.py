@@ -924,18 +924,19 @@ def _path_axis_span(points_xy: np.ndarray, axis_xy: np.ndarray) -> float:
 def _endpoint_gap(primary_xy: np.ndarray, secondary_xy: np.ndarray) -> float:
     if len(primary_xy) == 0 or len(secondary_xy) == 0:
         return float("nan")
-    primary_length = _path_length(primary_xy)
-    secondary_length = _path_length(secondary_xy)
-    if np.isfinite(primary_length) and np.isfinite(secondary_length) and primary_length <= secondary_length:
-        shorter_xy, longer_xy = primary_xy, secondary_xy
-    else:
-        shorter_xy, longer_xy = secondary_xy, primary_xy
-
-    endpoint_gaps: list[float] = []
-    for endpoint_xy in (shorter_xy[0], shorter_xy[-1]):
-        deltas = longer_xy - endpoint_xy[None, :]
-        endpoint_gaps.append(float(np.min(np.linalg.norm(deltas, axis=1))))
-    return float(np.mean(endpoint_gaps))
+    forward_gap = float(
+        0.5 * (
+            np.linalg.norm(primary_xy[0] - secondary_xy[0])
+            + np.linalg.norm(primary_xy[-1] - secondary_xy[-1])
+        )
+    )
+    reverse_gap = float(
+        0.5 * (
+            np.linalg.norm(primary_xy[0] - secondary_xy[-1])
+            + np.linalg.norm(primary_xy[-1] - secondary_xy[0])
+        )
+    )
+    return min(forward_gap, reverse_gap)
 
 
 def _select_centerline_paths(

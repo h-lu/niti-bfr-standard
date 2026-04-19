@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from niti_bfr.metrics import MetricEvaluation, RecoveryFit
-from niti_bfr.pipeline import AnalysisResult, _formal_braided_af_gate, compute_braided_acceptance
+from niti_bfr.pipeline import AnalysisResult, _formal_braided_af_gate, _select_braided_formal_metric, compute_braided_acceptance
 from niti_bfr.webapp import _build_summary, _public_formal_metric_label
 
 
@@ -51,6 +51,18 @@ class BraidedFormalGateTests(unittest.TestCase):
                 dynamic_range=30.0,
             )
         }
+
+    def _diameter_report(self, *, fit_rmse: float = 0.25, monotonic_violation_fraction: float = 0.0) -> MetricEvaluation:
+        return MetricEvaluation(
+            label="diameter_max",
+            increasing=True,
+            fit=RecoveryFit(x_m=20.0, x_a=40.0, t0=45.0, width=4.0),
+            af95_c=59.0,
+            aftan_c=57.0,
+            fit_rmse=fit_rmse,
+            monotonic_violation_fraction=monotonic_violation_fraction,
+            dynamic_range=20.0,
+        )
 
     def test_gate_accepts_clean_series(self) -> None:
         allowed, reason = _formal_braided_af_gate(self._base_series(), self._reports())
@@ -111,6 +123,38 @@ class BraidedFormalGateTests(unittest.TestCase):
         self.assertTrue(allowed)
         self.assertIsNone(reason)
 
+    def test_gate_can_validate_diameter_metric(self) -> None:
+        series = self._base_series()
+        series["diameter_max_px"] = np.linspace(20.0, 40.0, len(series))
+        series["diameter_max_recovery"] = series["length_axis_recovery"]
+        reports = self._reports()
+        reports["diameter_max"] = self._diameter_report()
+
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label="diameter_max")
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_select_braided_formal_metric_can_promote_diameter_when_it_scores_better(self) -> None:
+        series = self._base_series()
+        series["diameter_max_px"] = np.linspace(20.0, 40.0, len(series))
+        series["diameter_max_recovery"] = series["length_axis_recovery"]
+        reports = self._reports()
+        reports["length_axis"] = MetricEvaluation(
+            label="length_axis",
+            increasing=False,
+            fit=reports["length_axis"].fit,
+            af95_c=reports["length_axis"].af95_c,
+            aftan_c=reports["length_axis"].aftan_c,
+            fit_rmse=3.0,
+            monotonic_violation_fraction=reports["length_axis"].monotonic_violation_fraction,
+            dynamic_range=reports["length_axis"].dynamic_range,
+        )
+        reports["diameter_max"] = self._diameter_report(fit_rmse=0.2)
+
+        metric_label, gate_reason = _select_braided_formal_metric(series, reports)
+        self.assertEqual(metric_label, "diameter_max")
+        self.assertIsNone(gate_reason)
+
     def test_acceptance_exposes_real_video_thresholds(self) -> None:
         acceptance = compute_braided_acceptance(self._base_series())
         self.assertTrue(acceptance["accepted"])
@@ -158,8 +202,11 @@ class PublicSummaryTests(unittest.TestCase):
         self.assertIsNone(summary["formal_metric_label"])
         self.assertEqual(summary["actual_mode"], "quicklook")
         self.assertEqual(summary["formal_gate_reason"], "body_mask_attachment_leak_fraction")
-        self.assertFalse(summary["acceptance"]["accepted"])
-        self.assertIn("body_mask_attachment_leak_fraction", summary["acceptance"]["reasons"])
+        self.assertEqual(summary["formal_qc_scope"], "current braided formal-gate QC snapshot; not an overall A/B/C verdict")
+        self.assertEqual(summary["formal_candidate_metrics"][0]["label"], "length_axis")
+        self.assertEqual(summary["formal_candidate_metrics"][1]["label"], "diameter_max")
+        self.assertFalse(summary["formal_qc"]["accepted"])
+        self.assertIn("body_mask_attachment_leak_fraction", summary["formal_qc"]["reasons"])
 
 
 if __name__ == "__main__":

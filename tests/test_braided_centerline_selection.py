@@ -33,7 +33,7 @@ class BraidedCenterlineSelectionTests(unittest.TestCase):
         full_span = np.array([[0.0, 0.0], [5.0, 0.0], [10.0, 0.0], [15.0, 0.0], [20.0, 0.0]], dtype=float)
         truncated = np.array([[5.0, 0.0], [10.0, 0.0], [15.0, 0.0]], dtype=float)
 
-        self.assertAlmostEqual(_endpoint_gap(full_span, truncated), 0.0)
+        self.assertAlmostEqual(_endpoint_gap(full_span, truncated), 5.0)
 
     def test_select_centerline_paths_aligns_secondary_orientation_to_primary(self) -> None:
         mask = np.ones((32, 64), dtype=np.uint8) * 255
