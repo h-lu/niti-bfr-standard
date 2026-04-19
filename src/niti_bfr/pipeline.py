@@ -283,6 +283,31 @@ def _formal_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) 
     return True, None
 
 
+def _finite_percentile(values: np.ndarray | pd.Series, q: float) -> float:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if len(arr) == 0:
+        return float("nan")
+    return float(np.percentile(arr, q))
+
+
+def _finite_median(values: np.ndarray | pd.Series) -> float:
+    arr = np.asarray(values, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if len(arr) == 0:
+        return float("nan")
+    return float(np.median(arr))
+
+
+def _safe_fraction(numerator: np.ndarray | pd.Series, denominator: np.ndarray | pd.Series) -> np.ndarray:
+    num = np.asarray(numerator, dtype=float)
+    den = np.asarray(denominator, dtype=float)
+    out = np.full(num.shape, np.nan, dtype=float)
+    valid = np.isfinite(num) & np.isfinite(den)
+    out[valid] = num[valid] / np.maximum(den[valid], 1e-9)
+    return out
+
+
 def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) -> tuple[bool, str | None]:
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
     axis_report = reports.get("length_axis")
@@ -299,21 +324,16 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
     if axis_report.monotonic_violation_fraction > 0.25:
         return False, "length_axis_not_monotonic_enough"
 
-    tail_count = max(5, int(np.ceil(len(valid) * 0.1)))
-    tail_recovery = valid["length_axis_recovery"].to_numpy()[-tail_count:]
-    if float(np.nanmedian(tail_recovery)) < 0.90:
-        return False, "missing_high_temp_plateau"
-
     if axis_report.dynamic_range < 5.0:
         return False, "axis_dynamic_range_too_small"
 
     if "centerline_disagreement" in valid.columns:
-        if float(np.nanmedian(valid["centerline_disagreement"])) > 0.08:
+        if _finite_median(valid["centerline_disagreement"]) > 0.08:
             return False, "centerline_disagreement"
 
     if "endpoint_jump_px" in valid.columns:
         endpoint_limit = max(12.0, 0.08 * float(np.nanmedian(valid[axis_eval_col])))
-        if float(np.nanpercentile(valid["endpoint_jump_px"], 95)) > endpoint_limit:
+        if _finite_percentile(valid["endpoint_jump_px"], 95) > endpoint_limit:
             return False, "endpoint_jump"
 
     branch_qc_col = None
@@ -322,12 +342,41 @@ def _formal_braided_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvalu
     elif "branch_count_after_pruning" in valid.columns:
         branch_qc_col = "branch_count_after_pruning"
     if branch_qc_col is not None:
-        if float(np.nanpercentile(valid[branch_qc_col], 95)) > 4.0:
+        if _finite_percentile(valid[branch_qc_col], 95) > 4.0:
             return False, "branch_component_count_after_pruning"
 
     if "axis_peak_position_stability" in valid.columns:
-        if float(np.nanpercentile(valid["axis_peak_position_stability"], 95)) > 0.18:
+        if _finite_percentile(valid["axis_peak_position_stability"], 95) > 0.18:
             return False, "axis_peak_position_stability"
+
+    if "body_mask_attachment_leak_fraction" in valid.columns:
+        if _finite_percentile(valid["body_mask_attachment_leak_fraction"], 90) > 0.03:
+            return False, "body_mask_attachment_leak_fraction"
+
+    if {"excluded_attachment_area_px2", "component_area_px2"}.issubset(valid.columns):
+        excluded_attachment_fraction = _safe_fraction(
+            valid["excluded_attachment_area_px2"],
+            valid["component_area_px2"],
+        )
+        if _finite_median(excluded_attachment_fraction) > 0.12:
+            return False, "excluded_attachment_area_fraction"
+
+    if {"body_mask_area_px2", "component_area_px2"}.issubset(valid.columns):
+        body_component_fraction = _safe_fraction(
+            valid["body_mask_area_px2"],
+            valid["component_area_px2"],
+        )
+        if _finite_median(body_component_fraction) < 0.55:
+            return False, "body_mask_area_fraction"
+
+    if "attachment_border_touch_count" in valid.columns:
+        if _finite_percentile(valid["attachment_border_touch_count"], 90) > 0.0:
+            return False, "attachment_border_touch_count"
+
+    tail_count = max(5, int(np.ceil(len(valid) * 0.1)))
+    tail_recovery = valid["length_axis_recovery"].to_numpy()[-tail_count:]
+    if float(np.nanmedian(tail_recovery)) < 0.90:
+        return False, "missing_high_temp_plateau"
 
     return True, None
 
@@ -440,9 +489,10 @@ def analyze_video(
         if "temperature_c" not in merged.columns:
             raise ValueError("temperature file must contain temperature_c")
         metric_reports = _evaluate_temperature_metrics(merged)
-        formal_metric_label = "kappa_fit"
+        candidate_formal_metric_label = "kappa_fit"
         formal_allowed, formal_gate_reason = _formal_af_gate(merged, metric_reports)
         if formal_allowed:
+            formal_metric_label = candidate_formal_metric_label
             formal_report = metric_reports[formal_metric_label]
             fit = formal_report.fit
             af95_c = formal_report.af95_c
@@ -644,9 +694,10 @@ def analyze_braided_video_quicklook(
         if "temperature_c" not in merged.columns:
             raise ValueError("temperature file must contain temperature_c")
         metric_reports = _evaluate_braided_temperature_metrics(merged)
-        formal_metric_label = "length_axis"
+        candidate_formal_metric_label = "length_axis"
         formal_allowed, formal_gate_reason = _formal_braided_af_gate(merged, metric_reports)
         if formal_allowed:
+            formal_metric_label = candidate_formal_metric_label
             formal_report = metric_reports[formal_metric_label]
             fit = formal_report.fit
             af95_c = formal_report.af95_c

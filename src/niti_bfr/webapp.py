@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -288,7 +287,7 @@ def _execute_run(run_id: str) -> None:
             {
                 "status": "completed",
                 "actual_mode": result.mode,
-                "formal_metric_label": result.formal_metric_label,
+                "formal_metric_label": _public_formal_metric_label(result),
                 "formal_gate_reason": result.formal_gate_reason,
                 "af95_c": result.af95_c,
                 "aftan_c": result.aftan_c,
@@ -299,14 +298,19 @@ def _execute_run(run_id: str) -> None:
         _update_run(run_id, {"status": "failed", "error_text": str(exc)})
 
 
+def _public_formal_metric_label(result: AnalysisResult) -> str | None:
+    return result.formal_metric_label if result.mode == "formal_af" else None
+
+
 def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
     series = result.series
+    public_formal_metric_label = _public_formal_metric_label(result)
     summary: dict[str, Any] = {
         "run_id": run["id"],
         "preset": run["preset"],
         "requested_mode": run["requested_mode"],
         "actual_mode": result.mode,
-        "formal_metric_label": result.formal_metric_label,
+        "formal_metric_label": public_formal_metric_label,
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": result.af95_c,
         "aftan_c": result.aftan_c,
@@ -320,8 +324,8 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         summary["metric_display_labels"] = {
             key: f"{alias}:{key}" for alias, key in BRAIDED_METRIC_ALIAS_TO_KEY.items()
         }
-        if result.formal_metric_label is not None:
-            summary["formal_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.formal_metric_label)
+        if public_formal_metric_label is not None:
+            summary["formal_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(public_formal_metric_label)
         if result.primary_metric_label is not None:
             summary["primary_metric_alias"] = BRAIDED_METRIC_KEY_TO_ALIAS.get(result.primary_metric_label)
     if "temperature_c" in series.columns and series["temperature_c"].notna().any():
@@ -365,6 +369,8 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
 
 
 def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
+    import matplotlib.pyplot as plt
+
     series = result.series
     if series.empty:
         return
