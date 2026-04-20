@@ -3,159 +3,555 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>NiTi BFR 分析台</title>
+    <title>NiTi BFR Analysis Console</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
-      .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 56px; }
-      h1, h2 { margin: 0 0 12px; }
-      p { line-height: 1.6; }
-      .grid { display: grid; gap: 20px; grid-template-columns: 1.1fr 0.9fr; }
-      .card { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
-      label { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }
-      input, select, button { width: 100%; box-sizing: border-box; border-radius: 10px; border: 1px solid #d1d5db; padding: 10px 12px; font-size: 14px; }
-      button { background: #111827; color: white; border: none; font-weight: 700; cursor: pointer; margin-top: 16px; }
-      button:hover { background: #0f172a; }
-      table { width: 100%; border-collapse: collapse; font-size: 14px; }
-      th, td { padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }
-      .muted { color: #6b7280; font-size: 13px; }
-      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 700; }
-      .status-completed { background: #dcfce7; color: #166534; }
-      .status-running { background: #fef3c7; color: #92400e; }
-      .status-queued { background: #dbeafe; color: #1d4ed8; }
-      .status-failed { background: #fee2e2; color: #991b1b; }
-      .route-strip { display: grid; gap: 8px; margin-top: 8px; }
-      .route-mini { border: 1px solid #e5e7eb; border-radius: 12px; padding: 8px 10px; background: #f8fafc; }
-      .route-mini-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
-      .route-state { background: #e2e8f0; color: #334155; }
-      .route-quicklook-only { background: #e0f2fe; color: #075985; }
-      .route-formal-blocked { background: #fee2e2; color: #991b1b; }
-      .route-provisional { background: #fef3c7; color: #92400e; }
-      .route-formal-passed { background: #dcfce7; color: #166534; }
-      a { color: #2563eb; text-decoration: none; }
-      .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
-      .nav-links { display: flex; gap: 12px; flex-wrap: wrap; }
-      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .topline { flex-direction: column; align-items: start; } }
+      :root {
+        --bg: #f3efe6;
+        --bg-2: #e6ddcf;
+        --paper: rgba(255, 252, 246, 0.86);
+        --paper-strong: #fffaf2;
+        --ink: #1d2430;
+        --muted: #5f685f;
+        --line: rgba(34, 40, 49, 0.12);
+        --accent: #d66b34;
+        --accent-deep: #8d3a1a;
+        --cool: #1f6c78;
+        --ok: #2c7a4b;
+        --warn: #b67818;
+        --danger: #a64032;
+        --shadow: 0 28px 70px rgba(48, 35, 20, 0.12);
+        --font-ui: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        --font-display: "Iowan Old Style", "Palatino Linotype", "Songti SC", serif;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--font-ui);
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(214, 107, 52, 0.18), transparent 28%),
+          radial-gradient(circle at top right, rgba(31, 108, 120, 0.18), transparent 24%),
+          linear-gradient(180deg, var(--bg) 0%, #efe8db 100%);
+      }
+      a { color: inherit; text-decoration: none; }
+      .shell { max-width: 1220px; margin: 0 auto; padding: 28px 20px 56px; }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+      }
+      .brand-mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, var(--accent) 0%, #f2c078 100%);
+        color: #fffaf2;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+      }
+      .nav {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .nav-link {
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 250, 242, 0.72);
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .nav-link.active {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: white;
+      }
+      .hero {
+        display: grid;
+        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+        gap: 18px;
+        margin-bottom: 22px;
+      }
+      .hero-card,
+      .panel {
+        position: relative;
+        overflow: hidden;
+        background: var(--paper);
+        backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        border-radius: 28px;
+        box-shadow: var(--shadow);
+      }
+      .hero-card {
+        padding: 30px;
+        min-height: 280px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+      }
+      .hero-card::after {
+        content: "";
+        position: absolute;
+        inset: auto -4% -20% 42%;
+        height: 160px;
+        background: linear-gradient(90deg, rgba(214, 107, 52, 0.22), rgba(31, 108, 120, 0.16));
+        filter: blur(28px);
+        pointer-events: none;
+      }
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        border-radius: 999px;
+        background: rgba(29, 36, 48, 0.08);
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      h1 {
+        margin: 16px 0 12px;
+        font-family: var(--font-display);
+        font-size: clamp(36px, 5vw, 60px);
+        line-height: 0.98;
+        font-weight: 700;
+      }
+      .hero-copy {
+        max-width: 760px;
+        font-size: 16px;
+        line-height: 1.7;
+        color: #303947;
+      }
+      .hero-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 26px;
+      }
+      .hero-metric {
+        padding: 14px 16px;
+        border-radius: 20px;
+        background: rgba(255, 250, 242, 0.72);
+        border: 1px solid rgba(34, 40, 49, 0.08);
+      }
+      .hero-metric strong {
+        display: block;
+        font-size: 26px;
+        margin-bottom: 4px;
+      }
+      .hero-metric span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .hero-aside {
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .aside-title {
+        margin: 0;
+        font-size: 14px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .aside-block {
+        padding: 16px 18px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.54);
+        border: 1px solid rgba(34, 40, 49, 0.08);
+      }
+      .aside-block strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 15px;
+      }
+      .aside-block p,
+      .muted {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+      .workspace {
+        display: grid;
+        grid-template-columns: minmax(0, 0.94fr) minmax(320px, 0.86fr);
+        gap: 18px;
+        align-items: start;
+      }
+      .panel { padding: 26px; }
+      .panel h2 {
+        margin: 0 0 8px;
+        font-size: 26px;
+        font-family: var(--font-display);
+      }
+      .section-copy {
+        margin: 0 0 22px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      form { margin: 0; }
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .field,
+      .upload {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .upload { grid-column: 1 / -1; }
+      label {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      input,
+      select {
+        width: 100%;
+        border: 1px solid rgba(34, 40, 49, 0.14);
+        border-radius: 18px;
+        padding: 14px 15px;
+        background: var(--paper-strong);
+        color: var(--ink);
+        font: inherit;
+      }
+      input[type="file"] {
+        padding: 12px;
+      }
+      .field-note {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+      .mode-banner {
+        margin-top: 18px;
+        padding: 14px 16px;
+        border-radius: 20px;
+        background: rgba(31, 108, 120, 0.08);
+        border: 1px solid rgba(31, 108, 120, 0.16);
+        color: #23464e;
+        font-size: 13px;
+        line-height: 1.65;
+      }
+      .actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-top: 22px;
+        flex-wrap: wrap;
+      }
+      .submit {
+        border: none;
+        border-radius: 999px;
+        padding: 14px 22px;
+        min-width: 180px;
+        background: linear-gradient(135deg, var(--ink) 0%, #324154 100%);
+        color: white;
+        font: inherit;
+        font-weight: 800;
+        cursor: pointer;
+      }
+      .submit:hover { filter: brightness(1.04); }
+      .run-list {
+        display: grid;
+        gap: 14px;
+      }
+      .run-item {
+        padding: 18px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.58);
+        border: 1px solid rgba(34, 40, 49, 0.08);
+      }
+      .run-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        align-items: start;
+        margin-bottom: 10px;
+      }
+      .run-title {
+        margin: 0;
+        font-size: 18px;
+      }
+      .run-title a:hover { color: var(--accent-deep); }
+      .run-meta {
+        margin-top: 6px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.03em;
+      }
+      .status-completed { background: rgba(44, 122, 75, 0.12); color: var(--ok); }
+      .status-running { background: rgba(182, 120, 24, 0.12); color: var(--warn); }
+      .status-queued { background: rgba(31, 108, 120, 0.12); color: var(--cool); }
+      .status-failed { background: rgba(166, 64, 50, 0.12); color: var(--danger); }
+      .route-strip {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .route-mini {
+        padding: 12px;
+        border-radius: 16px;
+        background: rgba(243, 239, 230, 0.92);
+        border: 1px solid rgba(34, 40, 49, 0.06);
+      }
+      .route-mini strong {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 13px;
+      }
+      .route-mini span {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+      .empty {
+        padding: 26px;
+        border-radius: 24px;
+        border: 1px dashed rgba(34, 40, 49, 0.2);
+        background: rgba(255, 250, 242, 0.5);
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      @media (max-width: 980px) {
+        .hero,
+        .workspace,
+        .field-grid,
+        .hero-grid,
+        .route-strip { grid-template-columns: 1fr; }
+        .hero-card { min-height: auto; }
+      }
+      @media (max-width: 640px) {
+        .shell { padding: 20px 14px 40px; }
+        .topbar,
+        .run-head,
+        .actions { flex-direction: column; align-items: stretch; }
+        .submit { width: 100%; }
+      }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <div class="topline">
-        <div>
-          <h1>NiTi BFR 最小分析台</h1>
-          <p class="muted">当前前端同时支持 wire-like 和 braided-like 两类对象，对应“上传 → 跑任务 → 看结果 → 查历史”。</p>
-        </div>
-        <div class="nav-links">
-          <a href="{{ request.url_for('benchmark_summary') }}">Benchmark 汇总</a>
-          <a href="{{ request.url_for('history') }}">查看全部历史</a>
-        </div>
-      </div>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="{{ request.url_for('home') }}">
+          <span class="brand-mark">NB</span>
+          <span>NiTi BFR</span>
+        </a>
+        <nav class="nav" aria-label="Primary">
+          <a class="nav-link active" href="{{ request.url_for('home') }}">Analysis Console</a>
+          <a class="nav-link" href="{{ request.url_for('history') }}">History</a>
+        </nav>
+      </header>
 
-      <div class="grid">
-        <section class="card">
-          <h2>新建分析</h2>
-          <p class="muted">quicklook 只给几何 / QC 快检。formal Af 需要温度同步 CSV，若 formal gate 不通过会明确降级为 quicklook。</p>
+      <section class="hero">
+        <article class="hero-card">
+          <div>
+            <span class="eyebrow">Real-use Workflow</span>
+            <h1>Upload, analyze, review routes A/B/C.</h1>
+            <p class="hero-copy">
+              首页只保留真实视频分析的最小提交面：
+              选择对象类型，上传视频，设置抽帧步长，如有温度同步再附带 CSV，随后在结果页查看对象级摘要、路线卡片和产物下载。
+            </p>
+          </div>
+          <div class="hero-grid">
+            <div class="hero-metric">
+              <strong>2</strong>
+              <span>object types: wire-like / braided-like</span>
+            </div>
+            <div class="hero-metric">
+              <strong>A/B/C</strong>
+              <span>parallel route comparison preserved</span>
+            </div>
+            <div class="hero-metric">
+              <strong>{% if runs %}{{ runs|length }}{% else %}0{% endif %}</strong>
+              <span>recent analysis sessions on record</span>
+            </div>
+          </div>
+        </article>
+
+        <aside class="hero-aside hero-card">
+          <div>
+            <p class="aside-title">Submission Notes</p>
+          </div>
+          <div class="aside-block">
+            <strong>视频必填</strong>
+            <p>上传真实待分析视频。样例运行入口已从用户界面移除。</p>
+          </div>
+          <div class="aside-block">
+            <strong>抽帧步长可控</strong>
+            <p>用 `frame_stride` 控制处理密度，便于在速度与时序分辨率之间权衡。</p>
+          </div>
+          <div class="aside-block">
+            <strong>温度 CSV 可选</strong>
+            <p>附带温度数据时，前端会按 formal Af 工作流提交；是否真正放行以后端 formal gate 为准。</p>
+          </div>
+        </aside>
+      </section>
+
+      <section class="workspace">
+        <article class="panel">
+          <h2>Start Analysis</h2>
+          <p class="section-copy">
+            仅保留真实分析所需输入。对象类型用于选择几何路线，视频是主输入，`frame_stride` 负责采样密度，温度 CSV 仅在你拥有同步数据时提交。
+          </p>
           <form action="{{ request.url_for('create_run') }}" method="post" enctype="multipart/form-data">
-            <label for="run_name">任务名（可选）</label>
-            <input id="run_name" name="run_name" type="text" placeholder="例如：批次 A 第一次试跑">
+            <input id="requested_mode" name="requested_mode" type="hidden" value="quicklook">
+            <div class="field-grid">
+              <div class="field">
+                <label for="preset">Object Type</label>
+                <select id="preset" name="preset">
+                  <option value="wire_like">{{ preset_label('wire_like') }}</option>
+                  <option value="braided_like">{{ preset_label('braided_like') }}</option>
+                </select>
+                <div class="field-note">对象定义仍保持 `wire-like` 与 `braided-like` 两条长期路线边界。</div>
+              </div>
 
-            <label for="video_file">视频文件</label>
-            <input id="video_file" name="video_file" type="file" accept="video/*" required>
+              <div class="field">
+                <label for="frame_stride">Frame Stride</label>
+                <input id="frame_stride" name="frame_stride" type="number" min="1" step="1" value="1" inputmode="numeric">
+                <div class="field-note">推荐从 `1` 开始；如需更快预览，可增大抽帧步长。</div>
+              </div>
 
-            <label for="temperature_file">温度 CSV（可选）</label>
-            <input id="temperature_file" name="temperature_file" type="file" accept=".csv,text/csv">
+              <div class="upload">
+                <label for="video_file">Video File</label>
+                <input id="video_file" name="video_file" type="file" accept="video/*" required>
+              </div>
 
-            <label for="requested_mode">分析模式</label>
-            <select id="requested_mode" name="requested_mode">
-              <option value="quicklook">quicklook</option>
-              <option value="formal_af">formal Af</option>
-            </select>
+              <div class="upload">
+                <label for="temperature_file">Temperature CSV (Optional)</label>
+                <input id="temperature_file" name="temperature_file" type="file" accept=".csv,text/csv">
+                <div class="field-note">无温度同步时默认以 quicklook 提交；有温度同步时自动切到 formal Af 提交流程。</div>
+              </div>
+            </div>
 
-            <label for="preset">对象预设</label>
-            <select id="preset" name="preset">
-              <option value="wire_like">{{ preset_label('wire_like') }}</option>
-              <option value="braided_like">{{ preset_label('braided_like') }}</option>
-            </select>
-            <div class="muted" style="margin-top: 6px;">wire-like 走位移/曲率链，braided-like 走 A/B/C + body-only QC 链。</div>
+            <div class="mode-banner" id="mode_hint">
+              未提供温度 CSV：将按 quicklook 工作流提交。
+            </div>
 
-            <button type="submit">创建任务</button>
+            <div class="actions">
+              <p class="muted">结果页将聚焦对象级摘要、A/B/C 路线结果、曲线图和可下载产物。</p>
+              <button class="submit" type="submit">Launch Analysis</button>
+            </div>
           </form>
-        </section>
+        </article>
 
-        <section class="card">
-          <h2>项目内示例</h2>
-          <p class="muted">不想上传也行，直接用仓库自带示例做测试。</p>
-          {% for sample_id, sample in sample_runs.items() %}
-          <form action="{{ request.url_for('create_sample_run') }}" method="post" style="margin-bottom: 14px;">
-            <input type="hidden" name="sample_id" value="{{ sample_id }}">
-            <div style="font-weight: 700; margin-bottom: 4px;">{{ sample["label"] }}</div>
-            <div class="muted" style="margin-bottom: 4px;">{{ sample["description"] }}</div>
-            <div class="muted" style="margin-bottom: 8px;">{{ preset_label(sample['preset']) }} · {{ mode_label(sample['requested_mode']) }}</div>
-            <button type="submit">直接运行这个示例</button>
-          </form>
-          {% endfor %}
-        </section>
-
-        <section class="card">
-          <h2>最近任务</h2>
+        <aside class="panel">
+          <h2>Recent Runs</h2>
+          <p class="section-copy">
+            最近提交的分析任务会直接回到同一套结果视图，连续追踪同一条真实分析流程。
+          </p>
           {% if runs %}
-          <table>
-            <thead>
-              <tr>
-                <th>时间</th>
-                <th>任务</th>
-                <th>状态</th>
-                <th>结果</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for run in runs %}
-              <tr>
-                <td>{{ run["created_at"][:19].replace("T", " ") }}</td>
-                <td>
-                  <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
-                  <div class="muted">{{ preset_label(run['preset']) }} · 请求 {{ mode_label(run['requested_mode']) }}</div>
-                </td>
-                <td><span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span></td>
-                <td>
-                  {% if run["actual_mode"] %}
-                    <div>实际 {{ mode_label(run['actual_mode']) }}</div>
-                  {% endif %}
-                  <div class="muted">{{ run_result_hint(run) }}</div>
-                  {% if run["af95_c"] is not none %}
-                    <div class="muted">Af-95 {{ "%.2f"|format(run["af95_c"]) }} C</div>
-                  {% endif %}
-                  {% if run.get("route_results_preview") %}
-                    <div class="route-strip">
-                      {% for route in run["route_results_preview"] %}
-                      <div class="route-mini">
-                        <div class="route-mini-head">
-                          <strong>Route {{ route["alias"] }}</strong>
-                          <span class="pill route-state route-{{ route['reportability_status']|replace('_', '-') }}">{{ route["reportability_label"] }}</span>
-                        </div>
-                        <div class="muted">{{ route["display_label"] }}</div>
-                        <div class="muted">Af-95 {% if route["af95_c"] is not none %}{{ "%.2f"|format(route["af95_c"]) }} C{% else %}-{% endif %} · Af-tan {% if route["aftan_c"] is not none %}{{ "%.2f"|format(route["aftan_c"]) }} C{% else %}-{% endif %}</div>
-                      </div>
-                      {% endfor %}
-                    </div>
-                  {% elif run["status"] == "completed" %}
-                    <div class="muted">A / B / C 路线结果会在 summary 落盘后显示。</div>
-                  {% endif %}
-                </td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+          <div class="run-list">
+            {% for run in runs %}
+            <article class="run-item">
+              <div class="run-head">
+                <div>
+                  <h3 class="run-title">
+                    <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
+                  </h3>
+                  <div class="run-meta">
+                    <span>{{ run["created_at"][:19].replace("T", " ") }}</span>
+                    <span>{{ preset_label(run['preset']) }}</span>
+                    {% if run["temperature_filename"] %}
+                    <span>with temperature CSV</span>
+                    {% else %}
+                    <span>video only</span>
+                    {% endif %}
+                  </div>
+                </div>
+                <span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span>
+              </div>
+              <p class="muted">{{ run_result_hint(run) }}</p>
+              {% if run["summary"] and (run["summary"].get("object_formal_af95_c") is not none or run["summary"].get("object_provisional_af95_c") is not none) %}
+              <div class="run-meta">
+                {% if run["summary"].get("object_formal_af95_c") is not none %}
+                <span>Formal Af-95 {{ "%.2f"|format(run["summary"].get("object_formal_af95_c")) }} C</span>
+                {% endif %}
+                {% if run["summary"].get("object_provisional_af95_c") is not none %}
+                <span>Provisional Af-95 {{ "%.2f"|format(run["summary"].get("object_provisional_af95_c")) }} C</span>
+                {% endif %}
+              </div>
+              {% endif %}
+              {% if run["route_results_preview"] %}
+              <div class="route-strip">
+                {% for route in run["route_results_preview"] %}
+                <div class="route-mini">
+                  <strong>Route {{ route["alias"] }}</strong>
+                  <span>{{ route["display_label"] or route["metric_key"] or "-" }}</span>
+                  <span>
+                    {% if route["af95_c"] is not none %}
+                    Af-95 {{ "%.2f"|format(route["af95_c"]) }} C
+                    {% else %}
+                    Af-95 -
+                    {% endif %}
+                  </span>
+                </div>
+                {% endfor %}
+              </div>
+              {% endif %}
+            </article>
+            {% endfor %}
+          </div>
           {% else %}
-            <p class="muted">还没有任务，先上传一个视频。</p>
+          <div class="empty">还没有分析记录。上传第一条真实视频后，最近任务会显示在这里。</div>
           {% endif %}
-        </section>
-
-        <section class="card">
-          <h2>Benchmark 汇总</h2>
-          <p class="muted">对 route-level benchmark 做 wire / braided 并排比较。页面会优先读取 suite summary；如果 suite 还没生成，就直接回退读取各 benchmark 目录里的 `analysis_metrics.json`。</p>
-          <a href="{{ request.url_for('benchmark_summary') }}">打开 benchmark 页面</a>
-        </section>
-      </div>
+        </aside>
+      </section>
     </div>
+
+    <script>
+      (() => {
+        const tempInput = document.getElementById("temperature_file");
+        const modeInput = document.getElementById("requested_mode");
+        const modeHint = document.getElementById("mode_hint");
+        if (!tempInput || !modeInput || !modeHint) return;
+
+        const syncMode = () => {
+          const hasTemp = !!(tempInput.files && tempInput.files.length);
+          modeInput.value = hasTemp ? "formal_af" : "quicklook";
+          modeHint.textContent = hasTemp
+            ? "已检测到温度 CSV：将按 formal Af 工作流提交，最终是否正式放行仍以后端 gate 为准。"
+            : "未提供温度 CSV：将按 quicklook 工作流提交。";
+        };
+
+        tempInput.addEventListener("change", syncMode);
+        syncMode();
+      })();
+    </script>
   </body>
 </html>

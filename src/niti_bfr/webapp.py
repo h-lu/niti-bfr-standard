@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from .annotated_overview_video import render_annotated_overview_video
 from .extract_braided import BraidedExtractionConfig
 from .export_contract import (
     ROUTE_ALIAS_ORDER,
@@ -52,6 +53,7 @@ RUNS_ROOT = DATA_ROOT / "runs"
 DB_PATH = DATA_ROOT / "runs.db"
 CONFIG_PATH = ROOT / "configs" / "minimal.yaml"
 PROJECT_OUTPUTS_ROOT = ROOT / "outputs"
+ANNOTATED_VIDEO_FILENAME = "annotated_overview.mp4"
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 RUNS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -229,10 +231,18 @@ def _mode_description(mode: str | None) -> str:
     return MODE_DISPLAY.get(mode, {}).get("description", "")
 
 
+def _requested_mode_for_run(temperature_filename: str | None) -> str:
+    return "formal_af" if temperature_filename else "quicklook"
+
+
 def _run_result_hint(run: sqlite3.Row | dict[str, Any]) -> str:
-    requested_mode = run["requested_mode"]
-    actual_mode = run["actual_mode"]
-    gate_reason = run["formal_gate_reason"]
+    requested_mode = (
+        run.get("requested_mode") if isinstance(run, dict) else run["requested_mode"] if "requested_mode" in run.keys() else None
+    ) or _requested_mode_for_run(
+        run.get("temperature_filename") if isinstance(run, dict) else run["temperature_filename"] if "temperature_filename" in run.keys() else None
+    )
+    actual_mode = run.get("actual_mode") if isinstance(run, dict) else run["actual_mode"]
+    gate_reason = run.get("formal_gate_reason") if isinstance(run, dict) else run["formal_gate_reason"]
     reportability_status = run.get("reportability_status") if isinstance(run, dict) else run["reportability_status"] if "reportability_status" in run.keys() else None
     status = run.get("status") if isinstance(run, dict) else run["status"]
     if status in {"queued", "running"}:
@@ -1030,6 +1040,10 @@ def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
     payload["route_results_preview"] = summary["route_results"] if summary is not None else []
     if summary is not None:
         payload["reportability_status"] = summary.get("reportability_status")
+        payload["annotated_video_filename"] = summary.get("annotated_video_filename")
+        payload["analyzed_frame_count"] = summary.get("analyzed_frame_count")
+        payload["original_frame_count"] = summary.get("original_frame_count")
+    payload["requested_mode"] = payload.get("requested_mode") or _requested_mode_for_run(payload.get("temperature_filename"))
     return payload
 
 
@@ -1049,7 +1063,6 @@ def home(request: Request) -> Any:
         "index.html",
         {
             "runs": runs,
-            "sample_runs": SAMPLE_RUNS,
             "preset_display": PRESET_DISPLAY,
             "mode_display": MODE_DISPLAY,
             "preset_label": _preset_label,
@@ -1064,7 +1077,7 @@ def home(request: Request) -> Any:
 
 @app.get("/history")
 def history(request: Request) -> Any:
-    runs = _list_runs(limit=200)
+    runs = [_build_run_card(run) for run in _list_runs(limit=200)]
     return templates.TemplateResponse(
         "history.html",
         {
@@ -1097,17 +1110,21 @@ async def create_run(
     background_tasks: BackgroundTasks,
     video_file: UploadFile = File(...),
     temperature_file: UploadFile | None = File(None),
-    requested_mode: str = Form("quicklook"),
     preset: str = Form("wire_like"),
+    frame_stride: str = Form("1"),
     run_name: str = Form(""),
 ) -> RedirectResponse:
     _ensure_storage()
-    if requested_mode not in {"quicklook", "formal_af"}:
-        raise HTTPException(status_code=400, detail="invalid requested_mode")
     if preset not in {"wire_like", "braided_like"}:
         raise HTTPException(status_code=400, detail="unsupported preset")
     if not video_file.filename:
         raise HTTPException(status_code=400, detail="video file is required")
+    try:
+        parsed_frame_stride = int(frame_stride)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="frame_stride must be an integer") from exc
+    if parsed_frame_stride < 1:
+        raise HTTPException(status_code=400, detail="frame_stride must be >= 1")
 
     run_id = _new_run_id()
     run_dir = RUNS_ROOT / run_id
@@ -1123,6 +1140,7 @@ async def create_run(
     if temperature_file and temperature_file.filename:
         temperature_path = inputs_dir / _safe_filename(temperature_file.filename)
         await _save_upload(temperature_file, temperature_path)
+    requested_mode = _requested_mode_for_run(temperature_path.name if temperature_path else None)
 
     _insert_run(
         {
@@ -1132,11 +1150,15 @@ async def create_run(
             "run_name": run_name.strip() or None,
             "preset": preset,
             "requested_mode": requested_mode,
+            "frame_stride": parsed_frame_stride,
             "actual_mode": None,
             "formal_metric_label": None,
             "formal_gate_reason": None,
             "af95_c": None,
             "aftan_c": None,
+            "original_frame_count": None,
+            "analyzed_frame_count": None,
+            "annotated_video_filename": None,
             "video_filename": video_path.name,
             "temperature_filename": temperature_path.name if temperature_path else None,
             "run_dir": str(run_dir),
@@ -1174,11 +1196,15 @@ async def create_sample_run(
             "run_name": sample["label"],
             "preset": sample_input["preset"],
             "requested_mode": sample_input["requested_mode"],
+            "frame_stride": 1,
             "actual_mode": None,
             "formal_metric_label": None,
             "formal_gate_reason": None,
             "af95_c": None,
             "aftan_c": None,
+            "original_frame_count": None,
+            "analyzed_frame_count": None,
+            "annotated_video_filename": None,
             "video_filename": sample_input["video_filename"],
             "temperature_filename": sample_input["temperature_filename"],
             "run_dir": str(run_dir),
@@ -1191,21 +1217,43 @@ async def create_sample_run(
 
 @app.get("/runs/{run_id}")
 def run_detail(request: Request, run_id: str) -> Any:
-    run = _get_run(run_id)
-    if run is None:
+    run_row = _get_run(run_id)
+    if run_row is None:
         raise HTTPException(status_code=404, detail="run not found")
+    run = dict(run_row)
 
     summary = _prepare_summary_for_display(run, _load_summary(run_id))
     image_files = []
+    curve_files = []
+    other_image_files = []
+    video_files = []
     download_files = []
     outputs_dir = RUNS_ROOT / run_id / "outputs"
     if outputs_dir.exists():
         for path in sorted(outputs_dir.iterdir()):
             rel = path.relative_to(DATA_ROOT).as_posix()
+            if path.suffix.lower() == ".mp4":
+                payload = {"name": path.name, "url": str(request.url_for("files", path=rel))}
+                video_files.append(payload)
+                download_files.append(payload)
+                continue
             if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
-                image_files.append({"name": path.name, "url": str(request.url_for("files", path=rel))})
-            if path.suffix.lower() in {".png", ".jpg", ".jpeg", ".csv", ".json"}:
+                payload = {"name": path.name, "url": str(request.url_for("files", path=rel))}
+                image_files.append(payload)
+                if "route_" in path.name or "recovery" in path.name or "temperature" in path.name:
+                    curve_files.append(payload)
+                else:
+                    other_image_files.append(payload)
+                download_files.append(payload)
+                continue
+            if path.suffix.lower() in {".csv", ".json"}:
                 download_files.append({"name": path.name, "url": str(request.url_for("files", path=rel))})
+    annotated_video = None
+    if summary and summary.get("annotated_video_filename"):
+        annotated_video = next(
+            (item for item in video_files if item["name"] == summary["annotated_video_filename"]),
+            None,
+        )
 
     return templates.TemplateResponse(
         "run_detail.html",
@@ -1214,6 +1262,10 @@ def run_detail(request: Request, run_id: str) -> Any:
             "run": run,
             "summary": summary,
             "image_files": image_files,
+            "curve_files": curve_files,
+            "other_image_files": other_image_files,
+            "video_files": video_files,
+            "annotated_video": annotated_video,
             "download_files": download_files,
             "refresh": run["status"] in {"queued", "running"},
             "preset_label": _preset_label,
@@ -1243,8 +1295,9 @@ def _execute_run(run_id: str) -> None:
         outputs_dir = run_dir / "outputs"
         video_path = inputs_dir / run["video_filename"]
         temperature_path = None
-        if run["requested_mode"] == "formal_af" and run["temperature_filename"]:
+        if run["temperature_filename"]:
             temperature_path = inputs_dir / run["temperature_filename"]
+        frame_stride = int(run["frame_stride"]) if "frame_stride" in run.keys() and run["frame_stride"] is not None else 1
 
         if run["preset"] in {"wire_like", "demo"}:
             extraction_cfg = _build_wire_extraction_config(config, run["preset"])
@@ -1254,6 +1307,7 @@ def _execute_run(run_id: str) -> None:
                 extraction=extraction_cfg,
                 temperature_csv=temperature_path,
                 route_c=route_c,
+                frame_stride=frame_stride,
             )
         elif run["preset"] in {"braided_like", "braided_demo"}:
             extraction_cfg = _build_braided_extraction_config(config)
@@ -1262,12 +1316,23 @@ def _execute_run(run_id: str) -> None:
                 extraction=extraction_cfg,
                 temperature_csv=temperature_path,
                 acceptance_profile="synthetic" if run["preset"] == "braided_demo" else "real_video",
+                frame_stride=frame_stride,
             )
         else:
             raise RuntimeError(f"unsupported preset: {run['preset']}")
 
         result.series.to_csv(outputs_dir / "analysis.csv", index=False)
+        annotated_video_path = outputs_dir / ANNOTATED_VIDEO_FILENAME
+        render_annotated_overview_video(
+            video_path=video_path,
+            output_path=annotated_video_path,
+            extraction=extraction_cfg,
+            result=result,
+            object_type=run["preset"],
+            output_fps=max((result.input_fps or 1.0) / max(result.frame_stride, 1), 1.0),
+        )
         summary = _build_summary(run, result)
+        summary["annotated_video_filename"] = ANNOTATED_VIDEO_FILENAME
         _write_summary(outputs_dir / "summary.json", summary)
         route_results_dataframe(summary.get("route_results")).to_csv(outputs_dir / "route_results.csv", index=False)
         _write_plots(outputs_dir, result)
@@ -1281,6 +1346,9 @@ def _execute_run(run_id: str) -> None:
                 "formal_gate_reason": result.formal_gate_reason,
                 "af95_c": result.af95_c,
                 "aftan_c": result.aftan_c,
+                "original_frame_count": result.original_frame_count,
+                "analyzed_frame_count": result.analyzed_frame_count,
+                "annotated_video_filename": ANNOTATED_VIDEO_FILENAME,
                 "error_text": None,
             },
         )
@@ -1310,11 +1378,16 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "provisional_metric_label": result.provisional_metric_label,
         "provisional_af95_c": result.provisional_af95_c,
         "provisional_aftan_c": result.provisional_aftan_c,
-        "frames": int(series["frame"].max()) + 1 if not series.empty else 0,
+        "frame_stride": result.frame_stride,
+        "input_fps": result.input_fps,
+        "frames": result.analyzed_frame_count if result.analyzed_frame_count is not None else len(series),
+        "original_frame_count": result.original_frame_count,
+        "analyzed_frame_count": result.analyzed_frame_count if result.analyzed_frame_count is not None else len(series),
         "quality_median": float(series["quality"].median()) if "quality" in series else None,
         "video_filename": run["video_filename"],
         "temperature_filename": run["temperature_filename"],
         "primary_metric_label": result.primary_metric_label,
+        "annotated_video_filename": run["annotated_video_filename"] if "annotated_video_filename" in run.keys() else None,
     }
     if result.formal_candidate_gates is not None:
         summary["formal_candidate_gates"] = result.formal_candidate_gates
@@ -1421,6 +1494,76 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
     series = result.series
     if series.empty:
         return
+
+    if {"time_sec", "x_route_a_px"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["x_route_a_px"], label="A:x_route_a", linewidth=2.0, color="#7c3aed")
+        plt.xlabel("Time (s)")
+        plt.ylabel("x_route_a (px)")
+        plt.title("Route A metric over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_a_metric_over_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "kappa_fit_px_inv"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["kappa_fit_px_inv"], label="B:kappa_fit", linewidth=2.0, color="#ea580c")
+        if "x_fit_px" in series.columns:
+            plt.plot(series["time_sec"], series["x_fit_px"], label="B:x_fit", linewidth=1.4, alpha=0.35, color="#f59e0b")
+        plt.xlabel("Time (s)")
+        plt.ylabel("kappa_fit / x_fit")
+        plt.title("Route B metric over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_b_metric_over_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "kappa_route_c_px_inv"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["kappa_route_c_px_inv"], label="C:kappa_route_c", linewidth=2.0, color="#16a34a")
+        if "x_route_c_px" in series.columns:
+            plt.plot(series["time_sec"], series["x_route_c_px"], label="C:x_route_c", linewidth=1.4, alpha=0.35, color="#22c55e")
+        plt.xlabel("Time (s)")
+        plt.ylabel("kappa_route_c / x_route_c")
+        plt.title("Route C metric over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_c_metric_over_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "length_axis_px"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["length_axis_px"], label="A:length_axis", linewidth=2.0, color="#2563eb")
+        plt.xlabel("Time (s)")
+        plt.ylabel("length_axis (px)")
+        plt.title("Route A metric over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_a_metric_over_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "diameter_max_px"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["diameter_max_px"], label="B:diameter_max", linewidth=2.0, color="#d946ef")
+        plt.xlabel("Time (s)")
+        plt.ylabel("diameter_max (px)")
+        plt.title("Route B metric over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_b_metric_over_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "area_proj_px2"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["area_proj_px2"], label="C:area_proj", linewidth=2.0, color="#16a34a")
+        plt.xlabel("Time (s)")
+        plt.ylabel("area_proj (px^2)")
+        plt.title("Route C metric over time")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_c_metric_over_time.png", dpi=160)
+        plt.close(fig)
 
     if {"time_sec", "x_route_a_px", "x_fit_px", "x_route_c_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
@@ -1542,6 +1685,7 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         plt.title("Recovery over temperature")
         plt.legend()
         plt.tight_layout()
+        fig.savefig(out_dir / "route_recovery_vs_temperature.png", dpi=160)
         fig.savefig(out_dir / "recovery_vs_temperature.png", dpi=160)
         plt.close(fig)
 
@@ -1586,6 +1730,7 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         plt.title("Braided recovery over temperature")
         plt.legend()
         plt.tight_layout()
+        fig.savefig(out_dir / "route_recovery_vs_temperature.png", dpi=160)
         fig.savefig(out_dir / "braided_recovery_vs_temperature.png", dpi=160)
         plt.close(fig)
 
@@ -1790,11 +1935,15 @@ def _ensure_storage() -> None:
                 run_name TEXT,
                 preset TEXT NOT NULL,
                 requested_mode TEXT NOT NULL,
+                frame_stride INTEGER NOT NULL DEFAULT 1,
                 actual_mode TEXT,
                 formal_metric_label TEXT,
                 formal_gate_reason TEXT,
                 af95_c REAL,
                 aftan_c REAL,
+                original_frame_count INTEGER,
+                analyzed_frame_count INTEGER,
+                annotated_video_filename TEXT,
                 video_filename TEXT NOT NULL,
                 temperature_filename TEXT,
                 run_dir TEXT NOT NULL,
@@ -1802,6 +1951,19 @@ def _ensure_storage() -> None:
             )
             """
         )
+        existing_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(runs)").fetchall()
+        }
+        if "frame_stride" not in existing_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN frame_stride INTEGER NOT NULL DEFAULT 1")
+        if "original_frame_count" not in existing_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN original_frame_count INTEGER")
+        if "analyzed_frame_count" not in existing_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN analyzed_frame_count INTEGER")
+        if "annotated_video_filename" not in existing_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN annotated_video_filename TEXT")
+        conn.commit()
 
 
 def _connect_db() -> sqlite3.Connection:

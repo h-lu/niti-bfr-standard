@@ -3,68 +3,285 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>NiTi BFR 历史任务</title>
+    <title>NiTi BFR History</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
-      .wrap { max-width: 1120px; margin: 0 auto; padding: 32px 20px 56px; }
-      .card { background: white; border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
-      table { width: 100%; border-collapse: collapse; font-size: 14px; }
-      th, td { padding: 10px 8px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }
-      .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 700; }
-      .status-completed { background: #dcfce7; color: #166534; }
-      .status-running { background: #fef3c7; color: #92400e; }
-      .status-queued { background: #dbeafe; color: #1d4ed8; }
-      .status-failed { background: #fee2e2; color: #991b1b; }
-      .muted { color: #6b7280; font-size: 13px; }
-      a { color: #2563eb; text-decoration: none; }
-      .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
-      .nav-links { display: flex; gap: 12px; flex-wrap: wrap; }
+      :root {
+        --bg: #f3efe6;
+        --paper: rgba(255, 252, 246, 0.88);
+        --ink: #1d2430;
+        --muted: #60686c;
+        --line: rgba(34, 40, 49, 0.12);
+        --accent: #d66b34;
+        --ok: #2c7a4b;
+        --warn: #b67818;
+        --danger: #a64032;
+        --cool: #1f6c78;
+        --shadow: 0 24px 64px rgba(48, 35, 20, 0.12);
+        --font-ui: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        --font-display: "Iowan Old Style", "Palatino Linotype", "Songti SC", serif;
+      }
+
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: var(--font-ui);
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(214, 107, 52, 0.16), transparent 26%),
+          linear-gradient(180deg, var(--bg) 0%, #eee6d8 100%);
+      }
+      a { color: inherit; text-decoration: none; }
+      .shell { max-width: 1220px; margin: 0 auto; padding: 28px 20px 56px; }
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 700;
+      }
+      .brand-mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: grid;
+        place-items: center;
+        color: white;
+        background: linear-gradient(135deg, var(--accent) 0%, #f0bd76 100%);
+      }
+      .nav {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .nav-link {
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 250, 242, 0.74);
+        color: var(--muted);
+        font-size: 14px;
+        font-weight: 800;
+      }
+      .nav-link.active {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: white;
+      }
+      .header-card,
+      .table-card {
+        background: var(--paper);
+        border: 1px solid rgba(255, 255, 255, 0.55);
+        border-radius: 28px;
+        box-shadow: var(--shadow);
+      }
+      .header-card {
+        padding: 28px;
+        margin-bottom: 18px;
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: clamp(34px, 5vw, 54px);
+        line-height: 1;
+        font-family: var(--font-display);
+      }
+      .copy {
+        max-width: 760px;
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      .summary-strip {
+        margin-top: 22px;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .summary-box {
+        padding: 16px;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.58);
+        border: 1px solid rgba(34, 40, 49, 0.08);
+      }
+      .summary-box strong {
+        display: block;
+        margin-bottom: 5px;
+        font-size: 24px;
+      }
+      .summary-box span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .table-card { overflow: hidden; }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        padding: 18px 20px;
+        border-bottom: 1px solid rgba(34, 40, 49, 0.08);
+        text-align: left;
+        vertical-align: top;
+      }
+      th {
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      tr:last-child td { border-bottom: none; }
+      .run-link {
+        font-size: 17px;
+        font-weight: 700;
+      }
+      .run-link:hover { color: #8d3a1a; }
+      .meta,
+      .muted {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.65;
+      }
+      .meta {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .status-completed { background: rgba(44, 122, 75, 0.12); color: var(--ok); }
+      .status-running { background: rgba(182, 120, 24, 0.12); color: var(--warn); }
+      .status-queued { background: rgba(31, 108, 120, 0.12); color: var(--cool); }
+      .status-failed { background: rgba(166, 64, 50, 0.12); color: var(--danger); }
+      .empty {
+        padding: 36px 28px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      @media (max-width: 960px) {
+        .summary-strip { grid-template-columns: 1fr; }
+        table, thead, tbody, th, td, tr { display: block; }
+        thead { display: none; }
+        .table-card { padding: 8px 0; }
+        tr { padding: 16px 20px; border-bottom: 1px solid rgba(34, 40, 49, 0.08); }
+        tr:last-child { border-bottom: none; }
+        td {
+          padding: 6px 0;
+          border-bottom: none;
+        }
+        td::before {
+          content: attr(data-label);
+          display: block;
+          margin-bottom: 2px;
+          color: var(--muted);
+          font-size: 11px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+      }
+      @media (max-width: 640px) {
+        .shell { padding: 20px 14px 40px; }
+        .topbar { flex-direction: column; align-items: stretch; }
+      }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <div class="topline">
-        <div>
-          <h1>历史任务</h1>
-          <p class="muted">最小留档，覆盖 wire-like / braided-like 两类 run 的状态、结果和追踪。</p>
+    <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="{{ request.url_for('home') }}">
+          <span class="brand-mark">NB</span>
+          <span>NiTi BFR</span>
+        </a>
+        <nav class="nav" aria-label="Primary">
+          <a class="nav-link" href="{{ request.url_for('home') }}">Analysis Console</a>
+          <a class="nav-link active" href="{{ request.url_for('history') }}">History</a>
+        </nav>
+      </header>
+
+      <section class="header-card">
+        <h1>Analysis History</h1>
+        <p class="copy">
+          历史页现在只承担真实分析记录浏览。你可以从这里回看每次视频提交的状态、对象类型、输入条件和结果摘要。
+        </p>
+        <div class="summary-strip">
+          <div class="summary-box">
+            <strong>{% if runs %}{{ runs|length }}{% else %}0{% endif %}</strong>
+            <span>runs listed</span>
+          </div>
+          <div class="summary-box">
+            <strong>{{ preset_label('wire_like') }}</strong>
+            <span>single-body recovery analyses</span>
+          </div>
+          <div class="summary-box">
+            <strong>{{ preset_label('braided_like') }}</strong>
+            <span>body / width / area route analyses</span>
+          </div>
         </div>
-        <div class="nav-links">
-          <a href="{{ request.url_for('benchmark_summary') }}">Benchmark 汇总</a>
-          <a href="{{ request.url_for('home') }}">返回首页</a>
-        </div>
-      </div>
-      <section class="card">
+      </section>
+
+      <section class="table-card">
+        {% if runs %}
         <table>
           <thead>
             <tr>
-              <th>时间</th>
-              <th>任务</th>
-              <th>状态</th>
-              <th>请求模式</th>
-              <th>实际结果</th>
+              <th>Run</th>
+              <th>Submitted</th>
+              <th>Status</th>
+              <th>Inputs</th>
+              <th>Outcome</th>
             </tr>
           </thead>
           <tbody>
             {% for run in runs %}
             <tr>
-              <td>{{ run["created_at"][:19].replace("T", " ") }}</td>
-              <td>
-                <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
-                <div class="muted">{{ run["video_filename"] }}</div>
-                <div class="muted">{{ preset_label(run['preset']) }}</div>
+              <td data-label="Run">
+                <a class="run-link" href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
+                <div class="meta">
+                  <span>{{ preset_label(run['preset']) }}</span>
+                  <span>{{ run["video_filename"] }}</span>
+                </div>
               </td>
-              <td><span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span></td>
-              <td>{{ mode_label(run['requested_mode']) }}</td>
-              <td>
+              <td data-label="Submitted" class="muted">{{ run["created_at"][:19].replace("T", " ") }}</td>
+              <td data-label="Status"><span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span></td>
+              <td data-label="Inputs" class="muted">
+                {% if run.temperature_filename is defined and run.temperature_filename %}
+                温度 CSV 已附带
+                {% else %}
+                仅视频输入
+                {% endif %}
+                {% if run.frame_stride is defined and run.frame_stride %}
+                <div class="meta"><span>frame_stride {{ run.frame_stride }}</span></div>
+                {% endif %}
+              </td>
+              <td data-label="Outcome">
                 {% if run["actual_mode"] %}
-                  <div>{{ mode_label(run['actual_mode']) }}</div>
+                <div>{{ mode_label(run["actual_mode"]) }}</div>
+                {% else %}
+                <div class="muted">等待处理</div>
                 {% endif %}
                 <div class="muted">{{ run_result_hint(run) }}</div>
+                {% if run["af95_c"] is not none %}
+                <div class="meta"><span>Af-95 {{ "%.2f"|format(run["af95_c"]) }} C</span></div>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}
           </tbody>
         </table>
+        {% else %}
+        <div class="empty">暂无分析记录。返回首页上传第一条视频后，所有后续结果都会集中在这里归档。</div>
+        {% endif %}
       </section>
     </div>
   </body>

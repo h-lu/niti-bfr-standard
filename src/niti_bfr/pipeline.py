@@ -103,6 +103,10 @@ class AnalysisResult:
     acceptance_profile: str | None = None
     route_results: list[dict[str, Any]] | None = None
     formal_candidate_gates: dict[str, dict[str, Any]] | None = None
+    input_fps: float | None = None
+    original_frame_count: int | None = None
+    analyzed_frame_count: int | None = None
+    frame_stride: int = 1
 
 
 def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
@@ -1516,7 +1520,9 @@ def analyze_video(
     temperature_csv: str | Path | None = None,
     temperature_time_offset_sec: float = 0.0,
     route_c: RouteCConfig | None = None,
+    frame_stride: int = 1,
 ) -> AnalysisResult:
+    frame_stride = max(int(frame_stride), 1)
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"failed to open video: {video_path}")
@@ -1528,6 +1534,9 @@ def analyze_video(
         ok, frame = cap.read()
         if not ok:
             break
+        if frame_idx % frame_stride != 0:
+            frame_idx += 1
+            continue
         try:
             geom = extract_geometry(frame, extraction)
             route_a_anchor = geom.route_a_anchor_xy
@@ -1686,6 +1695,10 @@ def analyze_video(
         warning_codes=warning_codes,
         route_results=route_results,
         formal_candidate_gates=formal_candidate_gates,
+        input_fps=float(fps),
+        original_frame_count=frame_idx,
+        analyzed_frame_count=len(series),
+        frame_stride=frame_stride,
     )
 
 
@@ -1695,7 +1708,9 @@ def analyze_braided_video_quicklook(
     temperature_csv: str | Path | None = None,
     temperature_time_offset_sec: float = 0.0,
     acceptance_profile: str = "real_video",
+    frame_stride: int = 1,
 ) -> AnalysisResult:
+    frame_stride = max(int(frame_stride), 1)
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         raise RuntimeError(f"failed to open video: {video_path}")
@@ -1707,6 +1722,9 @@ def analyze_braided_video_quicklook(
         ok, frame = cap.read()
         if not ok:
             break
+        if frame_idx % frame_stride != 0:
+            frame_idx += 1
+            continue
         try:
             geom = extract_braided_geometry(frame, extraction)
             row = {
@@ -1944,4 +1962,8 @@ def analyze_braided_video_quicklook(
         acceptance_profile=acceptance_profile if temperature_csv is not None else None,
         route_results=route_results,
         formal_candidate_gates=formal_candidate_gates,
+        input_fps=float(fps),
+        original_frame_count=frame_idx,
+        analyzed_frame_count=len(series),
+        frame_stride=frame_stride,
     )
