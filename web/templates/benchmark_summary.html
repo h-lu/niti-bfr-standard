@@ -10,80 +10,209 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>NiTi BFR Benchmark 汇总</title>
+    <title>NiTi BFR 基准汇总</title>
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%); color: #0f172a; }
-      .wrap { max-width: 1240px; margin: 0 auto; padding: 32px 20px 56px; }
-      .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
+      :root {
+        --bg: #f3efe6;
+        --paper: rgba(255, 251, 244, 0.92);
+        --ink: #18202b;
+        --muted: #5f6870;
+        --line: rgba(24, 32, 43, 0.1);
+        --accent: #c6672f;
+        --teal: #1d6771;
+        --ok: #2f7b50;
+        --warn: #b47a1a;
+        --danger: #a44535;
+        --shadow: 0 24px 60px rgba(60, 42, 21, 0.12);
+        --font-ui: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+        --font-display: "Songti SC", "STSong", "Source Han Serif SC", serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(198, 103, 47, 0.15), transparent 26%),
+          radial-gradient(circle at top right, rgba(29, 103, 113, 0.15), transparent 24%),
+          linear-gradient(180deg, var(--bg) 0%, #ede5d8 100%);
+        color: var(--ink);
+        font-family: var(--font-ui);
+      }
+      a { color: var(--teal); text-decoration: none; }
+      .wrap { max-width: 1280px; margin: 0 auto; padding: 28px 20px 56px; }
+      .topline {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 16px;
+        margin-bottom: 20px;
+      }
       .nav-links { display: flex; gap: 12px; flex-wrap: wrap; }
-      .hero { background: radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 42%), radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 36%), white; border-radius: 24px; padding: 24px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08); margin-bottom: 20px; }
-      .card { background: rgba(255, 255, 255, 0.92); border-radius: 20px; padding: 20px; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08); backdrop-filter: blur(6px); }
-      .stack > * + * { margin-top: 18px; }
-      .compare-grid { display: grid; gap: 18px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 20px; }
-      .family-grid { display: grid; gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .route-table, .mini-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-      th, td { text-align: left; vertical-align: top; padding: 10px 8px; border-bottom: 1px solid #e2e8f0; }
-      .muted { color: #64748b; font-size: 13px; }
-      .pill { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #dbeafe; color: #1d4ed8; }
-      .route-quicklook-only { background: #e0f2fe; color: #075985; }
-      .route-formal-blocked { background: #fee2e2; color: #991b1b; }
-      .route-provisional { background: #fef3c7; color: #92400e; }
-      .route-formal-passed { background: #dcfce7; color: #166534; }
-      .route-unrecorded { background: #e2e8f0; color: #334155; }
-      .family-head { display: flex; justify-content: space-between; align-items: start; gap: 14px; margin-bottom: 14px; }
-      .route-summary { border: 1px solid #dbeafe; border-radius: 18px; padding: 18px; background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(239,246,255,0.8) 100%); }
-      .route-summary h3, .benchmark-card h3, h1, h2 { margin: 0 0 8px; }
-      .kpi { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
-      .kpi div { border: 1px solid #e2e8f0; border-radius: 14px; padding: 10px 12px; background: rgba(255,255,255,0.86); }
+      .nav-link {
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 250, 242, 0.72);
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .hero,
+      .card {
+        background: var(--paper);
+        border: 1px solid rgba(255, 255, 255, 0.58);
+        border-radius: 28px;
+        box-shadow: var(--shadow);
+      }
+      .hero {
+        padding: 24px 26px;
+        margin-bottom: 18px;
+      }
+      .hero p,
+      .muted {
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      h1, h2, h3 { margin: 0 0 8px; font-family: var(--font-display); }
+      .compare-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px;
+        margin-bottom: 20px;
+      }
+      .family-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 20px;
+      }
+      .card { padding: 20px; }
+      .route-summary {
+        padding: 18px;
+        border-radius: 22px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(245, 237, 225, 0.8) 100%);
+        border: 1px solid rgba(24, 32, 43, 0.08);
+      }
+      .route-table,
+      .mini-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th, td {
+        text-align: left;
+        vertical-align: top;
+        padding: 10px 8px;
+        border-bottom: 1px solid rgba(24, 32, 43, 0.08);
+      }
+      .pill {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .route-quicklook-only { background: rgba(29, 103, 113, 0.12); color: var(--teal); }
+      .route-formal-blocked { background: rgba(164, 69, 53, 0.12); color: var(--danger); }
+      .route-provisional { background: rgba(180, 122, 26, 0.12); color: var(--warn); }
+      .route-formal-passed { background: rgba(47, 123, 80, 0.12); color: var(--ok); }
+      .route-unrecorded { background: rgba(24, 32, 43, 0.08); color: var(--muted); }
+      .kpi {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .kpi div {
+        padding: 10px 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(24, 32, 43, 0.08);
+        background: rgba(255, 255, 255, 0.72);
+      }
+      .family-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
       .benchmark-list { display: grid; gap: 14px; }
-      .benchmark-card { border: 1px solid #dbeafe; border-radius: 18px; padding: 16px; background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); }
-      .meta-grid { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; font-size: 13px; margin: 10px 0 14px; }
-      .meta-grid div { padding: 1px 0; }
-      .qc-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-      .qc-chip { padding: 6px 10px; border-radius: 999px; background: #eff6ff; color: #1e40af; font-size: 12px; }
-      .empty { padding: 18px; border: 1px dashed #cbd5e1; border-radius: 16px; background: rgba(248, 250, 252, 0.92); }
-      a { color: #2563eb; text-decoration: none; }
-      @media (max-width: 1024px) { .compare-grid, .family-grid { grid-template-columns: 1fr; } }
+      .benchmark-card {
+        padding: 16px;
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.96) 0%, rgba(245, 237, 225, 0.8) 100%);
+        border: 1px solid rgba(24, 32, 43, 0.08);
+      }
+      .meta-grid {
+        display: grid;
+        grid-template-columns: 128px 1fr;
+        gap: 6px 10px;
+        font-size: 13px;
+        margin: 10px 0 14px;
+      }
+      .qc-strip {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .qc-chip {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(29, 103, 113, 0.1);
+        color: var(--teal);
+        font-size: 12px;
+      }
+      .empty {
+        padding: 18px;
+        border: 1px dashed rgba(24, 32, 43, 0.18);
+        border-radius: 18px;
+        background: rgba(255, 250, 242, 0.52);
+      }
+      @media (max-width: 1024px) {
+        .compare-grid,
+        .family-grid { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <div class="topline">
         <div>
-          <h1>Benchmark 汇总</h1>
-          <p class="muted">这里优先按 route-level 看 wire / braided 的 benchmark 表现，再回到对象级 formal 或 provisional 推荐。若 suite 汇总不存在，页面会直接回退读取已有 benchmark 目录。</p>
+          <h1>基准汇总</h1>
+          <p class="muted">这里优先按路线层比较 wire / braided 的基准表现，再回到对象级 formal 或 provisional 推荐结果。</p>
         </div>
         <div class="nav-links">
-          <a href="{{ request.url_for('home') }}">返回首页</a>
-          <a href="{{ request.url_for('history') }}">历史任务</a>
+          <a class="nav-link" href="{{ request.url_for('home') }}">返回分析台</a>
+          <a class="nav-link" href="{{ request.url_for('history') }}">查看历史记录</a>
         </div>
       </div>
 
       <section class="hero">
         <div class="muted">读取策略</div>
-        <p style="margin: 6px 0 0;">wire 与 braided 都会优先读取各自的 `benchmark_summary.json`；若当前工作区只有单 benchmark `analysis_metrics.json`，页面仍会把 A / B / C 路线补成统一对比视图。</p>
+        <p style="margin: 6px 0 0;">
+          `wire` 与 `braided` 都会优先读取各自的 `benchmark_summary.json`；
+          如果当前工作区只有单个基准案例的 `analysis_metrics.json`，页面仍会自动补成统一的 A / B / C 对比视图。
+        </p>
       </section>
 
       <section class="compare-grid">
         {% for row in comparison_rows %}
         <article class="route-summary">
-          <div class="muted">Route {{ row['alias'] }}</div>
+          <div class="muted">路线 {{ row['alias'] }}</div>
           <h3>
             {% if row['wire'] %}
               {{ row['wire']['display_label'] }}
             {% elif row['braided'] %}
               {{ row['braided']['display_label'] }}
             {% else %}
-              Route {{ row['alias'] }}
+              路线 {{ row['alias'] }}
             {% endif %}
           </h3>
           <table class="mini-table">
             <thead>
               <tr>
                 <th>对象</th>
-                <th>benchmarks</th>
-                <th>|Af-95 err|</th>
-                <th>|Af-tan err|</th>
+                <th>样本数</th>
+                <th>|Af-95 误差|</th>
+                <th>|Af-tan 误差|</th>
               </tr>
             </thead>
             <tbody>
@@ -101,14 +230,15 @@
               </tr>
             </tbody>
           </table>
+
           <div class="kpi">
             <div>
               <strong>wire</strong>
               <div class="muted">
                 {% if row['wire'] %}
-                  passed {{ row['wire']['formal_passed_count'] }} · provisional {{ row['wire']['provisional_count'] }} · blocked {{ row['wire']['formal_blocked_count'] }}
+                  formal 通过 {{ row['wire']['formal_passed_count'] }} · 临时 {{ row['wire']['provisional_count'] }} · 阻断 {{ row['wire']['formal_blocked_count'] }}
                 {% else %}
-                  no data
+                  暂无数据
                 {% endif %}
               </div>
             </div>
@@ -116,9 +246,9 @@
               <strong>braided</strong>
               <div class="muted">
                 {% if row['braided'] %}
-                  passed {{ row['braided']['formal_passed_count'] }} · provisional {{ row['braided']['provisional_count'] }} · blocked {{ row['braided']['formal_blocked_count'] }}
+                  formal 通过 {{ row['braided']['formal_passed_count'] }} · 临时 {{ row['braided']['provisional_count'] }} · 阻断 {{ row['braided']['formal_blocked_count'] }}
                 {% else %}
-                  no data
+                  暂无数据
                 {% endif %}
               </div>
             </div>
@@ -129,24 +259,30 @@
 
       <section class="family-grid">
         {% for family_key, family in families.items() %}
-        <article class="card stack">
+        <article class="card">
           <div class="family-head">
             <div>
               <h2>{{ family['label'] }}</h2>
-              <div class="muted">{{ family['benchmark_count'] }} benchmark(s) · {{ family['source_label'] }}</div>
+              <div class="muted">{{ family['benchmark_count'] }} 个基准案例 · {{ family['source_label'] }}</div>
             </div>
-            <div class="muted" style="max-width: 340px; text-align: right;">{% if family['suite_available'] %}suite: {{ family['suite_path'] }}{% else %}suite missing; showing analysis_metrics fallback{% endif %}</div>
+            <div class="muted" style="max-width: 340px; text-align: right;">
+              {% if family['suite_available'] %}
+                suite 文件：{{ family['suite_path'] }}
+              {% else %}
+                缺少 suite 汇总，当前展示 analysis_metrics 回退结果
+              {% endif %}
+            </div>
           </div>
 
-          <div>
-            <h3>Route Rollup</h3>
+          <div style="margin-bottom: 18px;">
+            <h3>路线汇总</h3>
             <table class="route-table">
               <thead>
                 <tr>
-                  <th>Route</th>
-                  <th>availability</th>
-                  <th>|Af-95 err|</th>
-                  <th>dominant gate</th>
+                  <th>路线</th>
+                  <th>可用性</th>
+                  <th>|Af-95 误差|</th>
+                  <th>主导 gate</th>
                 </tr>
               </thead>
               <tbody>
@@ -158,7 +294,7 @@
                   </td>
                   <td>
                     {{ route['available_count'] }}/{{ route['benchmark_count'] }}
-                    <div class="muted">formal {{ route['selected_as_formal_count'] }} · primary {{ route['selected_as_primary_count'] }}</div>
+                    <div class="muted">正式输出 {{ route['selected_as_formal_count'] }} · 主推荐 {{ route['selected_as_primary_count'] }}</div>
                   </td>
                   <td>
                     {{ fmt_num(route['mean_abs_af95_error_c']) }} C
@@ -172,49 +308,49 @@
           </div>
 
           <div>
-            <h3>Benchmarks</h3>
+            <h3>具体基准案例</h3>
             {% if family['benchmarks'] %}
             <div class="benchmark-list">
               {% for benchmark in family['benchmarks'] %}
               <section class="benchmark-card">
                 <h3>{{ benchmark['benchmark_name'] }}</h3>
-                <div class="muted">{{ benchmark['description'] or 'no description' }}</div>
+                <div class="muted">{{ benchmark['description'] or '暂无描述' }}</div>
                 <div class="meta-grid">
-                  <div>source</div><div>{{ benchmark['source_label'] }}</div>
-                  <div>output dir</div><div>{{ benchmark['output_dir_name'] }}</div>
-                  <div>object reportability</div><div>{{ benchmark['object_reportability_status'] or '-' }}</div>
-                  <div>object formal</div>
+                  <div>来源</div><div>{{ benchmark['source_label'] }}</div>
+                  <div>输出目录</div><div>{{ benchmark['output_dir_name'] }}</div>
+                  <div>对象级状态</div><div>{{ benchmark['object_reportability_status'] or '-' }}</div>
+                  <div>对象正式路线</div>
                   <div>
                     {% if benchmark['object_formal_route_alias'] %}
-                      Route {{ benchmark['object_formal_route_alias'] }} · {{ benchmark['object_formal_metric_key'] }}
+                      路线 {{ benchmark['object_formal_route_alias'] }} · {{ benchmark['object_formal_metric_key'] }}
                     {% else %}
                       -
                     {% endif %}
                   </div>
-                  <div>object recommended</div>
+                  <div>对象推荐路线</div>
                   <div>
                     {% if benchmark['object_recommended_route_alias'] %}
-                      Route {{ benchmark['object_recommended_route_alias'] }} · {{ benchmark['object_recommended_metric_key'] }}
+                      路线 {{ benchmark['object_recommended_route_alias'] }} · {{ benchmark['object_recommended_metric_key'] }}
                     {% else %}
                       -
                     {% endif %}
                   </div>
-                  <div>formal gate</div><div>{{ benchmark['object_formal_gate_reason'] or '-' }}</div>
+                  <div>formal gate 原因</div><div>{{ benchmark['object_formal_gate_reason'] or '-' }}</div>
                 </div>
 
                 <div class="qc-strip">
                   {% for qc in benchmark['qc_highlights'] %}
-                  <span class="qc-chip">{{ qc['label'] }}: {{ fmt_num(qc['value'], 3, ' ' ~ qc['suffix'] if qc.get('suffix') else '') }}</span>
+                  <span class="qc-chip">{{ qc['label'] }}：{{ fmt_num(qc['value'], 3, ' ' ~ qc['suffix'] if qc.get('suffix') else '') }}</span>
                   {% endfor %}
                 </div>
 
                 <table class="route-table">
                   <thead>
                     <tr>
-                      <th>Route</th>
-                      <th>status</th>
-                      <th>Af error</th>
-                      <th>measured / truth</th>
+                      <th>路线</th>
+                      <th>状态</th>
+                      <th>Af 误差</th>
+                      <th>测量值 / 真值</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -245,7 +381,7 @@
             </div>
             {% else %}
             <div class="empty">
-              <p class="muted">当前工作区还没有 {{ family['label'] }} benchmark 产物。生成 suite summary 或至少放入一个 `analysis_metrics.json` 后，这里会自动出现。</p>
+              <p class="muted">当前工作区还没有 {{ family['label'] }} 基准产物。生成汇总文件或至少放入一个 `analysis_metrics.json` 后，这里会自动出现。</p>
             </div>
             {% endif %}
           </div>

@@ -41,6 +41,33 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertNotIn("Benchmark 汇总", text)
         self.assertNotIn("直接运行这个示例", text)
         self.assertNotIn("分析模式", text)
+        self.assertIn("提交分析任务", text)
+
+    def test_history_page_supports_deleting_completed_runs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
+                webapp._ensure_storage()
+                client = TestClient(webapp.app)
+                response = client.post(
+                    "/runs",
+                    data={"preset": "wire_like", "frame_stride": "1", "run_name": "to-delete"},
+                    files={"video_file": ("demo.mp4", b"not-a-real-video", "video/mp4")},
+                    follow_redirects=False,
+                )
+                run_id = response.headers["location"].rsplit("/", 1)[-1]
+                run_dir = webapp.RUNS_ROOT / run_id
+                (run_dir / "outputs").mkdir(parents=True, exist_ok=True)
+                (run_dir / "outputs" / "summary.json").write_text("{}", encoding="utf-8")
+                webapp._update_run(run_id, {"status": "completed"})
+
+                history_response = client.get("/history")
+                delete_response = client.post(f"/runs/{run_id}/delete", follow_redirects=False)
+                self.assertEqual(history_response.status_code, 200)
+                self.assertIn("删除记录", history_response.text)
+                self.assertEqual(delete_response.status_code, 303)
+                self.assertTrue(delete_response.headers["location"].endswith("/history?deleted=1"))
+                self.assertIsNone(webapp._get_run(run_id))
+                self.assertFalse(run_dir.exists())
 
     def test_create_run_derives_requested_mode_and_persists_frame_stride(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -179,6 +206,91 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertEqual(summary["original_frame_count"], 8)
         self.assertEqual(summary["analyzed_frame_count"], 3)
         self.assertEqual(summary["annotated_video_filename"], "annotated_overview.mp4")
+
+    def test_execute_run_writes_process_video_summary_when_render_succeeds(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp):
+                webapp._ensure_storage()
+                run_id = "run-process-video"
+                run_dir = webapp.RUNS_ROOT / run_id
+                inputs_dir = run_dir / "inputs"
+                outputs_dir = run_dir / "outputs"
+                inputs_dir.mkdir(parents=True, exist_ok=True)
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (inputs_dir / "demo.mp4").write_bytes(b"fake-video")
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "queued",
+                        "run_name": "process-video",
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 1,
+                        "actual_mode": None,
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": None,
+                        "analyzed_frame_count": None,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+
+                fake_result = AnalysisResult(
+                    series=pd.DataFrame(
+                        {
+                            "frame": [0, 1],
+                            "time_sec": [0.0, 0.05],
+                            "quality": [0.9, 0.92],
+                            "x_route_a_px": [10.0, 11.0],
+                            "x_fit_px": [9.5, 10.5],
+                            "kappa_fit_px_inv": [0.2, 0.18],
+                            "x_route_c_px": [10.2, 11.2],
+                            "kappa_route_c_px_inv": [0.19, 0.17],
+                            "route_c_anchor_x": [1.0, 1.0],
+                            "route_c_anchor_y": [1.0, 1.0],
+                            "route_c_tip_x": [9.0, 10.0],
+                            "route_c_tip_y": [2.0, 2.0],
+                        }
+                    ),
+                    fit=None,
+                    af95_c=None,
+                    aftan_c=None,
+                    reportability_status="quicklook_only",
+                    route_results=[],
+                    input_fps=20.0,
+                    original_frame_count=2,
+                    analyzed_frame_count=2,
+                    frame_stride=1,
+                )
+
+                with mock.patch.object(webapp, "analyze_video", return_value=fake_result), mock.patch.object(
+                    webapp,
+                    "render_annotated_overview_video",
+                    side_effect=lambda **kwargs: Path(kwargs["output_path"]).write_bytes(b"annotated"),
+                ), mock.patch.object(
+                    webapp,
+                    "render_process_debug_video",
+                    side_effect=lambda **kwargs: Path(kwargs["output_path"]).write_bytes(b"process"),
+                ), mock.patch.object(webapp, "_write_plots", autospec=True), mock.patch.object(
+                    webapp, "route_results_dataframe", return_value=pd.DataFrame()
+                ):
+                    webapp._execute_run(run_id)
+
+                summary = webapp._load_summary(run_id)
+                assert summary is not None
+                self.assertEqual(summary["annotated_video_filename"], webapp.ANNOTATED_VIDEO_FILENAME)
+                self.assertEqual(summary["process_video_filename"], webapp.PROCESS_VIDEO_FILENAME)
+                self.assertTrue((outputs_dir / webapp.PROCESS_VIDEO_FILENAME).exists())
+                row = dict(webapp._get_run(run_id))
+                self.assertEqual(row["status"], "completed")
 
 
 if __name__ == "__main__":

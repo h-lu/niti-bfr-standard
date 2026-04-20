@@ -41,8 +41,8 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(SAMPLE_RUNS["braided_synthetic_quicklook"]["requested_mode"], "quicklook")
 
     def test_labels_are_human_readable(self) -> None:
-        self.assertEqual(_preset_label("braided_like"), "braided-like")
-        self.assertEqual(_mode_label("formal_af"), "formal Af")
+        self.assertEqual(_preset_label("braided_like"), "编织类 braided-like")
+        self.assertEqual(_mode_label("formal_af"), "正式 Af")
 
     def test_result_hint_shows_formal_downgrade(self) -> None:
         run = {
@@ -54,7 +54,7 @@ class WebappFrontendLabelTests(unittest.TestCase):
         }
         hint = _run_result_hint(run)
         self.assertIn("formal Af 未放行", hint)
-        self.assertIn("provisional", hint)
+        self.assertIn("临时结果", hint)
 
     def test_result_hint_shows_formal_success(self) -> None:
         run = {
@@ -263,7 +263,7 @@ class WebappFrontendLabelTests(unittest.TestCase):
 
             self.assertEqual(page["families"]["wire"]["benchmark_count"], 1)
             self.assertEqual(page["families"]["braided"]["benchmark_count"], 1)
-            self.assertEqual(page["families"]["wire"]["source_label"], "analysis_metrics fallback")
+            self.assertEqual(page["families"]["wire"]["source_label"], "回退到 analysis_metrics")
             braided_benchmark = page["families"]["braided"]["benchmarks"][0]
             self.assertEqual(braided_benchmark["object_recommended_route_alias"], "B")
             self.assertEqual(braided_benchmark["routes_by_alias"]["B"]["reportability_status"], "provisional")
@@ -328,8 +328,8 @@ class WebappFrontendLabelTests(unittest.TestCase):
                 page = _build_benchmark_page_data()
 
             self.assertTrue(page["families"]["wire"]["suite_available"])
-            self.assertEqual(page["families"]["wire"]["source_label"], "suite summary preferred")
-            self.assertEqual(page["families"]["wire"]["benchmarks"][0]["source_label"], "suite summary + analysis_metrics")
+            self.assertEqual(page["families"]["wire"]["source_label"], "优先读取汇总文件")
+            self.assertEqual(page["families"]["wire"]["benchmarks"][0]["source_label"], "汇总文件 + analysis_metrics")
 
 
 if __name__ == "__main__":

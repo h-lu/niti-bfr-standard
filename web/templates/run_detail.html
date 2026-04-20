@@ -36,46 +36,50 @@
     <style>
       :root {
         --bg: #f3efe6;
-        --paper: rgba(255, 252, 246, 0.9);
-        --ink: #1d2430;
-        --muted: #61696e;
-        --line: rgba(34, 40, 49, 0.12);
-        --accent: #d66b34;
-        --accent-deep: #8d3a1a;
-        --cool: #1f6c78;
-        --ok: #2c7a4b;
-        --warn: #b67818;
-        --danger: #a64032;
-        --shadow: 0 28px 70px rgba(48, 35, 20, 0.12);
-        --font-ui: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-        --font-display: "Iowan Old Style", "Palatino Linotype", "Songti SC", serif;
+        --paper: rgba(255, 251, 244, 0.9);
+        --ink: #18202b;
+        --muted: #5f6870;
+        --line: rgba(24, 32, 43, 0.12);
+        --accent: #c6672f;
+        --accent-deep: #8e3d1e;
+        --teal: #1d6771;
+        --ok: #2f7b50;
+        --warn: #b47a1a;
+        --danger: #a44535;
+        --shadow: 0 28px 70px rgba(60, 42, 21, 0.12);
+        --font-ui: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+        --font-display: "Songti SC", "STSong", "Source Han Serif SC", serif;
       }
 
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        font-family: var(--font-ui);
         color: var(--ink);
+        font-family: var(--font-ui);
         background:
-          radial-gradient(circle at top left, rgba(214, 107, 52, 0.15), transparent 26%),
-          radial-gradient(circle at top right, rgba(31, 108, 120, 0.15), transparent 24%),
-          linear-gradient(180deg, var(--bg) 0%, #ede5d7 100%);
+          radial-gradient(circle at top left, rgba(198, 103, 47, 0.16), transparent 26%),
+          radial-gradient(circle at top right, rgba(29, 103, 113, 0.16), transparent 24%),
+          linear-gradient(180deg, var(--bg) 0%, #ede5d8 100%);
       }
       a { color: inherit; text-decoration: none; }
       img, video {
         width: 100%;
         display: block;
         border-radius: 22px;
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        border: 1px solid rgba(24, 32, 43, 0.08);
         background: rgba(255, 255, 255, 0.8);
       }
-      .shell { max-width: 1280px; margin: 0 auto; padding: 28px 20px 56px; }
+      .shell {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 28px 20px 56px;
+      }
       .topbar {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 16px;
-        margin-bottom: 20px;
+        margin-bottom: 18px;
       }
       .brand {
         display: flex;
@@ -84,13 +88,13 @@
         font-weight: 700;
       }
       .brand-mark {
-        width: 42px;
-        height: 42px;
-        border-radius: 14px;
+        width: 44px;
+        height: 44px;
+        border-radius: 15px;
         display: grid;
         place-items: center;
-        color: white;
-        background: linear-gradient(135deg, var(--accent) 0%, #f0bd76 100%);
+        color: #fffaf2;
+        background: linear-gradient(135deg, var(--accent) 0%, #efbf79 100%);
       }
       .nav {
         display: flex;
@@ -115,48 +119,62 @@
         margin-bottom: 16px;
         padding: 14px 16px;
         border-radius: 20px;
-        background: rgba(31, 108, 120, 0.08);
-        border: 1px solid rgba(31, 108, 120, 0.16);
-        color: #23464e;
+        background: rgba(29, 103, 113, 0.08);
+        border: 1px solid rgba(29, 103, 113, 0.16);
+        color: #234752;
         font-size: 13px;
-        line-height: 1.65;
+        line-height: 1.7;
       }
       .hero {
         display: grid;
-        grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr);
+        grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
         gap: 18px;
         margin-bottom: 18px;
       }
       .card {
         background: var(--paper);
-        border: 1px solid rgba(255, 255, 255, 0.55);
-        border-radius: 28px;
+        border: 1px solid rgba(255, 255, 255, 0.58);
+        border-radius: 30px;
         box-shadow: var(--shadow);
       }
-      .hero-main { padding: 30px; }
+      .hero-main {
+        padding: 30px;
+        position: relative;
+        overflow: hidden;
+      }
+      .hero-main::after {
+        content: "";
+        position: absolute;
+        inset: auto -10% -18% 58%;
+        height: 160px;
+        background: linear-gradient(90deg, rgba(198, 103, 47, 0.24), rgba(29, 103, 113, 0.18));
+        filter: blur(30px);
+        pointer-events: none;
+      }
       .eyebrow {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 7px 11px;
+        padding: 7px 12px;
         border-radius: 999px;
-        background: rgba(29, 36, 48, 0.08);
+        background: rgba(24, 32, 43, 0.08);
         color: var(--muted);
         font-size: 12px;
         font-weight: 800;
         letter-spacing: 0.08em;
-        text-transform: uppercase;
       }
       h1 {
         margin: 16px 0 10px;
-        font-size: clamp(34px, 5vw, 56px);
-        line-height: 0.98;
+        font-size: clamp(34px, 5vw, 58px);
+        line-height: 1.02;
         font-family: var(--font-display);
       }
-      .hero-copy {
-        max-width: 780px;
-        color: #303947;
-        line-height: 1.7;
+      .hero-copy,
+      .section-copy,
+      .muted {
+        margin: 0;
+        color: var(--muted);
+        line-height: 1.75;
       }
       .run-id {
         margin-top: 12px;
@@ -173,40 +191,38 @@
         padding: 16px;
         border-radius: 20px;
         background: rgba(255, 255, 255, 0.58);
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        border: 1px solid rgba(24, 32, 43, 0.08);
       }
       .stat strong {
         display: block;
-        font-size: 22px;
         margin-bottom: 4px;
+        font-size: 22px;
       }
       .stat span {
         color: var(--muted);
         font-size: 13px;
+        line-height: 1.55;
       }
       .hero-side {
         padding: 22px;
-        display: flex;
-        flex-direction: column;
+        display: grid;
         gap: 14px;
       }
+      .side-block,
+      .section,
+      .route-panel {
+        padding: 24px;
+      }
       .side-block {
-        padding: 18px;
-        border-radius: 22px;
+        border-radius: 24px;
         background: rgba(255, 255, 255, 0.58);
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        border: 1px solid rgba(24, 32, 43, 0.08);
       }
       .side-block h3,
       .section h2,
       .route-panel h2 {
-        margin: 0 0 8px;
+        margin: 0 0 10px;
         font-family: var(--font-display);
-      }
-      .muted {
-        margin: 0;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.65;
       }
       .pill {
         display: inline-flex;
@@ -216,20 +232,20 @@
         font-size: 12px;
         font-weight: 800;
       }
-      .status-completed { background: rgba(44, 122, 75, 0.12); color: var(--ok); }
-      .status-running { background: rgba(182, 120, 24, 0.12); color: var(--warn); }
-      .status-queued { background: rgba(31, 108, 120, 0.12); color: var(--cool); }
-      .status-failed { background: rgba(166, 64, 50, 0.12); color: var(--danger); }
-      .route-quicklook-only { background: rgba(31, 108, 120, 0.12); color: var(--cool); }
-      .route-formal-blocked { background: rgba(166, 64, 50, 0.12); color: var(--danger); }
-      .route-provisional { background: rgba(182, 120, 24, 0.12); color: var(--warn); }
-      .route-formal-passed { background: rgba(44, 122, 75, 0.12); color: var(--ok); }
-      .route-reportable { background: rgba(44, 122, 75, 0.12); color: var(--ok); }
-      .route-reportable-with-warning { background: rgba(182, 120, 24, 0.12); color: var(--warn); }
-      .route-missing { background: rgba(34, 40, 49, 0.08); color: var(--muted); }
+      .status-completed { background: rgba(47, 123, 80, 0.12); color: var(--ok); }
+      .status-running { background: rgba(180, 122, 26, 0.12); color: var(--warn); }
+      .status-queued { background: rgba(29, 103, 113, 0.12); color: var(--teal); }
+      .status-failed { background: rgba(164, 69, 53, 0.12); color: var(--danger); }
+      .route-quicklook-only { background: rgba(29, 103, 113, 0.12); color: var(--teal); }
+      .route-formal-blocked { background: rgba(164, 69, 53, 0.12); color: var(--danger); }
+      .route-provisional { background: rgba(180, 122, 26, 0.12); color: var(--warn); }
+      .route-formal-passed,
+      .route-reportable { background: rgba(47, 123, 80, 0.12); color: var(--ok); }
+      .route-reportable-with-warning { background: rgba(180, 122, 26, 0.12); color: var(--warn); }
+      .route-missing { background: rgba(24, 32, 43, 0.08); color: var(--muted); }
       .layout {
         display: grid;
-        grid-template-columns: 340px minmax(0, 1fr);
+        grid-template-columns: 350px minmax(0, 1fr);
         gap: 18px;
         align-items: start;
       }
@@ -237,29 +253,21 @@
         display: grid;
         gap: 18px;
       }
-      .section,
-      .route-panel {
-        padding: 24px;
-      }
-      .section-copy {
-        margin: 0 0 18px;
-        color: var(--muted);
-        line-height: 1.7;
-      }
       .kv {
         display: grid;
-        grid-template-columns: minmax(120px, 0.9fr) minmax(0, 1.1fr);
+        grid-template-columns: minmax(110px, 0.9fr) minmax(0, 1.1fr);
         gap: 10px 14px;
       }
-      .kv div:nth-child(odd) {
+      .kv div:nth-child(odd),
+      .route-kv div:nth-child(odd) {
         color: var(--muted);
         font-size: 12px;
         letter-spacing: 0.06em;
-        text-transform: uppercase;
         font-weight: 800;
       }
-      .kv div:nth-child(even) {
-        line-height: 1.6;
+      .kv div:nth-child(even),
+      .route-kv div:nth-child(even) {
+        line-height: 1.65;
         word-break: break-word;
       }
       .download-list {
@@ -274,11 +282,11 @@
         padding: 13px 14px;
         border-radius: 18px;
         background: rgba(255, 255, 255, 0.58);
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        border: 1px solid rgba(24, 32, 43, 0.08);
         font-size: 14px;
       }
       .download-link:hover {
-        border-color: rgba(214, 107, 52, 0.28);
+        border-color: rgba(198, 103, 47, 0.28);
         color: var(--accent-deep);
       }
       .route-grid {
@@ -289,8 +297,8 @@
       .route-card {
         padding: 18px;
         border-radius: 24px;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(244, 238, 227, 0.72) 100%);
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.68) 0%, rgba(244, 238, 227, 0.74) 100%);
+        border: 1px solid rgba(24, 32, 43, 0.08);
       }
       .route-head {
         display: flex;
@@ -317,11 +325,11 @@
         padding: 12px;
         border-radius: 18px;
         background: rgba(255, 255, 255, 0.58);
-        border: 1px solid rgba(34, 40, 49, 0.06);
+        border: 1px solid rgba(24, 32, 43, 0.06);
       }
       .metric-box strong {
         display: block;
-        font-size: 18px;
+        font-size: 20px;
         margin-bottom: 4px;
       }
       .metric-box span {
@@ -332,83 +340,83 @@
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        margin-bottom: 12px;
+        margin-bottom: 14px;
       }
       .tag {
+        display: inline-flex;
+        align-items: center;
         padding: 6px 10px;
         border-radius: 999px;
-        background: rgba(31, 108, 120, 0.08);
-        color: #214850;
+        background: rgba(24, 32, 43, 0.08);
+        color: var(--muted);
         font-size: 12px;
         font-weight: 700;
       }
       .route-kv {
         display: grid;
-        grid-template-columns: 92px 1fr;
-        gap: 8px 12px;
-        font-size: 13px;
-      }
-      .route-kv div:nth-child(odd) {
-        color: var(--muted);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        font-size: 11px;
-        font-weight: 800;
+        grid-template-columns: minmax(86px, 0.8fr) minmax(0, 1.2fr);
+        gap: 10px 12px;
       }
       .media-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 14px;
       }
       .media-card {
-        padding: 16px;
-        border-radius: 22px;
+        padding: 14px;
+        border-radius: 24px;
         background: rgba(255, 255, 255, 0.58);
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        border: 1px solid rgba(24, 32, 43, 0.08);
       }
-      figure {
-        margin: 0;
-      }
+      figure { margin: 0; }
       figcaption {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
         margin-top: 10px;
         color: var(--muted);
         font-size: 13px;
         line-height: 1.6;
       }
-      .error {
-        padding: 16px;
-        border-radius: 20px;
-        background: rgba(166, 64, 50, 0.08);
-        border: 1px solid rgba(166, 64, 50, 0.16);
-      }
-      pre {
-        margin: 0;
-        white-space: pre-wrap;
-        word-break: break-word;
-        font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
-        font-size: 12px;
-        line-height: 1.6;
+      figcaption a {
+        color: var(--teal);
+        font-weight: 700;
       }
       .empty {
-        padding: 18px;
-        border-radius: 20px;
-        border: 1px dashed rgba(34, 40, 49, 0.16);
-        background: rgba(255, 255, 255, 0.4);
+        padding: 22px;
+        border-radius: 22px;
+        border: 1px dashed rgba(24, 32, 43, 0.18);
+        background: rgba(255, 250, 242, 0.5);
         color: var(--muted);
-        line-height: 1.7;
+        line-height: 1.75;
+      }
+      .error {
+        padding: 18px;
+        border-radius: 22px;
+        background: rgba(164, 69, 53, 0.08);
+        border: 1px solid rgba(164, 69, 53, 0.16);
+        color: var(--danger);
+        overflow: auto;
+      }
+      .error pre {
+        margin: 0;
+        font: inherit;
+        white-space: pre-wrap;
+        word-break: break-word;
       }
       @media (max-width: 1080px) {
         .hero,
         .layout,
         .hero-stats,
-        .route-grid { grid-template-columns: 1fr; }
+        .route-grid,
+        .media-grid { grid-template-columns: 1fr; }
       }
       @media (max-width: 760px) {
         .shell { padding: 20px 14px 40px; }
         .topbar { flex-direction: column; align-items: stretch; }
         .kv,
-        .route-metrics,
-        .route-kv { grid-template-columns: 1fr; }
+        .route-kv,
+        .route-metrics { grid-template-columns: 1fr; }
       }
     </style>
   </head>
@@ -419,9 +427,9 @@
           <span class="brand-mark">NB</span>
           <span>NiTi BFR</span>
         </a>
-        <nav class="nav" aria-label="Primary">
-          <a class="nav-link" href="{{ request.url_for('home') }}">Analysis Console</a>
-          <a class="nav-link active" href="{{ request.url_for('history') }}">History</a>
+        <nav class="nav" aria-label="主导航">
+          <a class="nav-link" href="{{ request.url_for('home') }}">分析台</a>
+          <a class="nav-link active" href="{{ request.url_for('history') }}">历史记录</a>
         </nav>
       </header>
 
@@ -431,57 +439,69 @@
 
       <section class="hero">
         <article class="card hero-main">
-          <span class="eyebrow">Run Detail</span>
+          <span class="eyebrow">单次任务详情</span>
           <h1>{{ run['run_name'] or run['video_filename'] }}</h1>
           <p class="hero-copy">
-            这个页面聚焦真实分析结果本身：输入摘要、对象级判定、A/B/C 路线卡片、曲线与质检图像、标注总览视频，以及最终可下载产物。
+            这个页面围绕一次真实分析任务组织信息：先看对象级摘要和流程状态，再下钻到 A / B / C 路线卡片、
+            标注总览视频、曲线图和 QC 图像，最后统一下载产物。
           </p>
-          <div class="run-id">Run ID: {{ run['id'] }}</div>
+          <div class="run-id">任务 ID：{{ run['id'] }}</div>
+
           <div class="hero-stats">
             <div class="stat">
               <strong>{{ preset_label(run['preset']) }}</strong>
-              <span>object type</span>
+              <span>对象类型</span>
             </div>
             <div class="stat">
-              <strong>{% if run['actual_mode'] %}{{ mode_label(run['actual_mode']) }}{% else %}pending{% endif %}</strong>
-              <span>actual output mode</span>
+              <strong>{% if run['actual_mode'] %}{{ mode_label(run['actual_mode']) }}{% else %}等待处理{% endif %}</strong>
+              <span>实际输出模式</span>
             </div>
             <div class="stat">
               <strong>{% if object_summary %}{{ fmt_temp(object_summary.get('object_formal_af95_c') if object_summary.get('object_formal_af95_c') is not none else object_summary.get('object_provisional_af95_c')) }}{% else %}-{% endif %}</strong>
-              <span>object Af-95 headline</span>
+              <span>对象级 Af-95 头部结果</span>
             </div>
             <div class="stat">
-              <strong>{% if summary and summary.get('frames') is not none %}{{ summary.get('frames') }}{% else %}-{% endif %}</strong>
-              <span>frames processed</span>
+              <strong>
+                {% if summary and summary.get('analyzed_frame_count') is not none %}
+                  {{ summary.get('analyzed_frame_count') }}
+                {% elif summary and summary.get('frames') is not none %}
+                  {{ summary.get('frames') }}
+                {% else %}
+                  -
+                {% endif %}
+              </strong>
+              <span>已处理帧数</span>
             </div>
           </div>
         </article>
 
         <aside class="card hero-side">
           <div class="side-block">
-            <h3>Run Status</h3>
-            <p style="margin: 0 0 10px;"><span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span></p>
+            <h3>任务状态</h3>
+            <p style="margin: 0 0 10px;"><span class="pill status-{{ run['status'] }}">{{ run_status_label(run['status']) }}</span></p>
             <p class="muted">{{ run_result_hint(run) }}</p>
           </div>
+
           <div class="side-block">
-            <h3>Formal Gate</h3>
+            <h3>formal gate</h3>
             <p class="muted">
               {% if object_summary %}
-                {{ object_summary.get('object_formal_gate_reason') or object_summary.get('formal_gate_reason') or 'No blocking reason recorded.' }}
+                {{ object_summary.get('object_formal_gate_reason') or object_summary.get('formal_gate_reason') or '当前没有记录到阻断原因。' }}
               {% else %}
-                {{ run['formal_gate_reason'] or 'Summary not available yet.' }}
+                {{ run['formal_gate_reason'] or '摘要尚未生成。' }}
               {% endif %}
             </p>
           </div>
+
           <div class="side-block">
-            <h3>Temperature Span</h3>
+            <h3>温度区间</h3>
             <p class="muted">
               {% if summary and summary.get('temperature_c_min') is not none and summary.get('temperature_c_max') is not none %}
-                {{ fmt_temp(summary.get('temperature_c_min')) }} to {{ fmt_temp(summary.get('temperature_c_max')) }}
+                {{ fmt_temp(summary.get('temperature_c_min')) }} 到 {{ fmt_temp(summary.get('temperature_c_max')) }}
               {% elif run['temperature_filename'] %}
-                Temperature CSV attached; series range pending.
+                已附带温度 CSV，温度序列范围等待解析。
               {% else %}
-                No temperature CSV attached.
+                本次任务未附带温度 CSV。
               {% endif %}
             </p>
           </div>
@@ -491,90 +511,83 @@
       <section class="layout">
         <aside class="stack">
           <article class="card section">
-            <h2>Input Summary</h2>
+            <h2>输入摘要</h2>
             <div class="kv">
-              <div>Created</div><div>{{ run['created_at'] }}</div>
-              <div>Video</div><div>{{ run['video_filename'] }}</div>
-              <div>Object Type</div><div>{{ preset_label(run['preset']) }}</div>
-              <div>Frame Stride</div><div>{{ frame_stride if frame_stride is not none else '-' }}</div>
-              <div>Temperature CSV</div><div>{{ run['temperature_filename'] or '-' }}</div>
-              <div>Requested Flow</div>
-              <div>
-                {% if run['temperature_filename'] %}
-                formal Af workflow requested by input
-                {% else %}
-                quicklook workflow requested by input
-                {% endif %}
-              </div>
+              <div>创建时间</div><div>{{ run['created_at'] }}</div>
+              <div>视频文件</div><div>{{ run['video_filename'] }}</div>
+              <div>对象类型</div><div>{{ preset_label(run['preset']) }}</div>
+              <div>抽帧步长</div><div>{{ frame_stride if frame_stride is not none else '-' }}</div>
+              <div>温度 CSV</div><div>{{ run['temperature_filename'] or '-' }}</div>
+              <div>提交流程</div><div>{{ requested_flow_label(run['temperature_filename']) }}</div>
             </div>
           </article>
 
           <article class="card section">
-            <h2>Object Summary</h2>
+            <h2>对象级摘要</h2>
             {% if object_summary %}
             <div class="kv">
-              <div>Reportability</div><div>{{ object_summary.get('object_reportability_status') or object_summary.get('reportability_status') or '-' }}</div>
-              <div>Formal Route</div>
+              <div>可报告状态</div><div>{{ object_summary.get('object_reportability_status') or object_summary.get('reportability_status') or '-' }}</div>
+              <div>正式路线</div>
               <div>
                 {% if object_summary.get('object_formal_route_alias') %}
-                Route {{ object_summary.get('object_formal_route_alias') }} · {{ object_summary.get('object_formal_metric_key') }}
+                路线 {{ object_summary.get('object_formal_route_alias') }} · {{ object_summary.get('object_formal_metric_key') }}
                 {% else %}
                 -
                 {% endif %}
               </div>
-              <div>Recommended</div>
+              <div>推荐路线</div>
               <div>
                 {% if object_summary.get('object_recommended_route_alias') %}
-                Route {{ object_summary.get('object_recommended_route_alias') }} · {{ object_summary.get('object_recommended_metric_key') }}
+                路线 {{ object_summary.get('object_recommended_route_alias') }} · {{ object_summary.get('object_recommended_metric_key') }}
                 {% elif object_summary.get('recommended_route_alias') %}
-                Route {{ object_summary.get('recommended_route_alias') }}
+                路线 {{ object_summary.get('recommended_route_alias') }}
                 {% else %}
                 -
                 {% endif %}
               </div>
-              <div>Provisional</div>
+              <div>临时路线</div>
               <div>
                 {% if object_summary.get('object_provisional_route_alias') %}
-                Route {{ object_summary.get('object_provisional_route_alias') }} · {{ object_summary.get('object_provisional_metric_key') }}
+                路线 {{ object_summary.get('object_provisional_route_alias') }} · {{ object_summary.get('object_provisional_metric_key') }}
                 {% elif object_summary.get('provisional_metric_label') %}
                 {{ object_summary.get('provisional_metric_label') }}
                 {% else %}
                 -
                 {% endif %}
               </div>
-              <div>Formal Af-95</div><div>{{ fmt_temp(object_summary.get('object_formal_af95_c') if object_summary.get('object_formal_af95_c') is not none else object_summary.get('af95_c')) }}</div>
-              <div>Formal Af-tan</div><div>{{ fmt_temp(object_summary.get('object_formal_aftan_c') if object_summary.get('object_formal_aftan_c') is not none else object_summary.get('aftan_c')) }}</div>
-              <div>Prov. Af-95</div><div>{{ fmt_temp(object_summary.get('object_provisional_af95_c') if object_summary.get('object_provisional_af95_c') is not none else object_summary.get('provisional_af95_c')) }}</div>
-              <div>Prov. Af-tan</div><div>{{ fmt_temp(object_summary.get('object_provisional_aftan_c') if object_summary.get('object_provisional_aftan_c') is not none else object_summary.get('provisional_aftan_c')) }}</div>
-              <div>Warnings</div><div>{% if object_summary.get('warning_codes') %}{{ object_summary.get('warning_codes') | join(', ') }}{% else %}-{% endif %}</div>
+              <div>正式 Af-95</div><div>{{ fmt_temp(object_summary.get('object_formal_af95_c') if object_summary.get('object_formal_af95_c') is not none else object_summary.get('af95_c')) }}</div>
+              <div>正式 Af-tan</div><div>{{ fmt_temp(object_summary.get('object_formal_aftan_c') if object_summary.get('object_formal_aftan_c') is not none else object_summary.get('aftan_c')) }}</div>
+              <div>临时 Af-95</div><div>{{ fmt_temp(object_summary.get('object_provisional_af95_c') if object_summary.get('object_provisional_af95_c') is not none else object_summary.get('provisional_af95_c')) }}</div>
+              <div>临时 Af-tan</div><div>{{ fmt_temp(object_summary.get('object_provisional_aftan_c') if object_summary.get('object_provisional_aftan_c') is not none else object_summary.get('provisional_aftan_c')) }}</div>
+              <div>警告代码</div><div>{% if object_summary.get('warning_codes') %}{{ object_summary.get('warning_codes') | join(', ') }}{% else %}-{% endif %}</div>
             </div>
             {% else %}
-            <div class="empty">{% if refresh %}对象级摘要生成中。{% else %}当前没有可展示的对象级摘要。{% endif %}</div>
+            <div class="empty">{% if refresh %}对象级摘要生成中。{% else %}当前还没有可展示的对象级摘要。{% endif %}</div>
             {% endif %}
           </article>
 
           <article class="card section">
-            <h2>Downloads</h2>
+            <h2>下载产物</h2>
             {% if download_files %}
             <div class="download-list">
               {% for item in download_files %}
               <a class="download-link" href="{{ item['url'] }}" target="_blank">
                 <span>{{ item['name'] }}</span>
-                <span>Open</span>
+                <span>打开</span>
               </a>
               {% endfor %}
             </div>
             {% else %}
-            <div class="empty">任务完成后，这里会列出 CSV、JSON、图像和视频等可下载产物。</div>
+            <div class="empty">任务完成后，这里会列出 CSV、JSON、图像和视频等输出文件。</div>
             {% endif %}
           </article>
         </aside>
 
         <div class="stack">
           <article class="card route-panel">
-            <h2>A / B / C Route Cards</h2>
+            <h2>A / B / C 路线卡片</h2>
             <p class="section-copy">
-              三条路线会并排保留，便于快速比较主量定义、formal 角色、Af 数值、gate 原因与 warning 状态。
+              三条路线会并排保留，便于快速比较主量定义、formal 角色、Af 数值、gate 原因和 warning 状态。
             </p>
             {% if route_results %}
             <div class="route-grid">
@@ -582,11 +595,12 @@
               <article class="route-card">
                 <div class="route-head">
                   <div>
-                    <h3>Route {{ route.get('alias') or '-' }}</h3>
+                    <h3>路线 {{ route.get('alias') or '-' }}</h3>
                     <div class="route-label">{{ route.get('display_label') or route.get('metric_key') or '-' }}</div>
                   </div>
-                  <span class="pill route-{{ route.get('reportability_status', 'missing')|replace('_', '-') }}">{{ route.get('reportability_label') or route.get('reportability_status') or 'missing' }}</span>
+                  <span class="pill route-{{ route.get('reportability_status', 'missing')|replace('_', '-') }}">{{ route.get('reportability_label') or route.get('reportability_status') or '暂无结果' }}</span>
                 </div>
+
                 <div class="route-metrics">
                   <div class="metric-box">
                     <strong>{{ fmt_temp(route.get('af95_c')) }}</strong>
@@ -597,25 +611,27 @@
                     <span>Af-tan</span>
                   </div>
                 </div>
+
                 <div class="tag-row">
                   {% if route.get('formal_role') %}
-                  <span class="tag">{{ route.get('formal_role') }}</span>
+                  <span class="tag">{{ route_formal_role_label(route.get('formal_role')) }}</span>
                   {% endif %}
                   {% if route.get('selected_as_formal') %}
-                  <span class="tag">object formal</span>
+                  <span class="tag">对象正式输出</span>
                   {% elif route.get('selected_as_primary') %}
-                  <span class="tag">object primary</span>
+                  <span class="tag">对象主推荐</span>
                   {% endif %}
                   {% if route.get('formal_candidate') %}
-                  <span class="tag">formal candidate</span>
+                  <span class="tag">formal 候选</span>
                   {% endif %}
                 </div>
+
                 <div class="route-kv">
-                  <div>Metric</div><div>{{ route.get('metric_key') or '-' }}</div>
-                  <div>Gate</div><div>{{ route.get('gate_reason') or '-' }}</div>
-                  <div>Warnings</div><div>{% if route.get('warning_codes') %}{{ route.get('warning_codes') | join(', ') }}{% else %}-{% endif %}</div>
-                  <div>Fit RMSE</div><div>{{ fmt_num(route.get('fit_rmse')) }}</div>
-                  <div>Monotonic</div><div>{{ fmt_num(route.get('monotonic_violation_fraction')) }}</div>
+                  <div>指标</div><div>{{ route.get('metric_key') or '-' }}</div>
+                  <div>门控原因</div><div>{{ route.get('gate_reason') or '-' }}</div>
+                  <div>警告代码</div><div>{% if route.get('warning_codes') %}{{ route.get('warning_codes') | join(', ') }}{% else %}-{% endif %}</div>
+                  <div>拟合 RMSE</div><div>{{ fmt_num(route.get('fit_rmse')) }}</div>
+                  <div>单调性偏离</div><div>{{ fmt_num(route.get('monotonic_violation_fraction')) }}</div>
                 </div>
               </article>
               {% endfor %}
@@ -626,9 +642,9 @@
           </article>
 
           <article class="card section">
-            <h2>Annotated Overview Video</h2>
+            <h2>标注总览视频</h2>
             <p class="section-copy">
-              这里优先展示带标注的总览视频，便于直接复核主体提取、主轴/中心线表现和时序稳定性。
+              这里优先展示带标注的总览视频，便于直接复核主体提取、主轴 / 中心线表现以及时序稳定性。
             </p>
             {% if media.video %}
               {% if media.video is mapping %}
@@ -638,43 +654,67 @@
                 {% set annotated_url = media.video %}
                 {% set annotated_name = 'annotated_overview.mp4' %}
               {% endif %}
-            <div class="media-card">
+            <figure class="media-card">
               <video controls preload="metadata">
                 <source src="{{ annotated_url }}">
-                浏览器不支持视频预览，请直接下载。
+                浏览器不支持视频预览，请直接打开下载。
               </video>
               <figcaption>
-                {{ annotated_name }}
-                <a href="{{ annotated_url }}" target="_blank">下载视频</a>
+                <span>{{ annotated_name }}</span>
+                <a href="{{ annotated_url }}" target="_blank">打开视频</a>
               </figcaption>
-            </div>
+            </figure>
             {% else %}
-            <div class="empty">标注总览视频尚未提供。模板已准备好直接展示 `annotated_video` 或下载列表中的视频文件。</div>
+            <div class="empty">标注总览视频尚未提供。任务完成后，这里会优先展示 `annotated_overview.mp4`。</div>
             {% endif %}
           </article>
 
           <article class="card section">
-            <h2>Curves & Images</h2>
+            <h2>分析过程视频</h2>
             <p class="section-copy">
-              曲线图和质检图像集中展示在同一区域，方便快速核对趋势、平台段、分割覆盖与对象几何定义是否稳定。
+              这里展示任务完成后自动生成的过程调试视频，用来回看每一帧上的关键几何提取、A / B / C 主量和时序趋势。
             </p>
-            {% if curve_files is defined and curve_files %}
+            {% if process_video %}
+            <figure class="media-card">
+              <video controls preload="metadata">
+                <source src="{{ process_video['url'] }}">
+                浏览器不支持视频预览，请直接打开下载。
+              </video>
+              <figcaption>
+                <span>{{ process_video['name'] }}</span>
+                <a href="{{ process_video['url'] }}" target="_blank">打开视频</a>
+              </figcaption>
+            </figure>
+            {% elif summary and summary.get('process_video_error') %}
+            <div class="empty">过程视频生成失败：{{ summary.get('process_video_error') }}</div>
+            {% else %}
+            <div class="empty">分析完成后，这里会自动展示 `analysis_process.mp4`。</div>
+            {% endif %}
+          </article>
+
+          <article class="card section">
+            <h2>曲线图与图像</h2>
+            <p class="section-copy">
+              曲线图和质检图像集中展示，便于快速核对恢复趋势、平台段、分割覆盖和对象几何定义是否稳定。
+            </p>
+
+            {% if curve_files %}
             <div class="media-grid" style="margin-bottom: 14px;">
               {% for item in curve_files %}
               <figure class="media-card">
                 <img src="{{ item['url'] }}" alt="{{ item['name'] }}">
-                <figcaption>{{ item['name'] }}</figcaption>
+                <figcaption><span>{{ item['name'] }}</span></figcaption>
               </figure>
               {% endfor %}
             </div>
             {% endif %}
 
-            {% if overview_images is defined and overview_images %}
-            <div class="media-grid" style="margin-bottom: 14px;">
-              {% for item in overview_images %}
+            {% if other_image_files %}
+            <div class="media-grid">
+              {% for item in other_image_files %}
               <figure class="media-card">
                 <img src="{{ item['url'] }}" alt="{{ item['name'] }}">
-                <figcaption>{{ item['name'] }}</figcaption>
+                <figcaption><span>{{ item['name'] }}</span></figcaption>
               </figure>
               {% endfor %}
             </div>
@@ -683,7 +723,7 @@
               {% for item in image_files %}
               <figure class="media-card">
                 <img src="{{ item['url'] }}" alt="{{ item['name'] }}">
-                <figcaption>{{ item['name'] }}</figcaption>
+                <figcaption><span>{{ item['name'] }}</span></figcaption>
               </figure>
               {% endfor %}
             </div>
@@ -694,7 +734,7 @@
 
           {% if run['error_text'] %}
           <article class="card section">
-            <h2>Execution Error</h2>
+            <h2>执行错误</h2>
             <div class="error">
               <pre>{{ run['error_text'] }}</pre>
             </div>

@@ -3,62 +3,75 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>NiTi BFR Analysis Console</title>
+    <title>NiTi BFR 分析台</title>
     <style>
       :root {
         --bg: #f3efe6;
-        --bg-2: #e6ddcf;
-        --paper: rgba(255, 252, 246, 0.86);
-        --paper-strong: #fffaf2;
-        --ink: #1d2430;
-        --muted: #5f685f;
-        --line: rgba(34, 40, 49, 0.12);
-        --accent: #d66b34;
-        --accent-deep: #8d3a1a;
-        --cool: #1f6c78;
-        --ok: #2c7a4b;
-        --warn: #b67818;
-        --danger: #a64032;
-        --shadow: 0 28px 70px rgba(48, 35, 20, 0.12);
-        --font-ui: "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-        --font-display: "Iowan Old Style", "Palatino Linotype", "Songti SC", serif;
+        --bg-2: #e3d8c4;
+        --paper: rgba(255, 251, 244, 0.88);
+        --paper-strong: #fffaf3;
+        --ink: #18202b;
+        --muted: #5d6770;
+        --line: rgba(24, 32, 43, 0.11);
+        --accent: #c6672f;
+        --accent-deep: #8e3d1e;
+        --teal: #1d6771;
+        --ok: #2f7b50;
+        --warn: #b47a1a;
+        --danger: #a44535;
+        --shadow: 0 28px 72px rgba(60, 42, 21, 0.12);
+        --font-ui: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+        --font-display: "Songti SC", "STSong", "Source Han Serif SC", serif;
       }
 
       * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
       body {
         margin: 0;
-        font-family: var(--font-ui);
         color: var(--ink);
+        font-family: var(--font-ui);
         background:
-          radial-gradient(circle at top left, rgba(214, 107, 52, 0.18), transparent 28%),
-          radial-gradient(circle at top right, rgba(31, 108, 120, 0.18), transparent 24%),
-          linear-gradient(180deg, var(--bg) 0%, #efe8db 100%);
+          radial-gradient(circle at top left, rgba(198, 103, 47, 0.18), transparent 28%),
+          radial-gradient(circle at 100% 0, rgba(29, 103, 113, 0.18), transparent 26%),
+          linear-gradient(180deg, var(--bg) 0%, #efe7da 100%);
       }
       a { color: inherit; text-decoration: none; }
-      .shell { max-width: 1220px; margin: 0 auto; padding: 28px 20px 56px; }
+      button, input, select { font: inherit; }
+      .shell {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 28px 20px 56px;
+      }
       .topbar {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 16px;
-        margin-bottom: 24px;
+        margin-bottom: 22px;
       }
       .brand {
         display: flex;
         align-items: center;
         gap: 12px;
         font-weight: 700;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.03em;
       }
       .brand-mark {
-        width: 42px;
-        height: 42px;
-        border-radius: 14px;
+        width: 44px;
+        height: 44px;
+        border-radius: 15px;
         display: grid;
         place-items: center;
-        background: linear-gradient(135deg, var(--accent) 0%, #f2c078 100%);
         color: #fffaf2;
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+        background: linear-gradient(135deg, var(--accent) 0%, #efbf79 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+      }
+      .brand-copy small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
       }
       .nav {
         display: flex;
@@ -73,6 +86,11 @@
         color: var(--muted);
         font-size: 14px;
         font-weight: 700;
+        transition: transform 180ms ease, background 180ms ease, color 180ms ease;
+      }
+      .nav-link:hover,
+      .nav-link:focus-visible {
+        transform: translateY(-1px);
       }
       .nav-link.active {
         background: var(--ink);
@@ -81,214 +99,275 @@
       }
       .hero {
         display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+        grid-template-columns: minmax(0, 1.16fr) minmax(320px, 0.84fr);
         gap: 18px;
-        margin-bottom: 22px;
+        margin-bottom: 18px;
       }
-      .hero-card,
-      .panel {
+      .card {
         position: relative;
         overflow: hidden;
         background: var(--paper);
+        border: 1px solid rgba(255, 255, 255, 0.6);
+        border-radius: 30px;
         backdrop-filter: blur(16px);
-        border: 1px solid rgba(255, 255, 255, 0.55);
-        border-radius: 28px;
         box-shadow: var(--shadow);
       }
-      .hero-card {
-        padding: 30px;
-        min-height: 280px;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
+      .hero-main {
+        padding: 32px;
+        min-height: 320px;
       }
-      .hero-card::after {
+      .hero-main::after {
         content: "";
         position: absolute;
-        inset: auto -4% -20% 42%;
-        height: 160px;
-        background: linear-gradient(90deg, rgba(214, 107, 52, 0.22), rgba(31, 108, 120, 0.16));
-        filter: blur(28px);
+        inset: auto -8% -18% 52%;
+        height: 180px;
+        background: linear-gradient(90deg, rgba(198, 103, 47, 0.28), rgba(29, 103, 113, 0.18));
+        filter: blur(34px);
         pointer-events: none;
       }
       .eyebrow {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 7px 11px;
+        padding: 7px 12px;
         border-radius: 999px;
-        background: rgba(29, 36, 48, 0.08);
+        background: rgba(24, 32, 43, 0.08);
         color: var(--muted);
         font-size: 12px;
         font-weight: 800;
         letter-spacing: 0.08em;
-        text-transform: uppercase;
       }
       h1 {
-        margin: 16px 0 12px;
+        margin: 18px 0 12px;
         font-family: var(--font-display);
-        font-size: clamp(36px, 5vw, 60px);
-        line-height: 0.98;
-        font-weight: 700;
+        font-size: clamp(38px, 5vw, 62px);
+        line-height: 1.02;
+        letter-spacing: 0.02em;
       }
       .hero-copy {
-        max-width: 760px;
+        max-width: 720px;
+        margin: 0;
+        color: #31404c;
         font-size: 16px;
-        line-height: 1.7;
-        color: #303947;
+        line-height: 1.78;
       }
-      .hero-grid {
+      .hero-steps {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 12px;
-        margin-top: 26px;
+        margin-top: 28px;
       }
-      .hero-metric {
-        padding: 14px 16px;
-        border-radius: 20px;
-        background: rgba(255, 250, 242, 0.72);
-        border: 1px solid rgba(34, 40, 49, 0.08);
-      }
-      .hero-metric strong {
-        display: block;
-        font-size: 26px;
-        margin-bottom: 4px;
-      }
-      .hero-metric span {
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .hero-aside {
-        padding: 24px;
-        display: flex;
-        flex-direction: column;
-        gap: 18px;
-      }
-      .aside-title {
-        margin: 0;
-        font-size: 14px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--muted);
-      }
-      .aside-block {
-        padding: 16px 18px;
+      .step {
+        padding: 16px 16px 18px;
         border-radius: 22px;
-        background: rgba(255, 255, 255, 0.54);
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        background: rgba(255, 251, 244, 0.72);
+        border: 1px solid rgba(24, 32, 43, 0.08);
       }
-      .aside-block strong {
+      .step-index {
+        display: inline-flex;
+        min-width: 28px;
+        height: 28px;
+        padding: 0 8px;
+        align-items: center;
+        justify-content: center;
+        border-radius: 999px;
+        margin-bottom: 10px;
+        background: rgba(198, 103, 47, 0.12);
+        color: var(--accent-deep);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .step strong {
         display: block;
         margin-bottom: 6px;
         font-size: 15px;
       }
-      .aside-block p,
-      .muted {
-        margin: 0;
+      .step span {
         color: var(--muted);
         font-size: 13px;
         line-height: 1.65;
       }
+      .hero-side {
+        padding: 24px;
+        display: grid;
+        gap: 14px;
+      }
+      .aside-card {
+        padding: 18px;
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.55);
+        border: 1px solid rgba(24, 32, 43, 0.08);
+      }
+      .aside-card h2,
+      .workspace-card h2,
+      .runs-card h2 {
+        margin: 0 0 10px;
+        font-size: 28px;
+        font-family: var(--font-display);
+      }
+      .aside-card p,
+      .muted {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
+      }
+      .metric-strip {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .metric {
+        padding: 16px;
+        border-radius: 20px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.72) 0%, rgba(245, 237, 225, 0.8) 100%);
+        border: 1px solid rgba(24, 32, 43, 0.08);
+      }
+      .metric strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 28px;
+      }
+      .metric span {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
       .workspace {
         display: grid;
-        grid-template-columns: minmax(0, 0.94fr) minmax(320px, 0.86fr);
+        grid-template-columns: minmax(0, 0.96fr) minmax(320px, 0.84fr);
         gap: 18px;
         align-items: start;
       }
-      .panel { padding: 26px; }
-      .panel h2 {
-        margin: 0 0 8px;
-        font-size: 26px;
-        font-family: var(--font-display);
+      .workspace-card,
+      .runs-card {
+        padding: 28px;
       }
       .section-copy {
         margin: 0 0 22px;
         color: var(--muted);
-        line-height: 1.7;
+        line-height: 1.75;
       }
-      form { margin: 0; }
-      .field-grid {
+      .form-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 16px;
       }
-      .field,
-      .upload {
+      .field {
         display: flex;
         flex-direction: column;
         gap: 8px;
       }
-      .upload { grid-column: 1 / -1; }
+      .field.full {
+        grid-column: 1 / -1;
+      }
       label {
         font-size: 12px;
         font-weight: 800;
         letter-spacing: 0.06em;
-        text-transform: uppercase;
         color: var(--muted);
       }
       input,
       select {
         width: 100%;
-        border: 1px solid rgba(34, 40, 49, 0.14);
+        border: 1px solid rgba(24, 32, 43, 0.14);
         border-radius: 18px;
         padding: 14px 15px;
-        background: var(--paper-strong);
         color: var(--ink);
-        font: inherit;
+        background: var(--paper-strong);
+        transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
       }
       input[type="file"] {
         padding: 12px;
+      }
+      input:focus-visible,
+      select:focus-visible {
+        outline: none;
+        border-color: rgba(29, 103, 113, 0.45);
+        box-shadow: 0 0 0 4px rgba(29, 103, 113, 0.12);
       }
       .field-note {
         color: var(--muted);
         font-size: 13px;
         line-height: 1.65;
       }
-      .mode-banner {
+      .preset-grid {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .preset-card {
+        padding: 16px;
+        border-radius: 22px;
+        background: rgba(255, 255, 255, 0.56);
+        border: 1px solid rgba(24, 32, 43, 0.08);
+      }
+      .preset-card strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 15px;
+      }
+      .hint-banner {
         margin-top: 18px;
-        padding: 14px 16px;
-        border-radius: 20px;
-        background: rgba(31, 108, 120, 0.08);
-        border: 1px solid rgba(31, 108, 120, 0.16);
-        color: #23464e;
+        padding: 16px 18px;
+        border-radius: 22px;
+        background: linear-gradient(135deg, rgba(29, 103, 113, 0.09) 0%, rgba(198, 103, 47, 0.08) 100%);
+        border: 1px solid rgba(29, 103, 113, 0.16);
+        color: #254752;
         font-size: 13px;
-        line-height: 1.65;
+        line-height: 1.7;
       }
       .actions {
+        margin-top: 22px;
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 12px;
-        margin-top: 22px;
         flex-wrap: wrap;
       }
       .submit {
         border: none;
         border-radius: 999px;
-        padding: 14px 22px;
-        min-width: 180px;
-        background: linear-gradient(135deg, var(--ink) 0%, #324154 100%);
+        padding: 14px 24px;
+        min-width: 192px;
+        background: linear-gradient(135deg, var(--ink) 0%, #324153 100%);
         color: white;
-        font: inherit;
         font-weight: 800;
         cursor: pointer;
+        transition: transform 180ms ease, filter 180ms ease;
       }
-      .submit:hover { filter: brightness(1.04); }
+      .submit:hover,
+      .submit:focus-visible {
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+      }
+      .runs-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 12px;
+        margin-bottom: 18px;
+      }
+      .runs-head a {
+        color: var(--teal);
+        font-weight: 700;
+      }
       .run-list {
         display: grid;
         gap: 14px;
       }
       .run-item {
         padding: 18px;
-        border-radius: 22px;
+        border-radius: 24px;
         background: rgba(255, 255, 255, 0.58);
-        border: 1px solid rgba(34, 40, 49, 0.08);
+        border: 1px solid rgba(24, 32, 43, 0.08);
       }
-      .run-head {
+      .run-top {
         display: flex;
         justify-content: space-between;
-        gap: 12px;
         align-items: start;
+        gap: 12px;
         margin-bottom: 10px;
       }
       .run-title {
@@ -297,10 +376,10 @@
       }
       .run-title a:hover { color: var(--accent-deep); }
       .run-meta {
-        margin-top: 6px;
         display: flex;
-        gap: 10px;
         flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 6px;
         color: var(--muted);
         font-size: 13px;
       }
@@ -313,25 +392,25 @@
         font-weight: 800;
         letter-spacing: 0.03em;
       }
-      .status-completed { background: rgba(44, 122, 75, 0.12); color: var(--ok); }
-      .status-running { background: rgba(182, 120, 24, 0.12); color: var(--warn); }
-      .status-queued { background: rgba(31, 108, 120, 0.12); color: var(--cool); }
-      .status-failed { background: rgba(166, 64, 50, 0.12); color: var(--danger); }
+      .status-completed { background: rgba(47, 123, 80, 0.12); color: var(--ok); }
+      .status-running { background: rgba(180, 122, 26, 0.12); color: var(--warn); }
+      .status-queued { background: rgba(29, 103, 113, 0.12); color: var(--teal); }
+      .status-failed { background: rgba(164, 69, 53, 0.12); color: var(--danger); }
       .route-strip {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
-        margin-top: 12px;
+        margin-top: 14px;
       }
       .route-mini {
         padding: 12px;
-        border-radius: 16px;
-        background: rgba(243, 239, 230, 0.92);
-        border: 1px solid rgba(34, 40, 49, 0.06);
+        border-radius: 18px;
+        background: rgba(243, 239, 230, 0.9);
+        border: 1px solid rgba(24, 32, 43, 0.06);
       }
       .route-mini strong {
         display: block;
-        margin-bottom: 5px;
+        margin-bottom: 4px;
         font-size: 13px;
       }
       .route-mini span {
@@ -341,26 +420,35 @@
         line-height: 1.55;
       }
       .empty {
-        padding: 26px;
+        padding: 24px;
         border-radius: 24px;
-        border: 1px dashed rgba(34, 40, 49, 0.2);
+        border: 1px dashed rgba(24, 32, 43, 0.2);
         background: rgba(255, 250, 242, 0.5);
         color: var(--muted);
-        line-height: 1.7;
+        line-height: 1.75;
       }
-      @media (max-width: 980px) {
+      @media (prefers-reduced-motion: reduce) {
+        * { scroll-behavior: auto; }
+        .nav-link,
+        .submit,
+        input,
+        select { transition: none; }
+      }
+      @media (max-width: 1040px) {
         .hero,
         .workspace,
-        .field-grid,
-        .hero-grid,
+        .hero-steps,
         .route-strip { grid-template-columns: 1fr; }
-        .hero-card { min-height: auto; }
       }
-      @media (max-width: 640px) {
-        .shell { padding: 20px 14px 40px; }
+      @media (max-width: 760px) {
+        .shell { padding: 20px 14px 42px; }
         .topbar,
-        .run-head,
-        .actions { flex-direction: column; align-items: stretch; }
+        .actions,
+        .run-top,
+        .runs-head { flex-direction: column; align-items: stretch; }
+        .form-grid,
+        .preset-grid,
+        .metric-strip { grid-template-columns: 1fr; }
         .submit { width: 100%; }
       }
     </style>
@@ -370,116 +458,157 @@
       <header class="topbar">
         <a class="brand" href="{{ request.url_for('home') }}">
           <span class="brand-mark">NB</span>
-          <span>NiTi BFR</span>
+          <span class="brand-copy">
+            NiTi BFR
+            <small>视频分析前端</small>
+          </span>
         </a>
-        <nav class="nav" aria-label="Primary">
-          <a class="nav-link active" href="{{ request.url_for('home') }}">Analysis Console</a>
-          <a class="nav-link" href="{{ request.url_for('history') }}">History</a>
+        <nav class="nav" aria-label="主导航">
+          <a class="nav-link active" href="{{ request.url_for('home') }}">分析台</a>
+          <a class="nav-link" href="{{ request.url_for('history') }}">历史记录</a>
         </nav>
       </header>
 
       <section class="hero">
-        <article class="hero-card">
-          <div>
-            <span class="eyebrow">Real-use Workflow</span>
-            <h1>Upload, analyze, review routes A/B/C.</h1>
-            <p class="hero-copy">
-              首页只保留真实视频分析的最小提交面：
-              选择对象类型，上传视频，设置抽帧步长，如有温度同步再附带 CSV，随后在结果页查看对象级摘要、路线卡片和产物下载。
-            </p>
-          </div>
-          <div class="hero-grid">
-            <div class="hero-metric">
-              <strong>2</strong>
-              <span>object types: wire-like / braided-like</span>
+        <article class="card hero-main">
+          <span class="eyebrow">真实分析工作流</span>
+          <h1>上传视频，比较 A / B / C，统一在结果页复核。</h1>
+          <p class="hero-copy">
+            首页只保留真实视频分析需要的最小输入。你可以选择对象类型、填写任务名称、上传视频、设置抽帧步长，
+            如果有同步温度数据，再附带 CSV。系统会在结果页统一展示对象级摘要、A / B / C 路线卡片、标注视频和下载产物。
+          </p>
+
+          <div class="hero-steps">
+            <div class="step">
+              <span class="step-index">01</span>
+              <strong>提交输入</strong>
+              <span>选择 `wire-like` 或 `braided-like`，上传视频并设置抽帧步长。</span>
             </div>
-            <div class="hero-metric">
-              <strong>A/B/C</strong>
-              <span>parallel route comparison preserved</span>
+            <div class="step">
+              <span class="step-index">02</span>
+              <strong>判断流程</strong>
+              <span>没有温度 CSV 时按 quicklook 进入；有温度同步时走 formal Af 提交流程。</span>
             </div>
-            <div class="hero-metric">
-              <strong>{% if runs %}{{ runs|length }}{% else %}0{% endif %}</strong>
-              <span>recent analysis sessions on record</span>
+            <div class="step">
+              <span class="step-index">03</span>
+              <strong>回看结果</strong>
+              <span>在详情页统一查看对象级结果、路线差异、QC 图像和标注总览视频。</span>
             </div>
           </div>
         </article>
 
-        <aside class="hero-aside hero-card">
-          <div>
-            <p class="aside-title">Submission Notes</p>
+        <aside class="card hero-side">
+          <div class="aside-card">
+            <h2>面板概览</h2>
+            <p>界面已按真实分析场景重排，提交区和最近任务区分栏展示，减少来回跳转。</p>
           </div>
-          <div class="aside-block">
-            <strong>视频必填</strong>
-            <p>上传真实待分析视频。样例运行入口已从用户界面移除。</p>
+
+          <div class="metric-strip">
+            <div class="metric">
+              <strong>2</strong>
+              <span>对象类型：细丝类 / 编织类</span>
+            </div>
+            <div class="metric">
+              <strong>A / B / C</strong>
+              <span>三条路线长期保留并行比较</span>
+            </div>
+            <div class="metric">
+              <strong>{% if runs %}{{ runs|length }}{% else %}0{% endif %}</strong>
+              <span>最近任务摘要</span>
+            </div>
+            <div class="metric">
+              <strong>quicklook / Af</strong>
+              <span>同一入口自动切换提交流程</span>
+            </div>
           </div>
-          <div class="aside-block">
-            <strong>抽帧步长可控</strong>
-            <p>用 `frame_stride` 控制处理密度，便于在速度与时序分辨率之间权衡。</p>
-          </div>
-          <div class="aside-block">
-            <strong>温度 CSV 可选</strong>
-            <p>附带温度数据时，前端会按 formal Af 工作流提交；是否真正放行以后端 formal gate 为准。</p>
+
+          <div class="aside-card">
+            <p>前端不会把 quicklook 误写成正式结论；是否可以形成正式 Af，仍以后端 formal gate 放行为准。</p>
           </div>
         </aside>
       </section>
 
       <section class="workspace">
-        <article class="panel">
-          <h2>Start Analysis</h2>
+        <article class="card workspace-card">
+          <h2>开始新任务</h2>
           <p class="section-copy">
-            仅保留真实分析所需输入。对象类型用于选择几何路线，视频是主输入，`frame_stride` 负责采样密度，温度 CSV 仅在你拥有同步数据时提交。
+            这里保留的都是提交真实分析所需字段。任务名称可选，但推荐填写，便于历史页和结果页快速识别本次分析。
           </p>
+
           <form action="{{ request.url_for('create_run') }}" method="post" enctype="multipart/form-data">
             <input id="requested_mode" name="requested_mode" type="hidden" value="quicklook">
-            <div class="field-grid">
+
+            <div class="form-grid">
               <div class="field">
-                <label for="preset">Object Type</label>
+                <label for="preset">对象类型</label>
                 <select id="preset" name="preset">
                   <option value="wire_like">{{ preset_label('wire_like') }}</option>
                   <option value="braided_like">{{ preset_label('braided_like') }}</option>
                 </select>
-                <div class="field-note">对象定义仍保持 `wire-like` 与 `braided-like` 两条长期路线边界。</div>
+                <div class="field-note">对象定义保持长期方法学边界，不针对单个视频临时改写。</div>
               </div>
 
               <div class="field">
-                <label for="frame_stride">Frame Stride</label>
+                <label for="run_name">任务名称（可选）</label>
+                <input id="run_name" name="run_name" type="text" placeholder="例如：批次 03 第一次升温复核">
+                <div class="field-note">不填时会默认使用视频文件名作为展示标题。</div>
+              </div>
+
+              <div class="field">
+                <label for="frame_stride">抽帧步长</label>
                 <input id="frame_stride" name="frame_stride" type="number" min="1" step="1" value="1" inputmode="numeric">
-                <div class="field-note">推荐从 `1` 开始；如需更快预览，可增大抽帧步长。</div>
+                <div class="field-note">推荐从 `1` 开始；如果只是先看趋势，可适当增大以加快处理。</div>
               </div>
 
-              <div class="upload">
-                <label for="video_file">Video File</label>
+              <div class="field">
+                <label for="video_file">视频文件</label>
                 <input id="video_file" name="video_file" type="file" accept="video/*" required>
+                <div class="field-note">首页已不再暴露示例入口，只保留真实视频提交。</div>
               </div>
 
-              <div class="upload">
-                <label for="temperature_file">Temperature CSV (Optional)</label>
+              <div class="field full">
+                <label for="temperature_file">温度 CSV（可选）</label>
                 <input id="temperature_file" name="temperature_file" type="file" accept=".csv,text/csv">
-                <div class="field-note">无温度同步时默认以 quicklook 提交；有温度同步时自动切到 formal Af 提交流程。</div>
+                <div class="field-note">如果没有同步温度数据，系统会按 quicklook 提交并在结果页明确标注。</div>
+              </div>
+
+              <div class="preset-grid">
+                <div class="preset-card">
+                  <strong>{{ preset_label('wire_like') }}</strong>
+                  <div class="muted">{{ preset_description('wire_like') }}</div>
+                </div>
+                <div class="preset-card">
+                  <strong>{{ preset_label('braided_like') }}</strong>
+                  <div class="muted">{{ preset_description('braided_like') }}</div>
+                </div>
               </div>
             </div>
 
-            <div class="mode-banner" id="mode_hint">
-              未提供温度 CSV：将按 quicklook 工作流提交。
+            <div class="hint-banner" id="mode_hint" aria-live="polite">
+              当前未附带温度 CSV：将按快速预览 quicklook 提交流程进入，结果页只做趋势与 QC 复核，不直接视为正式 Af。
             </div>
 
             <div class="actions">
-              <p class="muted">结果页将聚焦对象级摘要、A/B/C 路线结果、曲线图和可下载产物。</p>
-              <button class="submit" type="submit">Launch Analysis</button>
+              <p class="muted">提交后会立即跳转到结果详情页，后续状态变化会在同一页自动更新。</p>
+              <button class="submit" type="submit">提交分析任务</button>
             </div>
           </form>
         </article>
 
-        <aside class="panel">
-          <h2>Recent Runs</h2>
-          <p class="section-copy">
-            最近提交的分析任务会直接回到同一套结果视图，连续追踪同一条真实分析流程。
-          </p>
+        <aside class="card runs-card">
+          <div class="runs-head">
+            <div>
+              <h2>最近任务</h2>
+              <p class="section-copy" style="margin: 0;">最近提交的任务会集中显示在这里，方便继续回看同一条真实分析链路。</p>
+            </div>
+            <a href="{{ request.url_for('history') }}">查看全部历史</a>
+          </div>
+
           {% if runs %}
           <div class="run-list">
             {% for run in runs %}
             <article class="run-item">
-              <div class="run-head">
+              <div class="run-top">
                 <div>
                   <h3 class="run-title">
                     <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">{{ run["run_name"] or run["video_filename"] }}</a>
@@ -487,31 +616,30 @@
                   <div class="run-meta">
                     <span>{{ run["created_at"][:19].replace("T", " ") }}</span>
                     <span>{{ preset_label(run['preset']) }}</span>
-                    {% if run["temperature_filename"] %}
-                    <span>with temperature CSV</span>
-                    {% else %}
-                    <span>video only</span>
-                    {% endif %}
+                    <span>{{ requested_flow_label(run["temperature_filename"]) }}</span>
                   </div>
                 </div>
-                <span class="pill status-{{ run['status'] }}">{{ run["status"] }}</span>
+                <span class="pill status-{{ run['status'] }}">{{ run["status_label"] }}</span>
               </div>
+
               <p class="muted">{{ run_result_hint(run) }}</p>
+
               {% if run["summary"] and (run["summary"].get("object_formal_af95_c") is not none or run["summary"].get("object_provisional_af95_c") is not none) %}
               <div class="run-meta">
                 {% if run["summary"].get("object_formal_af95_c") is not none %}
-                <span>Formal Af-95 {{ "%.2f"|format(run["summary"].get("object_formal_af95_c")) }} C</span>
+                <span>正式 Af-95 {{ "%.2f"|format(run["summary"].get("object_formal_af95_c")) }} C</span>
                 {% endif %}
                 {% if run["summary"].get("object_provisional_af95_c") is not none %}
-                <span>Provisional Af-95 {{ "%.2f"|format(run["summary"].get("object_provisional_af95_c")) }} C</span>
+                <span>临时 Af-95 {{ "%.2f"|format(run["summary"].get("object_provisional_af95_c")) }} C</span>
                 {% endif %}
               </div>
               {% endif %}
+
               {% if run["route_results_preview"] %}
               <div class="route-strip">
                 {% for route in run["route_results_preview"] %}
                 <div class="route-mini">
-                  <strong>Route {{ route["alias"] }}</strong>
+                  <strong>路线 {{ route["alias"] }}</strong>
                   <span>{{ route["display_label"] or route["metric_key"] or "-" }}</span>
                   <span>
                     {% if route["af95_c"] is not none %}
@@ -528,30 +656,29 @@
             {% endfor %}
           </div>
           {% else %}
-          <div class="empty">还没有分析记录。上传第一条真实视频后，最近任务会显示在这里。</div>
+          <div class="empty">
+            还没有分析任务。上传第一条视频后，这里会自动展示最近记录，并可继续进入历史页统一管理。
+          </div>
           {% endif %}
         </aside>
       </section>
     </div>
 
     <script>
-      (() => {
-        const tempInput = document.getElementById("temperature_file");
-        const modeInput = document.getElementById("requested_mode");
-        const modeHint = document.getElementById("mode_hint");
-        if (!tempInput || !modeInput || !modeHint) return;
+      const temperatureInput = document.getElementById("temperature_file");
+      const requestedModeInput = document.getElementById("requested_mode");
+      const modeHint = document.getElementById("mode_hint");
 
-        const syncMode = () => {
-          const hasTemp = !!(tempInput.files && tempInput.files.length);
-          modeInput.value = hasTemp ? "formal_af" : "quicklook";
-          modeHint.textContent = hasTemp
-            ? "已检测到温度 CSV：将按 formal Af 工作流提交，最终是否正式放行仍以后端 gate 为准。"
-            : "未提供温度 CSV：将按 quicklook 工作流提交。";
-        };
+      function updateModeHint() {
+        const hasTemperature = Boolean(temperatureInput.files && temperatureInput.files.length > 0);
+        requestedModeInput.value = hasTemperature ? "formal_af" : "quicklook";
+        modeHint.textContent = hasTemperature
+          ? "已附带温度 CSV：将按正式 Af 提交流程进入。是否真正形成正式 Af，仍以后端 formal gate 放行为准。"
+          : "当前未附带温度 CSV：将按快速预览 quicklook 提交流程进入，结果页只做趋势与 QC 复核，不直接视为正式 Af。";
+      }
 
-        tempInput.addEventListener("change", syncMode);
-        syncMode();
-      })();
+      temperatureInput.addEventListener("change", updateModeHint);
+      updateModeHint();
     </script>
   </body>
 </html>

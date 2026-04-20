@@ -36,6 +36,7 @@ from .pipeline import (
     analyze_video,
     compute_braided_acceptance,
 )
+from .process_debug_video import render_process_debug_video
 from .synth_braided import (
     BraidedSyntheticModel,
     BraidedSyntheticModelConfig,
@@ -54,11 +55,12 @@ DB_PATH = DATA_ROOT / "runs.db"
 CONFIG_PATH = ROOT / "configs" / "minimal.yaml"
 PROJECT_OUTPUTS_ROOT = ROOT / "outputs"
 ANNOTATED_VIDEO_FILENAME = "annotated_overview.mp4"
+PROCESS_VIDEO_FILENAME = "analysis_process.mp4"
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 RUNS_ROOT.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="NiTi BFR Analysis Console")
+app = FastAPI(title="NiTi BFR 分析台")
 app.mount("/files", StaticFiles(directory=str(DATA_ROOT)), name="files")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -91,44 +93,56 @@ SAMPLE_RUNS: dict[str, dict[str, str]] = {
 
 PRESET_DISPLAY: dict[str, dict[str, str]] = {
     "wire_like": {
-        "label": "wire-like",
+        "label": "细丝类 wire-like",
         "family": "wire",
-        "description": "细丝 / 针样对象，主 formal 量是 kappa_fit。",
+        "description": "细丝 / 针样对象，长期保留 A / B / C 三条分析路线，当前主 formal 量是 kappa_fit。",
     },
     "demo": {
-        "label": "wire-like synthetic demo",
+        "label": "细丝类合成示例",
         "family": "wire",
-        "description": "仓库内置的 wire-like 合成 demo。",
+        "description": "仓库内置的细丝类合成示例数据。",
     },
     "braided_like": {
-        "label": "braided-like",
+        "label": "编织类 braided-like",
         "family": "braided",
-        "description": "编织网状器械对象，quicklook 看 A/B/C 与 body-only QC。",
+        "description": "编织网状器械对象，quicklook 查看 A / B / C 与 body-only 质检。",
     },
     "braided_demo": {
-        "label": "braided synthetic demo",
+        "label": "编织类合成示例",
         "family": "braided",
-        "description": "仓库内置的 braided 合成 demo。",
+        "description": "仓库内置的编织类合成示例数据。",
     },
 }
 
 MODE_DISPLAY: dict[str, dict[str, str]] = {
     "quicklook": {
-        "label": "quicklook",
+        "label": "快速预览 quicklook",
         "description": "只给几何 / QC 快检，不自动等同于正式 Af 结论。",
     },
     "formal_af": {
-        "label": "formal Af",
+        "label": "正式 Af",
         "description": "需要温度同步，并且 formal gate 放行后才成立。",
     },
 }
 
 ROUTE_STATUS_LABELS = {
-    "quicklook_only": "quicklook only",
-    "formal_blocked": "formal blocked",
-    "provisional": "provisional",
-    "formal_passed": "formal passed",
-    "missing": "missing",
+    "quicklook_only": "仅快速预览",
+    "formal_blocked": "formal 未放行",
+    "provisional": "临时结果",
+    "formal_passed": "formal 已放行",
+    "missing": "暂无结果",
+}
+RUN_STATUS_LABELS = {
+    "queued": "排队中",
+    "running": "处理中",
+    "completed": "已完成",
+    "failed": "失败",
+}
+ROUTE_FORMAL_ROLE_LABELS = {
+    "object_formal": "对象正式输出",
+    "object_primary": "对象主推荐",
+    "formal_candidate": "formal 候选",
+    "route_result": "路线结果",
 }
 WIRE_ROUTE_SPECS: dict[str, dict[str, Any]] = {
     "A": {
@@ -231,6 +245,24 @@ def _mode_description(mode: str | None) -> str:
     return MODE_DISPLAY.get(mode, {}).get("description", "")
 
 
+def _run_status_label(status: str | None) -> str:
+    if status is None:
+        return "-"
+    return RUN_STATUS_LABELS.get(status, status)
+
+
+def _route_formal_role_label(role: str | None) -> str:
+    if role is None:
+        return "-"
+    return ROUTE_FORMAL_ROLE_LABELS.get(role, role.replace("_", " "))
+
+
+def _requested_flow_label(temperature_filename: str | None) -> str:
+    if temperature_filename:
+        return "正式 Af 提交流程"
+    return "快速预览提交流程"
+
+
 def _requested_mode_for_run(temperature_filename: str | None) -> str:
     return "formal_af" if temperature_filename else "quicklook"
 
@@ -250,11 +282,11 @@ def _run_result_hint(run: sqlite3.Row | dict[str, Any]) -> str:
     if actual_mode == "formal_af":
         return "formal Af 已放行。"
     if requested_mode == "formal_af" and reportability_status == "reportable_with_warning":
-        return f"formal Af 未放行，但已给出带警告的 provisional 结果（{gate_reason or 'gate_closed'}）。"
+        return f"formal Af 未放行，但已给出带警告的临时结果（{gate_reason or 'gate_closed'}）。"
     if requested_mode == "formal_af" and actual_mode == "quicklook":
-        return f"formal Af 未放行，当前按 quicklook 展示（{gate_reason or 'gate_closed'}）。"
+        return f"formal Af 未放行，当前按快速预览 quicklook 展示（{gate_reason or 'gate_closed'}）。"
     if actual_mode == "quicklook":
-        return "当前结果是 quicklook。"
+        return "当前结果是快速预览 quicklook。"
     return gate_reason or "-"
 
 
@@ -752,30 +784,30 @@ def _benchmark_qc_highlights(summary: dict[str, Any], family: str) -> list[dict[
     if family == "wire":
         wire_qc = summary.get("wire_qc") or {}
         return [
-            {"label": "quality median", "value": summary.get("quality_median", wire_qc.get("quality_median"))},
+            {"label": "质量中位数", "value": summary.get("quality_median", wire_qc.get("quality_median"))},
             {
-                "label": "route A endpoint jump p95",
+                "label": "A 路线端点跳变 P95",
                 "value": wire_qc.get("route_a_endpoint_jump_p95_px"),
                 "suffix": "px",
             },
             {
-                "label": "centerline pts median",
+                "label": "中心线点数中位数",
                 "value": wire_qc.get("centerline_points_median"),
             },
-            {"label": "quadratic fraction", "value": wire_qc.get("quadratic_fraction")},
+            {"label": "二次拟合占比", "value": wire_qc.get("quadratic_fraction")},
         ]
     return [
-        {"label": "quality median", "value": summary.get("quality_median")},
+        {"label": "质量中位数", "value": summary.get("quality_median")},
         {
-            "label": "attachment leak",
+            "label": "附件泄漏比例",
             "value": summary.get("body_mask_attachment_leak_fraction"),
         },
         {
-            "label": "centerline disagreement",
+            "label": "中心线分歧",
             "value": summary.get("centerline_disagreement_median"),
         },
         {
-            "label": "endpoint jump p95",
+            "label": "端点跳变 P95",
             "value": summary.get("endpoint_jump_p95_px"),
             "suffix": "px",
         },
@@ -886,9 +918,9 @@ def _normalize_benchmark_entry(
         fallback=detail["output_dir"] if detail is not None else PROJECT_OUTPUTS_ROOT,
     )
     source_label = (
-        "suite summary + analysis_metrics"
+        "汇总文件 + analysis_metrics"
         if source_kind == "suite_summary" and detail_summary is not None
-        else "suite summary"
+        else "汇总文件"
         if source_kind == "suite_summary"
         else "analysis_metrics"
     )
@@ -1009,7 +1041,7 @@ def _build_benchmark_family_view(family: str) -> dict[str, Any]:
         "label": BENCHMARK_FAMILY_DISPLAY[family]["label"],
         "suite_available": bool(isinstance(suite_rows, list) and suite_rows),
         "suite_path": str(suite_path),
-        "source_label": "suite summary preferred" if isinstance(suite_rows, list) and suite_rows else "analysis_metrics fallback",
+        "source_label": "优先读取汇总文件" if isinstance(suite_rows, list) and suite_rows else "回退到 analysis_metrics",
         "benchmark_count": len(benchmarks),
         "benchmarks": benchmarks,
         "route_rollups": route_rollups,
@@ -1044,6 +1076,8 @@ def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
         payload["analyzed_frame_count"] = summary.get("analyzed_frame_count")
         payload["original_frame_count"] = summary.get("original_frame_count")
     payload["requested_mode"] = payload.get("requested_mode") or _requested_mode_for_run(payload.get("temperature_filename"))
+    payload["status_label"] = _run_status_label(payload.get("status"))
+    payload["can_delete"] = payload.get("status") not in {"queued", "running"}
     return payload
 
 
@@ -1052,6 +1086,9 @@ templates.env.globals.update(
     preset_description=_preset_description,
     mode_label=_mode_label,
     mode_description=_mode_description,
+    run_status_label=_run_status_label,
+    route_formal_role_label=_route_formal_role_label,
+    requested_flow_label=_requested_flow_label,
     run_result_hint=_run_result_hint,
 )
 
@@ -1078,12 +1115,21 @@ def home(request: Request) -> Any:
 @app.get("/history")
 def history(request: Request) -> Any:
     runs = [_build_run_card(run) for run in _list_runs(limit=200)]
+    status_counts = Counter(run["status"] for run in runs)
     return templates.TemplateResponse(
         "history.html",
         {
             "runs": runs,
+            "history_stats": {
+                "total": len(runs),
+                "completed": status_counts.get("completed", 0),
+                "running": status_counts.get("running", 0) + status_counts.get("queued", 0),
+                "failed": status_counts.get("failed", 0),
+            },
+            "deleted": request.query_params.get("deleted") == "1",
             "preset_label": _preset_label,
             "mode_label": _mode_label,
+            "run_status_label": _run_status_label,
             "run_result_hint": _run_result_hint,
             "request": request,
         },
@@ -1215,6 +1261,18 @@ async def create_sample_run(
     return RedirectResponse(url=str(request.url_for("run_detail", run_id=run_id)), status_code=303)
 
 
+@app.post("/runs/{run_id}/delete")
+def delete_run(request: Request, run_id: str) -> RedirectResponse:
+    run = _get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    if run["status"] in {"queued", "running"}:
+        raise HTTPException(status_code=409, detail="run is still active")
+    _delete_run_assets(run_id, Path(run["run_dir"]))
+    _delete_run_record(run_id)
+    return RedirectResponse(url=f"{request.url_for('history')}?deleted=1", status_code=303)
+
+
 @app.get("/runs/{run_id}")
 def run_detail(request: Request, run_id: str) -> Any:
     run_row = _get_run(run_id)
@@ -1249,9 +1307,15 @@ def run_detail(request: Request, run_id: str) -> Any:
             if path.suffix.lower() in {".csv", ".json"}:
                 download_files.append({"name": path.name, "url": str(request.url_for("files", path=rel))})
     annotated_video = None
+    process_video = None
     if summary and summary.get("annotated_video_filename"):
         annotated_video = next(
             (item for item in video_files if item["name"] == summary["annotated_video_filename"]),
+            None,
+        )
+    if summary and summary.get("process_video_filename"):
+        process_video = next(
+            (item for item in video_files if item["name"] == summary["process_video_filename"]),
             None,
         )
 
@@ -1266,12 +1330,16 @@ def run_detail(request: Request, run_id: str) -> Any:
             "other_image_files": other_image_files,
             "video_files": video_files,
             "annotated_video": annotated_video,
+            "process_video": process_video,
             "download_files": download_files,
             "refresh": run["status"] in {"queued", "running"},
             "preset_label": _preset_label,
             "preset_description": _preset_description,
             "mode_label": _mode_label,
             "mode_description": _mode_description,
+            "run_status_label": _run_status_label,
+            "route_formal_role_label": _route_formal_role_label,
+            "requested_flow_label": _requested_flow_label,
             "run_result_hint": _run_result_hint,
         },
     )
@@ -1333,6 +1401,20 @@ def _execute_run(run_id: str) -> None:
         )
         summary = _build_summary(run, result)
         summary["annotated_video_filename"] = ANNOTATED_VIDEO_FILENAME
+        process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
+        try:
+            render_process_debug_video(
+                video_path=video_path,
+                output_path=process_video_path,
+                extraction=extraction_cfg,
+                result=result,
+                object_type=run["preset"],
+                output_fps=max((result.input_fps or 1.0) / max(result.frame_stride, 1), 1.0),
+            )
+            summary["process_video_filename"] = PROCESS_VIDEO_FILENAME
+        except Exception as process_exc:  # noqa: BLE001
+            summary["process_video_filename"] = None
+            summary["process_video_error"] = str(process_exc)
         _write_summary(outputs_dir / "summary.json", summary)
         route_results_dataframe(summary.get("route_results")).to_csv(outputs_dir / "route_results.csv", index=False)
         _write_plots(outputs_dir, result)
@@ -1388,6 +1470,7 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "temperature_filename": run["temperature_filename"],
         "primary_metric_label": result.primary_metric_label,
         "annotated_video_filename": run["annotated_video_filename"] if "annotated_video_filename" in run.keys() else None,
+        "process_video_filename": None,
     }
     if result.formal_candidate_gates is not None:
         summary["formal_candidate_gates"] = result.formal_candidate_gates
@@ -1994,6 +2077,12 @@ def _get_run(run_id: str) -> sqlite3.Row | None:
     return row
 
 
+def _delete_run_record(run_id: str) -> None:
+    with _connect_db() as conn:
+        conn.execute("DELETE FROM runs WHERE id = ?", (run_id,))
+        conn.commit()
+
+
 def _list_runs(limit: int) -> list[sqlite3.Row]:
     with _connect_db() as conn:
         rows = conn.execute(
@@ -2001,6 +2090,20 @@ def _list_runs(limit: int) -> list[sqlite3.Row]:
             (limit,),
         ).fetchall()
     return list(rows)
+
+
+def _delete_run_assets(run_id: str, run_dir: Path) -> None:
+    fallback_dir = (RUNS_ROOT / run_id).resolve()
+    try:
+        resolved_dir = run_dir.resolve()
+    except OSError:
+        resolved_dir = fallback_dir
+    try:
+        resolved_dir.relative_to(RUNS_ROOT.resolve())
+    except ValueError:
+        resolved_dir = fallback_dir
+    if resolved_dir.exists():
+        shutil.rmtree(resolved_dir)
 
 
 async def _save_upload(upload: UploadFile, path: Path) -> None:
