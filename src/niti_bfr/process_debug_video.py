@@ -58,13 +58,12 @@ def render_process_debug_video(
         cap.release()
         raise ValueError("output_fps must be positive")
 
-    writer = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        rendered_fps,
-        (source_width + SIDEBAR_WIDTH, source_height),
+    writer = _open_browser_compatible_writer(
+        output_path=output_path,
+        fps=rendered_fps,
+        frame_size=(source_width + SIDEBAR_WIDTH, source_height),
     )
-    if not writer.isOpened():
+    if writer is None:
         cap.release()
         raise RuntimeError(f"failed to open video writer: {output_path}")
 
@@ -108,6 +107,26 @@ def render_process_debug_video(
         writer.release()
 
     return output_path
+
+
+def _open_browser_compatible_writer(
+    *,
+    output_path: Path,
+    fps: float,
+    frame_size: tuple[int, int],
+) -> cv2.VideoWriter | None:
+    # Prefer H.264/avc1 so the exported MP4 can play inside browser <video>.
+    for codec in ("avc1", "H264", "mp4v"):
+        writer = cv2.VideoWriter(
+            str(output_path),
+            cv2.VideoWriter_fourcc(*codec),
+            fps,
+            frame_size,
+        )
+        if writer.isOpened():
+            return writer
+        writer.release()
+    return None
 
 
 def _normalize_object_type(

@@ -197,7 +197,7 @@ class RealFrontendFlowTests(unittest.TestCase):
                 "requested_mode": "quicklook",
                 "video_filename": "demo.mp4",
                 "temperature_filename": None,
-                "annotated_video_filename": "annotated_overview.mp4",
+                "annotated_video_filename": None,
             },
             result,
         )
@@ -205,7 +205,7 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertEqual(summary["frame_stride"], 2)
         self.assertEqual(summary["original_frame_count"], 8)
         self.assertEqual(summary["analyzed_frame_count"], 3)
-        self.assertEqual(summary["annotated_video_filename"], "annotated_overview.mp4")
+        self.assertIsNone(summary["annotated_video_filename"])
 
     def test_execute_run_writes_process_video_summary_when_render_succeeds(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -273,10 +273,6 @@ class RealFrontendFlowTests(unittest.TestCase):
 
                 with mock.patch.object(webapp, "analyze_video", return_value=fake_result), mock.patch.object(
                     webapp,
-                    "render_annotated_overview_video",
-                    side_effect=lambda **kwargs: Path(kwargs["output_path"]).write_bytes(b"annotated"),
-                ), mock.patch.object(
-                    webapp,
                     "render_process_debug_video",
                     side_effect=lambda **kwargs: Path(kwargs["output_path"]).write_bytes(b"process"),
                 ), mock.patch.object(webapp, "_write_plots", autospec=True), mock.patch.object(
@@ -286,11 +282,12 @@ class RealFrontendFlowTests(unittest.TestCase):
 
                 summary = webapp._load_summary(run_id)
                 assert summary is not None
-                self.assertEqual(summary["annotated_video_filename"], webapp.ANNOTATED_VIDEO_FILENAME)
+                self.assertIsNone(summary["annotated_video_filename"])
                 self.assertEqual(summary["process_video_filename"], webapp.PROCESS_VIDEO_FILENAME)
                 self.assertTrue((outputs_dir / webapp.PROCESS_VIDEO_FILENAME).exists())
                 row = dict(webapp._get_run(run_id))
                 self.assertEqual(row["status"], "completed")
+                self.assertIsNone(row["annotated_video_filename"])
 
 
 if __name__ == "__main__":

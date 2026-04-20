@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import yaml
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -16,7 +17,6 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from .annotated_overview_video import render_annotated_overview_video
 from .extract_braided import BraidedExtractionConfig
 from .export_contract import (
     ROUTE_ALIAS_ORDER,
@@ -144,6 +144,57 @@ ROUTE_FORMAL_ROLE_LABELS = {
     "formal_candidate": "formal 候选",
     "route_result": "路线结果",
 }
+WORKER_OBJECT_LABELS = {
+    "wire_like": "细丝对象",
+    "demo": "细丝对象",
+    "braided_like": "编织对象",
+    "braided_demo": "编织对象",
+}
+WORKER_ROUTE_DETAILS = {
+    "wire": {
+        "A": {
+            "name": "测量方式一",
+            "title": "两端距离",
+            "description": "看两端拉直了多少，最直观。",
+        },
+        "B": {
+            "name": "测量方式二",
+            "title": "整体弯曲程度",
+            "description": "看主体整体变直了多少，通常最适合作为主结果。",
+        },
+        "C": {
+            "name": "测量方式三",
+            "title": "连续跟踪后的弯曲程度",
+            "description": "结合前后画面一起判断，让结果更稳。",
+        },
+    },
+    "braided": {
+        "A": {
+            "name": "测量方式一",
+            "title": "主体长度",
+            "description": "看主体沿主方向恢复了多少。",
+        },
+        "B": {
+            "name": "测量方式二",
+            "title": "主体宽度",
+            "description": "看主体最宽处变化了多少。",
+        },
+        "C": {
+            "name": "测量方式三",
+            "title": "投影面积",
+            "description": "看整体投影面积变化了多少。",
+        },
+    },
+}
+WORKER_ROUTE_STATUS_LABELS = {
+    "formal_passed": "可直接使用",
+    "provisional": "可参考",
+    "formal_blocked": "暂不建议用",
+    "quicklook_only": "只看趋势",
+    "reportable": "可直接使用",
+    "reportable_with_warning": "可参考",
+    "missing": "暂无结果",
+}
 WIRE_ROUTE_SPECS: dict[str, dict[str, Any]] = {
     "A": {
         "metric_key": WIRE_ROUTE_ALIAS_TO_KEY["A"],
@@ -255,6 +306,215 @@ def _route_formal_role_label(role: str | None) -> str:
     if role is None:
         return "-"
     return ROUTE_FORMAL_ROLE_LABELS.get(role, role.replace("_", " "))
+
+
+def _worker_object_label(preset: str | None) -> str:
+    if preset is None:
+        return "测量对象"
+    return WORKER_OBJECT_LABELS.get(preset, "测量对象")
+
+
+def _worker_route_detail(preset: str | None, alias: str | None, field: str) -> str:
+    family = "braided" if _is_braided_preset(preset) else "wire"
+    if alias is None:
+        return "-"
+    detail = WORKER_ROUTE_DETAILS.get(family, {}).get(alias, {})
+    return str(detail.get(field) or "-")
+
+
+def _worker_route_name(preset: str | None, alias: str | None) -> str:
+    return _worker_route_detail(preset, alias, "name")
+
+
+def _worker_route_title(preset: str | None, alias: str | None) -> str:
+    return _worker_route_detail(preset, alias, "title")
+
+
+def _worker_route_description(preset: str | None, alias: str | None) -> str:
+    return _worker_route_detail(preset, alias, "description")
+
+
+def _worker_route_status_label(status: str | None) -> str:
+    if status is None:
+        return "暂无结果"
+    return WORKER_ROUTE_STATUS_LABELS.get(status, "暂无结果")
+
+
+def _worker_gate_reason_label(reason: str | None) -> str:
+    reason_text = str(reason or "").strip()
+    if not reason_text:
+        return "稳定性条件不足"
+    lowered = reason_text.lower()
+    if "temperature" in lowered:
+        return "缺少可用温度信息"
+    if "attachment" in lowered or "leak" in lowered:
+        return "主体与附件分离不够稳定"
+    if "centerline" in lowered:
+        return "中心线提取不够稳定"
+    if "endpoint" in lowered:
+        return "端点识别不够稳定"
+    if "dynamic_range" in lowered or "too_small" in lowered:
+        return "变化幅度不够明显"
+    if "insufficient" in lowered:
+        return "有效数据不够"
+    if "monotonic" in lowered:
+        return "变化趋势不够稳定"
+    return "稳定性条件不足"
+
+
+def _worker_route_note(route: dict[str, Any] | None) -> str:
+    route = route or {}
+    if route.get("selected_as_formal"):
+        return "本次正式结果采用这一种。"
+    if route.get("selected_as_primary"):
+        return "本次优先参考这一种。"
+    status = route.get("reportability_status")
+    if status == "provisional":
+        return "本次可作为参考，但不作为正式主结果。"
+    if status == "quicklook_only":
+        return "当前没有温度结果，只看变化趋势。"
+    if status == "formal_blocked":
+        return f"本次不建议作为主结果，原因是{_worker_gate_reason_label(route.get('gate_reason'))}。"
+    if status == "formal_passed":
+        return "这是一种可直接使用的结果。"
+    return "当前暂无可展示说明。"
+
+
+def _worker_result_summary(run: sqlite3.Row | dict[str, Any], summary: dict[str, Any] | None) -> dict[str, str]:
+    status = run.get("status") if isinstance(run, dict) else run["status"]
+    temperature_filename = (
+        run.get("temperature_filename")
+        if isinstance(run, dict)
+        else run["temperature_filename"]
+        if "temperature_filename" in run.keys()
+        else None
+    )
+    actual_mode = (
+        summary.get("actual_mode")
+        if summary
+        else run.get("actual_mode")
+        if isinstance(run, dict)
+        else run["actual_mode"]
+    )
+    gate_reason = (
+        summary.get("formal_gate_reason")
+        if summary
+        else run.get("formal_gate_reason")
+        if isinstance(run, dict)
+        else run["formal_gate_reason"]
+    )
+    if status in {"queued", "running"}:
+        return {
+            "badge": "处理中",
+            "headline": "系统正在分析，请稍等。",
+            "description": "页面会自动刷新，结果出来后会直接显示在这里。",
+        }
+    if actual_mode == "formal_af":
+        return {
+            "badge": "可直接使用",
+            "headline": "本次结果已经满足正式使用条件。",
+            "description": "可以直接查看下面推荐的测量方式和结果温度。",
+        }
+    if temperature_filename:
+        return {
+            "badge": "仅供参考",
+            "headline": "这次算出了参考结果，但暂不建议直接作为正式结果。",
+            "description": f"主要原因是{_worker_gate_reason_label(gate_reason)}。",
+        }
+    return {
+        "badge": "只看趋势",
+        "headline": "这次没有上传温度文件，所以只展示变化趋势。",
+        "description": "如需温度结果，请下次同时上传视频和温度表。",
+    }
+
+
+def _worker_primary_route_label(summary: dict[str, Any] | None, preset: str | None) -> str:
+    if not summary:
+        return "-"
+    alias = (
+        summary.get("object_formal_route_alias")
+        or summary.get("object_recommended_route_alias")
+        or summary.get("recommended_route_alias")
+        or summary.get("object_provisional_route_alias")
+    )
+    if not alias:
+        return "-"
+    return f"{_worker_route_name(preset, alias)}：{_worker_route_title(preset, alias)}"
+
+
+def _worker_output_label(filename: str) -> str:
+    mapping = {
+        "analysis_process.mp4": "分析过程视频",
+        "analysis.csv": "每帧数据表",
+        "route_results.csv": "三种测量方式结果表",
+        "summary.json": "详细结果数据",
+        "recovery_vs_temperature.png": "恢复温度曲线",
+        "route_recovery_vs_temperature.png": "三种方式恢复温度曲线",
+        "kappa_vs_temperature.png": "弯曲程度温度曲线",
+        "quicklook_x_vs_time.png": "两端距离变化图",
+        "quicklook_kappa_vs_time.png": "弯曲程度变化图",
+        "route_a_metric_over_time.png": "测量方式一变化图",
+        "route_b_metric_over_time.png": "测量方式二变化图",
+        "route_c_metric_over_time.png": "测量方式三变化图",
+    }
+    return mapping.get(filename, filename)
+
+
+def _curve_priority(filename: str, temperature_available: bool) -> tuple[int, str]:
+    if temperature_available:
+        order = {
+            "route_recovery_vs_temperature.png": 0,
+            "recovery_vs_temperature.png": 1,
+            "kappa_vs_temperature.png": 2,
+            "route_b_metric_over_time.png": 3,
+            "route_a_metric_over_time.png": 4,
+            "route_c_metric_over_time.png": 5,
+        }
+    else:
+        order = {
+            "route_b_metric_over_time.png": 0,
+            "route_a_metric_over_time.png": 1,
+            "route_c_metric_over_time.png": 2,
+            "quicklook_x_vs_time.png": 3,
+            "quicklook_kappa_vs_time.png": 4,
+        }
+    return order.get(filename, 99), filename
+
+
+def _display_time(value: str | None) -> str:
+    if not value:
+        return "-"
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    if dt.tzinfo is not None:
+        dt = dt.astimezone()
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _ensure_video_poster(video_path: Path) -> Path | None:
+    poster_path = video_path.with_name(f"{video_path.stem}_poster.jpg")
+    if poster_path.exists():
+        return poster_path
+    capture = cv2.VideoCapture(str(video_path))
+    try:
+        ok, frame = capture.read()
+    finally:
+        capture.release()
+    if not ok or frame is None:
+        return None
+    if not cv2.imwrite(str(poster_path), frame):
+        return None
+    return poster_path
+
+
+def _remove_video_with_poster(video_path: Path) -> None:
+    for path in [video_path, video_path.with_name(f"{video_path.stem}_poster.jpg")]:
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
 
 
 def _requested_flow_label(temperature_filename: str | None) -> str:
@@ -1281,6 +1541,10 @@ def run_detail(request: Request, run_id: str) -> Any:
     run = dict(run_row)
 
     summary = _prepare_summary_for_display(run, _load_summary(run_id))
+    temperature_available = bool(
+        run.get("temperature_filename")
+        or (summary and (summary.get("temperature_c_min") is not None or summary.get("temperature_c_max") is not None))
+    )
     image_files = []
     curve_files = []
     other_image_files = []
@@ -1291,12 +1555,26 @@ def run_detail(request: Request, run_id: str) -> Any:
         for path in sorted(outputs_dir.iterdir()):
             rel = path.relative_to(DATA_ROOT).as_posix()
             if path.suffix.lower() == ".mp4":
-                payload = {"name": path.name, "url": str(request.url_for("files", path=rel))}
+                poster_url = None
+                poster_path = _ensure_video_poster(path)
+                if poster_path is not None:
+                    poster_rel = poster_path.relative_to(DATA_ROOT).as_posix()
+                    poster_url = str(request.url_for("files", path=poster_rel))
+                payload = {
+                    "name": path.name,
+                    "label": _worker_output_label(path.name),
+                    "url": str(request.url_for("files", path=rel)),
+                    "poster_url": poster_url,
+                }
                 video_files.append(payload)
                 download_files.append(payload)
                 continue
             if path.suffix.lower() in {".png", ".jpg", ".jpeg"}:
-                payload = {"name": path.name, "url": str(request.url_for("files", path=rel))}
+                payload = {
+                    "name": path.name,
+                    "label": _worker_output_label(path.name),
+                    "url": str(request.url_for("files", path=rel)),
+                }
                 image_files.append(payload)
                 if "route_" in path.name or "recovery" in path.name or "temperature" in path.name:
                     curve_files.append(payload)
@@ -1305,7 +1583,13 @@ def run_detail(request: Request, run_id: str) -> Any:
                 download_files.append(payload)
                 continue
             if path.suffix.lower() in {".csv", ".json"}:
-                download_files.append({"name": path.name, "url": str(request.url_for("files", path=rel))})
+                download_files.append(
+                    {
+                        "name": path.name,
+                        "label": _worker_output_label(path.name),
+                        "url": str(request.url_for("files", path=rel)),
+                    }
+                )
     annotated_video = None
     process_video = None
     if summary and summary.get("annotated_video_filename"):
@@ -1318,6 +1602,10 @@ def run_detail(request: Request, run_id: str) -> Any:
             (item for item in video_files if item["name"] == summary["process_video_filename"]),
             None,
         )
+    primary_video = process_video or annotated_video or (video_files[0] if video_files else None)
+    primary_curve = None
+    if curve_files:
+        primary_curve = sorted(curve_files, key=lambda item: _curve_priority(item["name"], temperature_available))[0]
 
     return templates.TemplateResponse(
         "run_detail.html",
@@ -1325,12 +1613,15 @@ def run_detail(request: Request, run_id: str) -> Any:
             "request": request,
             "run": run,
             "summary": summary,
+            "temperature_available": temperature_available,
             "image_files": image_files,
             "curve_files": curve_files,
             "other_image_files": other_image_files,
             "video_files": video_files,
             "annotated_video": annotated_video,
             "process_video": process_video,
+            "primary_video": primary_video,
+            "primary_curve": primary_curve,
             "download_files": download_files,
             "refresh": run["status"] in {"queued", "running"},
             "preset_label": _preset_label,
@@ -1341,6 +1632,15 @@ def run_detail(request: Request, run_id: str) -> Any:
             "route_formal_role_label": _route_formal_role_label,
             "requested_flow_label": _requested_flow_label,
             "run_result_hint": _run_result_hint,
+            "worker_object_label": _worker_object_label,
+            "worker_route_name": _worker_route_name,
+            "worker_route_title": _worker_route_title,
+            "worker_route_description": _worker_route_description,
+            "worker_route_status_label": _worker_route_status_label,
+            "worker_route_note": _worker_route_note,
+            "worker_result_summary": _worker_result_summary,
+            "worker_primary_route_label": _worker_primary_route_label,
+            "display_time": _display_time,
         },
     )
 
@@ -1391,16 +1691,9 @@ def _execute_run(run_id: str) -> None:
 
         result.series.to_csv(outputs_dir / "analysis.csv", index=False)
         annotated_video_path = outputs_dir / ANNOTATED_VIDEO_FILENAME
-        render_annotated_overview_video(
-            video_path=video_path,
-            output_path=annotated_video_path,
-            extraction=extraction_cfg,
-            result=result,
-            object_type=run["preset"],
-            output_fps=max((result.input_fps or 1.0) / max(result.frame_stride, 1), 1.0),
-        )
+        _remove_video_with_poster(annotated_video_path)
         summary = _build_summary(run, result)
-        summary["annotated_video_filename"] = ANNOTATED_VIDEO_FILENAME
+        summary["annotated_video_filename"] = None
         process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
         try:
             render_process_debug_video(
@@ -1430,7 +1723,7 @@ def _execute_run(run_id: str) -> None:
                 "aftan_c": result.aftan_c,
                 "original_frame_count": result.original_frame_count,
                 "analyzed_frame_count": result.analyzed_frame_count,
-                "annotated_video_filename": ANNOTATED_VIDEO_FILENAME,
+                "annotated_video_filename": None,
                 "error_text": None,
             },
         )
