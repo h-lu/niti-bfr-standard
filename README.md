@@ -39,6 +39,36 @@
 - 从当前实现状态上, braided 的 `formal Af` 默认仍只放行 `A:length_axis(T)`；`B/C` 当前主要作为 quicklook 与 formal 对照量。
 - 同理, `wire-like` 当前正式主量默认仍是 `kappa_fit(T)`，这属于当前实现状态，不应误读为项目长期只保留单一 formal 视角。
 
+项目的统一输出口径也应和这个边界保持一致:
+
+- 对每一类对象, `A / B / C` 三条路线都应各自输出结果, 而不是只显示最终被选中的单一路线。
+- “有路线结果”表示该路线给出了自己的几何量、恢复曲线、QC 与可用性判断。
+- “有 formal 结果”表示该路线通过了对应准入条件, 可以对外给出正式 `Af-95 / Af-tan`。
+- 因此, 同一个 run 里可以同时出现“三条路线都有结果, 但只有其中一条是当前 formal 主量”。
+- 同一个 run 里也可以出现“三条路线都只有 quicklook / provisional / blocked 状态, 没有任何一路被正式放行”。
+
+换句话说:
+
+- `route-level result` 不等于 `formal passed`
+- `formal Af` 是某条路线在满足准入条件后的输出状态, 不是把另外两条路线从页面、结果文件或方法学中删除
+
+当前仓库在收口时应逐步把结果页和 summary 统一成“对象级结果 + 路线级结果”两层语义:
+
+- 对象级结果: 当前 run 的请求模式、实际模式、最终 formal 是否放行、推荐展示主量
+- 路线级结果: `A / B / C` 每条路线自己的 `metric`、`Af-95`、`Af-tan`、`status`、`gate reason`、`warning codes`
+
+这套语义的目标是让用户能同时看到:
+
+- 每条路线都算出了什么
+- 每条路线当前处于 `quicklook`、`provisional`、`formal_blocked` 还是 `formal_passed`
+- 对象级最终 formal 结论是由哪条路线给出的
+
+这里仍然不能误写成“六条路线都已经 fully formalized”。更准确的说法是:
+
+- 项目长期上保留并展示六条路线
+- 当前实现上, 六条路线的 formal 成熟度并不相同
+- 文档、前端和结果文件都应把这种“不同行使同一 formal 地位”的事实明确展示出来
+
 这里的“对齐”指:
 
 - 对齐 `YY/T 1771 / ASTM F2082` 的“恢复量 vs 温度 -> Af-95 / Af-tan”大框架

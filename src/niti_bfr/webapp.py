@@ -415,6 +415,7 @@ def _public_formal_metric_label(result: AnalysisResult) -> str | None:
 def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
     series = result.series
     public_formal_metric_label = _public_formal_metric_label(result)
+    route_results = result.route_results or []
     summary: dict[str, Any] = {
         "run_id": run["id"],
         "preset": run["preset"],
@@ -434,6 +435,7 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "quality_median": float(series["quality"].median()) if "quality" in series else None,
         "video_filename": run["video_filename"],
         "temperature_filename": run["temperature_filename"],
+        "route_results": route_results,
     }
     if str(run["preset"]).startswith("braided"):
         summary["metric_aliases"] = BRAIDED_METRIC_ALIAS_TO_KEY

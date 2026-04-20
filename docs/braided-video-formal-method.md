@@ -1,6 +1,6 @@
 # Braided Device Video-Only Formal Method
 
-更新时间: 2026-04-18
+更新时间: 2026-04-20
 
 本文档用于把当前仓库对 `braided device` 的方法学定位正式落下来，供主线程后续指挥实现与验收。
 
@@ -31,14 +31,29 @@
 其中:
 
 - `A / B / C` 代表 braided 的三条并行分析路线
-- 当前实现默认只把 `A` 作为 braided `formal Af` 的放行主量
-- `B` 与 `C` 当前主要作为对照量与交叉验证量
+- 每一次 braided 分析都应为 `A / B / C` 三条路线分别输出自己的 route-level result
+- route-level result 至少表示该路线“算出了什么、状态如何、为什么可能不能 formal”，不等于该路线已经 `formal passed`
+- 当前对象级默认 formal 主量仍是 `A`
+- 当前代码实现里 `B` 已进入 braided formal candidate
+- `C` 当前仍主要作为对照量、交叉验证量和 route-level 输出
 - 对外表述可写成 `A:length_axis`、`B:diameter_max`、`C:area_proj`
 
 这里要明确区分:
 
 - “当前实现默认 formal 放行 `A`” 属于实现状态
+- “当前代码里 `B` 已进入 candidate, `C` 仍未进入对象级 formal candidate” 也属于实现状态
 - “A / B / C 长期并行保留并比较” 属于项目的方法学目标
+
+进一步地, 当前文档默认采用下面的语义:
+
+- `route-level result` = 该路线自己的量、恢复曲线、Af 估计、QC 与状态
+- `object-level formal result` = 当前 run 最终允许对外作为正式结论的主路线结果
+
+因此, 同一个 braided run 里可以同时出现:
+
+- `A / B / C` 三条路线都有结果
+- 其中只有一条是当前对象级 formal 主量
+- 或三条路线都只有 `quicklook / provisional / blocked` 状态, 没有任何一路被放行为正式结论
 
 ## 1. 方法边界
 
@@ -253,6 +268,12 @@
 `YY/T 1771-aligned` Af 工作流, 当前实现里最稳妥的正式定义应为:
 
 - 当前默认 formal 主量为 `length_axis(T)`
+- `A / B / C` 三条路线都应输出各自的 route-level result
+- route-level result 可以包含各自的 `Af-95` / `Af-tan` 估计、QC 与 gate reason
+- 但 route-level result 本身不等于对象级 formal passed
+- 当前对象级默认 formal 主量仍为 `length_axis(T)`
+- 当前代码实现已允许 `diameter_max(T)` 进入对象级 formal candidate
+- `area_proj(T)` 当前仍主要作为 route-level 对照与方法学验证量, 不作为默认对象级 formal candidate
 - 该量表示二维投影下 braided 试样的主轴功能长度
 - 升温恢复时, 该量对当前对象应单调减小
 - 正式恢复率定义为:
@@ -279,20 +300,29 @@
 - `area_proj_contour_width_integral_px2`: 旧 contour-width integral, 仅作对照
 - `area_proj_contour_px2`: body-only contour area, 用于面积定义差检查
 
-对照量允许保留:
+路线级对照与交叉验证量允许保留:
 
 - `length_env(T)`
 - `diameter_max(T)`
 - `foreshortening_axis(T)`
 - `foreshortening_env(T)`
 
-但它们只用于:
+这些量在当前实现中的角色应区分为:
+
+- `diameter_max(T)`:
+  当前代码里已进入对象级 formal candidate, 但不是默认 formal 主量
+- `length_env(T)`、`foreshortening_axis(T)`、`foreshortening_env(T)`:
+  当前主要用于 route-level 对照、交叉检查与解释层
+- `area_proj(T)`:
+  当前应稳定输出 route-level result, 但仍主要是对照量与方法学验证量
+
+除已进入对象级 candidate 的 `diameter_max(T)` 外, 其他量当前主要用于:
 
 - 交叉检查
 - QC
 - 方法学验证
 
-不参与正式主量竞争。
+不直接参与对象级正式主量竞争。
 
 这样做的原因是:
 
@@ -315,10 +345,12 @@
 
 在 `formal Af` 这一条线上, 当前升级顺序建议固定为:
 
-1. 先把 `length_axis(T)` 做成唯一正式主量。
-2. 只在温度同步可用、恢复覆盖到高温平台、长度曲线单调性可接受时给正式 `Af`。
-3. `length_env(T)`、`diameter_max(T)` 和各分区量仅作对照，不升格为正式主量。
-4. 需要更高层解释时，再把分区量和密度代理量作为结果解释层叠加。
+1. 固定 `A / B / C` 三条路线都输出 route-level result, 不因对象级 formal 只放行一条路线就隐藏其他路线结果。
+2. 对象级默认 formal 主量仍保持 `length_axis(T)`。
+3. 在当前实现状态下, 允许 `diameter_max(T)` 作为对象级 formal candidate 参与比较, 但不要把这件事误写成 “braided 已经三路等权 formal 化”。
+4. `area_proj(T)` 先保持 route-level 输出、对照与方法学验证角色, 不提前包装成已放行的对象级 formal 主量。
+5. 只在温度同步可用、恢复覆盖到高温平台、相应主量曲线单调性可接受时给对象级正式 `Af`。
+6. 需要更高层解释时，再把分区量和密度代理量作为结果解释层叠加。
 
 ## 7. 应如何对外表述
 
@@ -327,8 +359,10 @@
 - 当前 braided 路线是一种 `video-only 2D geometric measurement and zone analysis` 方法。
 - 该方法从视频中提取 `axis / projected centerline`、`D(x)`、`foreshortening` 以及 `landing / transition / compaction` 分区。
 - 该方法适合做二维投影几何量测、QC、时序跟踪和方法学验证。
+- 对同一个 braided run, `A / B / C` 三条路线都应输出自己的 route-level result。
+- route-level result 不等于 formal passed; 它也可以是 `quicklook`、`provisional` 或 `blocked`。
 - 当实验布置满足温度同步与完整恢复条件时, 当前仓库还可提供一条 `YY/T 1771-aligned` 的 braided `formal Af` 工作流。
-- 这条 `formal Af` 工作流以 `length_axis(T)` 为唯一正式主量, 并按 `Af-95` / `Af-tan` 输出结果。
+- 这条 `formal Af` 工作流当前默认以 `length_axis(T)` 为对象级 formal 主量; 当前代码实现里 `diameter_max(T)` 已进入 candidate, `area_proj(T)` 仍主要是 route-level 对照输出。
 
 同时，建议明确写出下面这些限制:
 

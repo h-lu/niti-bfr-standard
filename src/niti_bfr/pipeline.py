@@ -35,6 +35,18 @@ BRAIDED_METRIC_DISPLAY = {
 
 BRAIDED_FORMAL_CANDIDATES = ("length_axis", "diameter_max")
 
+WIRE_ROUTE_ALIAS_TO_KEY = {
+    "A": "x_route_a",
+    "B": "kappa_fit",
+    "C": "kappa_route_c",
+}
+
+WIRE_ROUTE_DISPLAY = {
+    "x_route_a": "A:x_route_a",
+    "kappa_fit": "B:kappa_fit",
+    "kappa_route_c": "C:kappa_route_c",
+}
+
 BRAIDED_ACCEPTANCE_THRESHOLDS: dict[str, dict[str, float]] = {
     "real_video": {
         "min_valid_frames": 10.0,
@@ -86,6 +98,7 @@ class AnalysisResult:
     reportability_status: str = "quicklook_only"
     warning_codes: list[str] | None = None
     acceptance_profile: str | None = None
+    route_results: list[dict[str, Any]] | None = None
 
 
 def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
@@ -169,6 +182,170 @@ def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvalu
     return reports
 
 
+def _finite_or_none(value: float | None) -> float | None:
+    if value is None:
+        return None
+    numeric = float(value)
+    if not np.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _wire_metric_columns(metric_label: str) -> tuple[str, str]:
+    mapping = {
+        "x_route_a": ("x_route_a_px", "x_route_a_recovery"),
+        "x_fit": ("x_fit_px", "x_fit_recovery"),
+        "x_route_c": ("x_route_c_px", "x_route_c_recovery"),
+        "kappa_fit": ("kappa_fit_px_inv", "kappa_fit_recovery"),
+        "kappa_route_c": ("kappa_route_c_px_inv", "kappa_route_c_recovery"),
+    }
+    if metric_label not in mapping:
+        raise KeyError(f"unsupported wire metric: {metric_label}")
+    return mapping[metric_label]
+
+
+def _formal_wire_metric_gate(
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation],
+    metric_label: str,
+) -> tuple[bool, str | None]:
+    if metric_label == "kappa_fit":
+        return _formal_af_gate(series, reports)
+
+    eval_col, recovery_col = _wire_metric_columns(metric_label)
+    metric_report = reports.get(metric_label)
+    if metric_report is None:
+        return False, f"{metric_label}_insufficient_points"
+
+    valid = series.dropna(subset=["temperature_c", eval_col, recovery_col, "quality"])
+    if len(valid) < 15:
+        return False, f"{metric_label}_insufficient_points"
+
+    quality_median = float(valid["quality"].median())
+    if quality_median < 0.10:
+        return False, f"{metric_label}_unstable_extraction"
+
+    dynamic_range_floor = 0.005 if metric_label == "kappa_route_c" else 5.0
+    if metric_report.dynamic_range < dynamic_range_floor:
+        return False, f"{metric_label}_dynamic_range_too_small"
+
+    if metric_report.monotonic_violation_fraction > 0.25:
+        return False, f"{metric_label}_not_monotonic_enough"
+
+    tail_count = max(5, int(np.ceil(len(valid) * 0.1)))
+    tail_recovery = valid[recovery_col].to_numpy(dtype=float)[-tail_count:]
+    if float(np.nanmedian(tail_recovery)) < 0.90:
+        return False, "missing_high_temp_plateau"
+
+    return True, None
+
+
+def _build_route_result(
+    *,
+    alias: str,
+    metric_key: str,
+    display_label: str,
+    value_series_col: str,
+    recovery_series_col: str | None,
+    metric_report: MetricEvaluation | None,
+    reportability_status: str,
+    gate_reason: str | None,
+    warning_codes: list[str] | None,
+    formal_candidate: bool,
+    accepted_as_formal_candidate: bool,
+    selected_as_primary: bool,
+    selected_as_formal: bool,
+    auxiliary_metric_keys: list[str] | None = None,
+) -> dict[str, Any]:
+    if selected_as_formal:
+        formal_role = "object_formal"
+    elif selected_as_primary:
+        formal_role = "object_primary"
+    elif formal_candidate:
+        formal_role = "formal_candidate"
+    else:
+        formal_role = "route_result"
+    return {
+        "alias": alias,
+        "metric_key": metric_key,
+        "display_label": display_label,
+        "value_series_col": value_series_col,
+        "recovery_series_col": recovery_series_col,
+        "af95_c": _finite_or_none(metric_report.af95_c) if metric_report is not None else None,
+        "aftan_c": _finite_or_none(metric_report.aftan_c) if metric_report is not None else None,
+        "fit_rmse": _finite_or_none(metric_report.fit_rmse) if metric_report is not None else None,
+        "monotonic_violation_fraction": (
+            _finite_or_none(metric_report.monotonic_violation_fraction) if metric_report is not None else None
+        ),
+        "dynamic_range": _finite_or_none(metric_report.dynamic_range) if metric_report is not None else None,
+        "reportability_status": reportability_status,
+        "gate_reason": gate_reason,
+        "warning_codes": list(warning_codes or []),
+        "formal_candidate": formal_candidate,
+        "accepted_as_formal_candidate": accepted_as_formal_candidate,
+        "selected_as_primary": selected_as_primary,
+        "selected_as_formal": selected_as_formal,
+        "formal_role": formal_role,
+        "auxiliary_metric_keys": list(auxiliary_metric_keys or []),
+    }
+
+
+def _build_wire_route_results(
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation] | None,
+    *,
+    primary_metric_label: str | None,
+    formal_metric_label: str | None,
+    temperature_available: bool,
+) -> list[dict[str, Any]]:
+    route_specs = [
+        ("A", "x_route_a", "A:x_route_a", "x_route_a_px", "x_route_a_recovery", []),
+        ("B", "kappa_fit", "B:kappa_fit", "kappa_fit_px_inv", "kappa_fit_recovery", ["x_fit"]),
+        ("C", "kappa_route_c", "C:kappa_route_c", "kappa_route_c_px_inv", "kappa_route_c_recovery", ["x_route_c"]),
+    ]
+    route_results: list[dict[str, Any]] = []
+    reports = reports or {}
+    for alias, metric_key, display_label, value_col, recovery_col, aux_keys in route_specs:
+        metric_report = reports.get(metric_key)
+        formal_candidate = metric_key == "kappa_fit"
+        if not temperature_available:
+            status = "quicklook_only"
+            gate_reason = "temperature_sync_missing"
+            accepted = False
+        elif metric_report is None:
+            status = "formal_blocked"
+            gate_reason = f"{metric_key}_insufficient_points"
+            accepted = False
+        else:
+            allowed, gate_reason = _formal_wire_metric_gate(series, reports, metric_key)
+            if allowed:
+                status = "formal_passed" if formal_candidate else "provisional"
+                gate_reason = None
+                accepted = formal_candidate
+            else:
+                status = "formal_blocked"
+                accepted = False
+        route_results.append(
+            _build_route_result(
+                alias=alias,
+                metric_key=metric_key,
+                display_label=display_label,
+                value_series_col=value_col,
+                recovery_series_col=recovery_col,
+                metric_report=metric_report,
+                reportability_status=status,
+                gate_reason=gate_reason,
+                warning_codes=[] if gate_reason is None else [gate_reason],
+                formal_candidate=formal_candidate,
+                accepted_as_formal_candidate=accepted,
+                selected_as_primary=primary_metric_label == metric_key,
+                selected_as_formal=formal_metric_label == metric_key,
+                auxiliary_metric_keys=aux_keys,
+            )
+        )
+    return route_results
+
+
 def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
     area_eval_col = "area_proj_formal_px2" if "area_proj_formal_px2" in series.columns else "area_proj_px2"
@@ -246,6 +423,67 @@ def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, Met
             increasing=area_eval.increasing,
         )
     return reports
+
+
+def _build_braided_route_results(
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation] | None,
+    *,
+    primary_metric_label: str | None,
+    formal_metric_label: str | None,
+    acceptance_profile: str,
+    temperature_available: bool,
+) -> list[dict[str, Any]]:
+    route_specs = [
+        ("A", "length_axis", "A:length_axis", "length_axis_formal_px", "length_axis_recovery"),
+        ("B", "diameter_max", "B:diameter_max", "diameter_max_px", "diameter_max_recovery"),
+        ("C", "area_proj", "C:area_proj", "area_proj_formal_px2", "area_proj_recovery"),
+    ]
+    route_results: list[dict[str, Any]] = []
+    reports = reports or {}
+    for alias, metric_key, display_label, value_col, recovery_col in route_specs:
+        metric_report = reports.get(metric_key)
+        formal_candidate = metric_key in BRAIDED_FORMAL_CANDIDATES
+        if not temperature_available:
+            status = "quicklook_only"
+            gate_reason = "temperature_sync_missing"
+            accepted = False
+        elif metric_report is None:
+            status = "formal_blocked"
+            gate_reason = _braided_formal_reason(metric_key, "insufficient_points")
+            accepted = False
+        else:
+            allowed, gate_reason = _formal_braided_af_gate(
+                series,
+                reports,
+                metric_label=metric_key,
+                acceptance_profile=acceptance_profile,
+            )
+            if allowed:
+                status = "formal_passed" if formal_candidate else "provisional"
+                gate_reason = None
+                accepted = formal_candidate
+            else:
+                status = "formal_blocked"
+                accepted = False
+        route_results.append(
+            _build_route_result(
+                alias=alias,
+                metric_key=metric_key,
+                display_label=display_label,
+                value_series_col=value_col,
+                recovery_series_col=recovery_col,
+                metric_report=metric_report,
+                reportability_status=status,
+                gate_reason=gate_reason,
+                warning_codes=[] if gate_reason is None else [gate_reason],
+                formal_candidate=formal_candidate,
+                accepted_as_formal_candidate=accepted,
+                selected_as_primary=primary_metric_label == metric_key,
+                selected_as_formal=formal_metric_label == metric_key,
+            )
+        )
+    return route_results
 
 
 def _augment_braided_qc_series(series: pd.DataFrame) -> pd.DataFrame:
@@ -898,6 +1136,15 @@ def analyze_video(
     mode = "quicklook"
     formal_metric_label = None
     formal_gate_reason = "temperature_sync_missing"
+    reportability_status = "quicklook_only"
+    warning_codes: list[str] = []
+    route_results = _build_wire_route_results(
+        series,
+        metric_reports,
+        primary_metric_label=primary_metric_label,
+        formal_metric_label=formal_metric_label,
+        temperature_available=False,
+    )
 
     if temperature_csv is not None:
         temp = pd.read_csv(temperature_csv).copy()
@@ -934,7 +1181,18 @@ def analyze_video(
             primary_metric_label = formal_metric_label
             mode = "formal_af"
             formal_gate_reason = None
+            reportability_status = "formal"
+        else:
+            reportability_status = "reportable_with_warning"
+            warning_codes = [formal_gate_reason] if formal_gate_reason is not None else []
         series = merged
+        route_results = _build_wire_route_results(
+            series,
+            metric_reports,
+            primary_metric_label=primary_metric_label,
+            formal_metric_label=formal_metric_label,
+            temperature_available=True,
+        )
 
     return AnalysisResult(
         series=series,
@@ -946,6 +1204,9 @@ def analyze_video(
         mode=mode,
         formal_metric_label=formal_metric_label,
         formal_gate_reason=formal_gate_reason,
+        reportability_status=reportability_status,
+        warning_codes=warning_codes,
+        route_results=route_results,
     )
 
 
@@ -1111,6 +1372,14 @@ def analyze_braided_video_quicklook(
     provisional_aftan_c = None
     reportability_status = "quicklook_only"
     warning_codes: list[str] = []
+    route_results = _build_braided_route_results(
+        series,
+        metric_reports,
+        primary_metric_label=primary_metric_label,
+        formal_metric_label=formal_metric_label,
+        acceptance_profile=acceptance_profile,
+        temperature_available=False,
+    )
 
     if temperature_csv is not None:
         temp = pd.read_csv(temperature_csv).copy()
@@ -1163,6 +1432,14 @@ def analyze_braided_video_quicklook(
             reportability_status = "reportable_with_warning"
             warning_codes = acceptance["reasons"]
         series = merged
+        route_results = _build_braided_route_results(
+            series,
+            metric_reports,
+            primary_metric_label=primary_metric_label,
+            formal_metric_label=formal_metric_label,
+            acceptance_profile=acceptance_profile,
+            temperature_available=True,
+        )
 
     return AnalysisResult(
         series=series,
@@ -1180,4 +1457,5 @@ def analyze_braided_video_quicklook(
         reportability_status=reportability_status,
         warning_codes=warning_codes,
         acceptance_profile=acceptance_profile if temperature_csv is not None else None,
+        route_results=route_results,
     )
