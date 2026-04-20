@@ -41,10 +41,18 @@ def _summary_row(summary: dict[str, object]) -> dict[str, object]:
     af_comparison = summary["af_comparison"]
     error_summary = summary["error_summary"]
     threshold_sensitivity = summary["diameter_threshold_sensitivity"]["baseline_max_delta"]
-    return {
+    row = {
         "benchmark_name": summary["benchmark_name"],
         "description": summary["benchmark_description"],
         "output_dir": summary["demo_output"],
+        "object_reportability_status": summary.get("object_reportability_status"),
+        "object_formal_metric_key": summary.get("object_formal_metric_key"),
+        "object_formal_route_alias": summary.get("object_formal_route_alias"),
+        "object_provisional_metric_key": summary.get("object_provisional_metric_key"),
+        "object_provisional_route_alias": summary.get("object_provisional_route_alias"),
+        "object_recommended_metric_key": summary.get("object_recommended_metric_key"),
+        "object_recommended_route_alias": summary.get("object_recommended_route_alias"),
+        "object_formal_gate_reason": summary.get("object_formal_gate_reason"),
         "quality_median": summary["quality_median"],
         "body_mask_attachment_leak_fraction": summary["body_mask_attachment_leak_fraction"],
         "centerline_disagreement_median": summary["centerline_disagreement_median"],
@@ -62,6 +70,14 @@ def _summary_row(summary: dict[str, object]) -> dict[str, object]:
         "diameter_threshold_sensitivity_af95_c": threshold_sensitivity.get("af95_c"),
         "diameter_threshold_sensitivity_aftan_c": threshold_sensitivity.get("aftan_c"),
     }
+    route_results_by_alias = summary.get("route_results_by_alias", {})
+    for alias in ("A", "B", "C"):
+        entry = route_results_by_alias.get(alias, {})
+        row[f"route_{alias}_metric_key"] = entry.get("metric_key")
+        row[f"route_{alias}_status"] = entry.get("reportability_status")
+        row[f"route_{alias}_gate_reason"] = entry.get("gate_reason")
+        row[f"route_{alias}_accepted_as_formal_candidate"] = entry.get("accepted_as_formal_candidate")
+    return row
 
 
 def main() -> None:

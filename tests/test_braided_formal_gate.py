@@ -66,6 +66,30 @@ class BraidedFormalGateTests(unittest.TestCase):
             dynamic_range=20.0,
         )
 
+    def _area_report(self, *, fit_rmse: float = 0.25, monotonic_violation_fraction: float = 0.0) -> MetricEvaluation:
+        return MetricEvaluation(
+            label="area_proj",
+            increasing=True,
+            fit=RecoveryFit(x_m=500.0, x_a=720.0, t0=45.0, width=4.0),
+            af95_c=58.5,
+            aftan_c=56.5,
+            fit_rmse=fit_rmse,
+            monotonic_violation_fraction=monotonic_violation_fraction,
+            dynamic_range=220.0,
+        )
+
+    def _area_report(self, *, fit_rmse: float = 0.4, monotonic_violation_fraction: float = 0.0) -> MetricEvaluation:
+        return MetricEvaluation(
+            label="area_proj",
+            increasing=True,
+            fit=RecoveryFit(x_m=300.0, x_a=420.0, t0=45.0, width=4.0),
+            af95_c=58.5,
+            aftan_c=56.5,
+            fit_rmse=fit_rmse,
+            monotonic_violation_fraction=monotonic_violation_fraction,
+            dynamic_range=120.0,
+        )
+
     def test_gate_accepts_clean_series(self) -> None:
         allowed, reason = _formal_braided_af_gate(self._base_series(), self._reports())
         self.assertTrue(allowed)
@@ -146,6 +170,79 @@ class BraidedFormalGateTests(unittest.TestCase):
         allowed, reason = _formal_braided_af_gate(series, reports, metric_label="diameter_max")
         self.assertTrue(allowed)
         self.assertIsNone(reason)
+
+    def test_area_proj_gate_rejects_definition_gap_instability(self) -> None:
+        series = self._base_series()
+        series["area_proj_formal_px2"] = np.linspace(500.0, 720.0, len(series))
+        series["area_proj_recovery"] = series["length_axis_recovery"]
+        series["area_proj_definition_gap_px2"] = np.full(len(series), 140.0)
+        reports = self._reports()
+        reports["area_proj"] = self._area_report()
+
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label="area_proj")
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "area_proj_definition_gap_instability")
+
+    def test_area_proj_gate_rejects_attachment_leakage(self) -> None:
+        series = self._base_series()
+        series["area_proj_formal_px2"] = np.linspace(500.0, 720.0, len(series))
+        series["area_proj_recovery"] = series["length_axis_recovery"]
+        series["body_mask_attachment_leak_fraction"] = 0.06
+        reports = self._reports()
+        reports["area_proj"] = self._area_report()
+
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label="area_proj")
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "body_mask_attachment_leak_fraction")
+
+    def test_area_proj_gate_rejects_body_only_inconsistency_from_excluded_attachment_fraction(self) -> None:
+        series = self._base_series()
+        series["area_proj_formal_px2"] = np.linspace(500.0, 720.0, len(series))
+        series["area_proj_recovery"] = series["length_axis_recovery"]
+        series["excluded_attachment_area_px2"] = np.full(len(series), 160.0)
+        reports = self._reports()
+        reports["area_proj"] = self._area_report()
+
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label="area_proj")
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "excluded_attachment_area_fraction")
+
+    def test_area_metric_gate_accepts_clean_body_only_series(self) -> None:
+        series = self._base_series()
+        series["area_proj_formal_px2"] = np.linspace(300.0, 420.0, len(series))
+        series["area_proj_recovery"] = series["length_axis_recovery"]
+        series["area_proj_definition_gap_px2"] = np.full(len(series), 12.0)
+        reports = self._reports()
+        reports["area_proj"] = self._area_report()
+
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label="area_proj")
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+
+    def test_area_metric_gate_rejects_definition_gap_instability(self) -> None:
+        series = self._base_series()
+        series["area_proj_formal_px2"] = np.linspace(300.0, 420.0, len(series))
+        series["area_proj_recovery"] = series["length_axis_recovery"]
+        series["area_proj_definition_gap_px2"] = np.linspace(70.0, 95.0, len(series))
+        reports = self._reports()
+        reports["area_proj"] = self._area_report()
+
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label="area_proj")
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "area_proj_definition_gap_instability")
+
+    def test_area_metric_gate_still_respects_attachment_leak_limit(self) -> None:
+        series = self._base_series()
+        series["area_proj_formal_px2"] = np.linspace(300.0, 420.0, len(series))
+        series["area_proj_recovery"] = series["length_axis_recovery"]
+        series["area_proj_definition_gap_px2"] = np.full(len(series), 10.0)
+        series["body_mask_attachment_leak_fraction"] = 0.06
+        reports = self._reports()
+        reports["area_proj"] = self._area_report()
+
+        allowed, reason = _formal_braided_af_gate(series, reports, metric_label="area_proj")
+        self.assertFalse(allowed)
+        self.assertEqual(reason, "body_mask_attachment_leak_fraction")
 
     def test_select_braided_formal_metric_can_promote_diameter_when_it_scores_better(self) -> None:
         series = self._base_series()

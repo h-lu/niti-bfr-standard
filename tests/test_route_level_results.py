@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 from niti_bfr.metrics import MetricEvaluation, RecoveryFit
-from niti_bfr.pipeline import AnalysisResult, _build_wire_route_results
+from niti_bfr.pipeline import AnalysisResult, _build_braided_route_results, _build_wire_route_results
 from niti_bfr.webapp import _build_summary
 
 
@@ -347,6 +347,92 @@ class RouteLevelResultsSummaryTests(unittest.TestCase):
             self.assertIn("af95_c", match)
             self.assertIn("aftan_c", match)
             self.assertIn("reportability_status", match)
+
+    def test_braided_route_results_keep_route_level_passes_separate_from_object_level_formal_selection(self) -> None:
+        n = 20
+        plateau_tail = np.concatenate(
+            [
+                np.linspace(0.0, 0.88, n - 5, endpoint=True),
+                np.linspace(0.92, 1.0, 5, endpoint=True),
+            ]
+        )
+        series = pd.DataFrame(
+            {
+                "frame": np.arange(n),
+                "quality": np.full(n, 0.9),
+                "temperature_c": np.linspace(20.0, 80.0, n),
+                "length_axis_formal_px": np.linspace(120.0, 90.0, n),
+                "length_axis_recovery": plateau_tail,
+                "diameter_max_px": np.linspace(20.0, 40.0, n),
+                "diameter_max_recovery": plateau_tail,
+                "area_proj_formal_px2": np.linspace(500.0, 720.0, n),
+                "area_proj_recovery": plateau_tail,
+                "centerline_disagreement": np.full(n, 0.01),
+                "endpoint_gap_alt_centerline_px": np.full(n, 2.0),
+                "endpoint_jump_px": np.full(n, 2.0),
+                "endpoint_frame_jump_px": np.full(n, 2.0),
+                "axis_peak_position_stability": np.full(n, 0.02),
+                "body_mask_attachment_leak_fraction": np.zeros(n),
+                "excluded_attachment_area_px2": np.zeros(n),
+                "component_area_px2": np.full(n, 1000.0),
+                "body_mask_area_px2": np.full(n, 800.0),
+                "area_proj_definition_gap_px2": np.full(n, 10.0),
+            }
+        )
+        metric_reports = {
+            "length_axis": self._metric_report(
+                "length_axis",
+                increasing=False,
+                af95_c=60.0,
+                aftan_c=58.0,
+                dynamic_range=30.0,
+                fit_rmse=3.0,
+            ),
+            "diameter_max": self._metric_report(
+                "diameter_max",
+                increasing=True,
+                af95_c=59.0,
+                aftan_c=57.0,
+                dynamic_range=20.0,
+                fit_rmse=0.2,
+            ),
+            "area_proj": self._metric_report(
+                "area_proj",
+                increasing=True,
+                af95_c=58.5,
+                aftan_c=56.5,
+                dynamic_range=220.0,
+            ),
+        }
+
+        route_results = _build_braided_route_results(
+            series,
+            metric_reports,
+            primary_metric_label="length_axis",
+            formal_metric_label="diameter_max",
+            acceptance_profile="real_video",
+            temperature_available=True,
+        )
+
+        a_entry = self._find_route_entry(route_results, alias="A")
+        b_entry = self._find_route_entry(route_results, alias="B")
+        c_entry = self._find_route_entry(route_results, alias="C")
+
+        self.assertEqual(a_entry["reportability_status"], "formal_passed")
+        self.assertTrue(a_entry["accepted_as_formal_candidate"])
+        self.assertTrue(a_entry["selected_as_primary"])
+        self.assertFalse(a_entry["selected_as_formal"])
+
+        self.assertEqual(b_entry["reportability_status"], "formal_passed")
+        self.assertTrue(b_entry["formal_candidate"])
+        self.assertTrue(b_entry["accepted_as_formal_candidate"])
+        self.assertFalse(b_entry["selected_as_primary"])
+        self.assertTrue(b_entry["selected_as_formal"])
+
+        self.assertEqual(c_entry["metric_key"], "area_proj")
+        self.assertEqual(c_entry["reportability_status"], "provisional")
+        self.assertFalse(c_entry["formal_candidate"])
+        self.assertFalse(c_entry["accepted_as_formal_candidate"])
 
     def test_wire_like_summary_keeps_b_route_formal_when_kappa_fit_is_object_level_formal(self) -> None:
         series = self._build_wire_series()

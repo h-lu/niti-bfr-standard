@@ -18,6 +18,7 @@
       .muted { color: #6b7280; font-size: 13px; }
       a { color: #2563eb; text-decoration: none; }
       .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
+      .nav-links { display: flex; gap: 12px; flex-wrap: wrap; }
     </style>
   </head>
   <body>
@@ -27,7 +28,10 @@
           <h1>历史任务</h1>
           <p class="muted">最小留档，覆盖 wire-like / braided-like 两类 run 的状态、结果和追踪。</p>
         </div>
-        <a href="{{ request.url_for('home') }}">返回首页</a>
+        <div class="nav-links">
+          <a href="{{ request.url_for('benchmark_summary') }}">Benchmark 汇总</a>
+          <a href="{{ request.url_for('home') }}">返回首页</a>
+        </div>
       </div>
       <section class="card">
         <table>

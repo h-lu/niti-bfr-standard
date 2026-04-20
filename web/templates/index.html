@@ -23,8 +23,17 @@
       .status-running { background: #fef3c7; color: #92400e; }
       .status-queued { background: #dbeafe; color: #1d4ed8; }
       .status-failed { background: #fee2e2; color: #991b1b; }
+      .route-strip { display: grid; gap: 8px; margin-top: 8px; }
+      .route-mini { border: 1px solid #e5e7eb; border-radius: 12px; padding: 8px 10px; background: #f8fafc; }
+      .route-mini-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+      .route-state { background: #e2e8f0; color: #334155; }
+      .route-quicklook-only { background: #e0f2fe; color: #075985; }
+      .route-formal-blocked { background: #fee2e2; color: #991b1b; }
+      .route-provisional { background: #fef3c7; color: #92400e; }
+      .route-formal-passed { background: #dcfce7; color: #166534; }
       a { color: #2563eb; text-decoration: none; }
       .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
+      .nav-links { display: flex; gap: 12px; flex-wrap: wrap; }
       @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .topline { flex-direction: column; align-items: start; } }
     </style>
   </head>
@@ -35,7 +44,10 @@
           <h1>NiTi BFR 最小分析台</h1>
           <p class="muted">当前前端同时支持 wire-like 和 braided-like 两类对象，对应“上传 → 跑任务 → 看结果 → 查历史”。</p>
         </div>
-        <a href="{{ request.url_for('history') }}">查看全部历史</a>
+        <div class="nav-links">
+          <a href="{{ request.url_for('benchmark_summary') }}">Benchmark 汇总</a>
+          <a href="{{ request.url_for('history') }}">查看全部历史</a>
+        </div>
       </div>
 
       <div class="grid">
@@ -112,6 +124,22 @@
                   {% if run["af95_c"] is not none %}
                     <div class="muted">Af-95 {{ "%.2f"|format(run["af95_c"]) }} C</div>
                   {% endif %}
+                  {% if run.get("route_results_preview") %}
+                    <div class="route-strip">
+                      {% for route in run["route_results_preview"] %}
+                      <div class="route-mini">
+                        <div class="route-mini-head">
+                          <strong>Route {{ route["alias"] }}</strong>
+                          <span class="pill route-state route-{{ route['reportability_status']|replace('_', '-') }}">{{ route["reportability_label"] }}</span>
+                        </div>
+                        <div class="muted">{{ route["display_label"] }}</div>
+                        <div class="muted">Af-95 {% if route["af95_c"] is not none %}{{ "%.2f"|format(route["af95_c"]) }} C{% else %}-{% endif %} · Af-tan {% if route["aftan_c"] is not none %}{{ "%.2f"|format(route["aftan_c"]) }} C{% else %}-{% endif %}</div>
+                      </div>
+                      {% endfor %}
+                    </div>
+                  {% elif run["status"] == "completed" %}
+                    <div class="muted">A / B / C 路线结果会在 summary 落盘后显示。</div>
+                  {% endif %}
                 </td>
               </tr>
               {% endfor %}
@@ -120,6 +148,12 @@
           {% else %}
             <p class="muted">还没有任务，先上传一个视频。</p>
           {% endif %}
+        </section>
+
+        <section class="card">
+          <h2>Benchmark 汇总</h2>
+          <p class="muted">对 route-level benchmark 做 wire / braided 并排比较。页面会优先读取 suite summary；如果 suite 还没生成，就直接回退读取各 benchmark 目录里的 `analysis_metrics.json`。</p>
+          <a href="{{ request.url_for('benchmark_summary') }}">打开 benchmark 页面</a>
         </section>
       </div>
     </div>

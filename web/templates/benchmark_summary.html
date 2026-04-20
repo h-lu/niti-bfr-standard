@@ -1,0 +1,257 @@
+{% macro fmt_num(value, digits=3, suffix='') -%}
+  {%- if value is not none -%}
+    {{ ('%.' ~ digits ~ 'f')|format(value) }}{{ suffix }}
+  {%- else -%}
+    -
+  {%- endif -%}
+{%- endmacro %}
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NiTi BFR Benchmark 汇总</title>
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%); color: #0f172a; }
+      .wrap { max-width: 1240px; margin: 0 auto; padding: 32px 20px 56px; }
+      .topline { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 20px; }
+      .nav-links { display: flex; gap: 12px; flex-wrap: wrap; }
+      .hero { background: radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 42%), radial-gradient(circle at top right, rgba(14, 165, 233, 0.14), transparent 36%), white; border-radius: 24px; padding: 24px; box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08); margin-bottom: 20px; }
+      .card { background: rgba(255, 255, 255, 0.92); border-radius: 20px; padding: 20px; box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08); backdrop-filter: blur(6px); }
+      .stack > * + * { margin-top: 18px; }
+      .compare-grid { display: grid; gap: 18px; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 20px; }
+      .family-grid { display: grid; gap: 20px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .route-table, .mini-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      th, td { text-align: left; vertical-align: top; padding: 10px 8px; border-bottom: 1px solid #e2e8f0; }
+      .muted { color: #64748b; font-size: 13px; }
+      .pill { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #dbeafe; color: #1d4ed8; }
+      .route-quicklook-only { background: #e0f2fe; color: #075985; }
+      .route-formal-blocked { background: #fee2e2; color: #991b1b; }
+      .route-provisional { background: #fef3c7; color: #92400e; }
+      .route-formal-passed { background: #dcfce7; color: #166534; }
+      .route-unrecorded { background: #e2e8f0; color: #334155; }
+      .family-head { display: flex; justify-content: space-between; align-items: start; gap: 14px; margin-bottom: 14px; }
+      .route-summary { border: 1px solid #dbeafe; border-radius: 18px; padding: 18px; background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(239,246,255,0.8) 100%); }
+      .route-summary h3, .benchmark-card h3, h1, h2 { margin: 0 0 8px; }
+      .kpi { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+      .kpi div { border: 1px solid #e2e8f0; border-radius: 14px; padding: 10px 12px; background: rgba(255,255,255,0.86); }
+      .benchmark-list { display: grid; gap: 14px; }
+      .benchmark-card { border: 1px solid #dbeafe; border-radius: 18px; padding: 16px; background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%); }
+      .meta-grid { display: grid; grid-template-columns: 130px 1fr; gap: 6px 10px; font-size: 13px; margin: 10px 0 14px; }
+      .meta-grid div { padding: 1px 0; }
+      .qc-strip { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+      .qc-chip { padding: 6px 10px; border-radius: 999px; background: #eff6ff; color: #1e40af; font-size: 12px; }
+      .empty { padding: 18px; border: 1px dashed #cbd5e1; border-radius: 16px; background: rgba(248, 250, 252, 0.92); }
+      a { color: #2563eb; text-decoration: none; }
+      @media (max-width: 1024px) { .compare-grid, .family-grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="topline">
+        <div>
+          <h1>Benchmark 汇总</h1>
+          <p class="muted">这里优先按 route-level 看 wire / braided 的 benchmark 表现，再回到对象级 formal 或 provisional 推荐。若 suite 汇总不存在，页面会直接回退读取已有 benchmark 目录。</p>
+        </div>
+        <div class="nav-links">
+          <a href="{{ request.url_for('home') }}">返回首页</a>
+          <a href="{{ request.url_for('history') }}">历史任务</a>
+        </div>
+      </div>
+
+      <section class="hero">
+        <div class="muted">读取策略</div>
+        <p style="margin: 6px 0 0;">wire 与 braided 都会优先读取各自的 `benchmark_summary.json`；若当前工作区只有单 benchmark `analysis_metrics.json`，页面仍会把 A / B / C 路线补成统一对比视图。</p>
+      </section>
+
+      <section class="compare-grid">
+        {% for row in comparison_rows %}
+        <article class="route-summary">
+          <div class="muted">Route {{ row['alias'] }}</div>
+          <h3>
+            {% if row['wire'] %}
+              {{ row['wire']['display_label'] }}
+            {% elif row['braided'] %}
+              {{ row['braided']['display_label'] }}
+            {% else %}
+              Route {{ row['alias'] }}
+            {% endif %}
+          </h3>
+          <table class="mini-table">
+            <thead>
+              <tr>
+                <th>对象</th>
+                <th>benchmarks</th>
+                <th>|Af-95 err|</th>
+                <th>|Af-tan err|</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>wire-like</td>
+                <td>{% if row['wire'] %}{{ row['wire']['benchmark_count'] }}{% else %}-{% endif %}</td>
+                <td>{% if row['wire'] %}{{ fmt_num(row['wire']['mean_abs_af95_error_c']) }} C{% else %}-{% endif %}</td>
+                <td>{% if row['wire'] %}{{ fmt_num(row['wire']['mean_abs_aftan_error_c']) }} C{% else %}-{% endif %}</td>
+              </tr>
+              <tr>
+                <td>braided</td>
+                <td>{% if row['braided'] %}{{ row['braided']['benchmark_count'] }}{% else %}-{% endif %}</td>
+                <td>{% if row['braided'] %}{{ fmt_num(row['braided']['mean_abs_af95_error_c']) }} C{% else %}-{% endif %}</td>
+                <td>{% if row['braided'] %}{{ fmt_num(row['braided']['mean_abs_aftan_error_c']) }} C{% else %}-{% endif %}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="kpi">
+            <div>
+              <strong>wire</strong>
+              <div class="muted">
+                {% if row['wire'] %}
+                  passed {{ row['wire']['formal_passed_count'] }} · provisional {{ row['wire']['provisional_count'] }} · blocked {{ row['wire']['formal_blocked_count'] }}
+                {% else %}
+                  no data
+                {% endif %}
+              </div>
+            </div>
+            <div>
+              <strong>braided</strong>
+              <div class="muted">
+                {% if row['braided'] %}
+                  passed {{ row['braided']['formal_passed_count'] }} · provisional {{ row['braided']['provisional_count'] }} · blocked {{ row['braided']['formal_blocked_count'] }}
+                {% else %}
+                  no data
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        </article>
+        {% endfor %}
+      </section>
+
+      <section class="family-grid">
+        {% for family_key, family in families.items() %}
+        <article class="card stack">
+          <div class="family-head">
+            <div>
+              <h2>{{ family['label'] }}</h2>
+              <div class="muted">{{ family['benchmark_count'] }} benchmark(s) · {{ family['source_label'] }}</div>
+            </div>
+            <div class="muted" style="max-width: 340px; text-align: right;">{% if family['suite_available'] %}suite: {{ family['suite_path'] }}{% else %}suite missing; showing analysis_metrics fallback{% endif %}</div>
+          </div>
+
+          <div>
+            <h3>Route Rollup</h3>
+            <table class="route-table">
+              <thead>
+                <tr>
+                  <th>Route</th>
+                  <th>availability</th>
+                  <th>|Af-95 err|</th>
+                  <th>dominant gate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for route in family['route_rollups'] %}
+                <tr>
+                  <td>
+                    <strong>{{ route['display_label'] }}</strong>
+                    <div class="muted">{{ route['metric_key'] }}</div>
+                  </td>
+                  <td>
+                    {{ route['available_count'] }}/{{ route['benchmark_count'] }}
+                    <div class="muted">formal {{ route['selected_as_formal_count'] }} · primary {{ route['selected_as_primary_count'] }}</div>
+                  </td>
+                  <td>
+                    {{ fmt_num(route['mean_abs_af95_error_c']) }} C
+                    <div class="muted">Af-tan {{ fmt_num(route['mean_abs_aftan_error_c']) }} C</div>
+                  </td>
+                  <td>{{ route['dominant_gate_reason'] or '-' }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+
+          <div>
+            <h3>Benchmarks</h3>
+            {% if family['benchmarks'] %}
+            <div class="benchmark-list">
+              {% for benchmark in family['benchmarks'] %}
+              <section class="benchmark-card">
+                <h3>{{ benchmark['benchmark_name'] }}</h3>
+                <div class="muted">{{ benchmark['description'] or 'no description' }}</div>
+                <div class="meta-grid">
+                  <div>source</div><div>{{ benchmark['source_label'] }}</div>
+                  <div>output dir</div><div>{{ benchmark['output_dir_name'] }}</div>
+                  <div>object reportability</div><div>{{ benchmark['object_reportability_status'] or '-' }}</div>
+                  <div>object formal</div>
+                  <div>
+                    {% if benchmark['object_formal_route_alias'] %}
+                      Route {{ benchmark['object_formal_route_alias'] }} · {{ benchmark['object_formal_metric_key'] }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </div>
+                  <div>object recommended</div>
+                  <div>
+                    {% if benchmark['object_recommended_route_alias'] %}
+                      Route {{ benchmark['object_recommended_route_alias'] }} · {{ benchmark['object_recommended_metric_key'] }}
+                    {% else %}
+                      -
+                    {% endif %}
+                  </div>
+                  <div>formal gate</div><div>{{ benchmark['object_formal_gate_reason'] or '-' }}</div>
+                </div>
+
+                <div class="qc-strip">
+                  {% for qc in benchmark['qc_highlights'] %}
+                  <span class="qc-chip">{{ qc['label'] }}: {{ fmt_num(qc['value'], 3, ' ' ~ qc['suffix'] if qc.get('suffix') else '') }}</span>
+                  {% endfor %}
+                </div>
+
+                <table class="route-table">
+                  <thead>
+                    <tr>
+                      <th>Route</th>
+                      <th>status</th>
+                      <th>Af error</th>
+                      <th>measured / truth</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for route in benchmark['routes'] %}
+                    <tr>
+                      <td>
+                        <strong>{{ route['display_label'] }}</strong>
+                        <div class="muted">{{ route['metric_key'] }}</div>
+                      </td>
+                      <td>
+                        <span class="pill route-{{ (route['reportability_status'] or 'unrecorded')|replace('_', '-') }}">{{ route['reportability_label'] }}</span>
+                        <div class="muted">{{ route['gate_reason'] or '-' }}</div>
+                      </td>
+                      <td>
+                        Af-95 {{ fmt_num(route['af95_error_c']) }} C
+                        <div class="muted">Af-tan {{ fmt_num(route['aftan_error_c']) }} C</div>
+                      </td>
+                      <td>
+                        {{ fmt_num(route['measured_af95_c']) }} / {{ fmt_num(route['truth_af95_c']) }}
+                        <div class="muted">{{ fmt_num(route['measured_aftan_c']) }} / {{ fmt_num(route['truth_aftan_c']) }}</div>
+                      </td>
+                    </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              </section>
+              {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty">
+              <p class="muted">当前工作区还没有 {{ family['label'] }} benchmark 产物。生成 suite summary 或至少放入一个 `analysis_metrics.json` 后，这里会自动出现。</p>
+            </div>
+            {% endif %}
+          </div>
+        </article>
+        {% endfor %}
+      </section>
+    </div>
+  </body>
+</html>

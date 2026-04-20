@@ -15,6 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from .extract_braided import BraidedExtractionConfig, extract_braided_geometry
+from .export_contract import canonical_object_result_fields
 from .metrics import evaluate_metric, infer_metric_direction, summarize_numeric_sweep
 from .pipeline import (
     BRAIDED_FORMAL_CANDIDATES,
@@ -209,6 +210,19 @@ def _axis_eval_series(series: pd.DataFrame) -> np.ndarray:
 
 def _braided_alias(metric_key: str) -> str:
     return BRAIDED_METRIC_KEY_TO_ALIAS.get(metric_key, metric_key)
+
+
+def _copy_route_results(route_results: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return [dict(entry) for entry in (route_results or [])]
+
+
+def _route_results_by_alias(route_results: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+    by_alias: dict[str, dict[str, Any]] = {}
+    for entry in _copy_route_results(route_results):
+        alias = entry.get("alias")
+        if isinstance(alias, str) and alias:
+            by_alias[alias] = entry
+    return by_alias
 
 
 def _load_frame(video_path: Path, frame_idx: int) -> np.ndarray:
@@ -490,6 +504,7 @@ def run_braided_benchmark(
         "zone_symmetry_mae": _mean_abs_error(result.series["zone_symmetry"], truth["zone_symmetry_true"]),
     }
     formal_qc = compute_braided_acceptance(result.series, acceptance_profile="synthetic")
+    route_results = _copy_route_results(result.route_results)
     summary = {
         "benchmark_name": scenario.name,
         "benchmark_description": scenario.description,
@@ -523,6 +538,8 @@ def run_braided_benchmark(
         "aftan_c": None if result.aftan_c is None else float(result.aftan_c),
         "provisional_af95_c": None if result.provisional_af95_c is None else float(result.provisional_af95_c),
         "provisional_aftan_c": None if result.provisional_aftan_c is None else float(result.provisional_aftan_c),
+        "route_results": route_results,
+        "route_results_by_alias": _route_results_by_alias(route_results),
         "truth_axis_af95_c": float(truth_axis_eval.af95_c),
         "truth_axis_aftan_c": float(truth_axis_eval.aftan_c),
         "truth_env_af95_c": float(truth_env_eval.af95_c),
@@ -606,6 +623,19 @@ def run_braided_benchmark(
         "diameter_threshold_sensitivity": diameter_threshold_sensitivity,
         "error_summary": error_summary,
     }
+    summary.update(
+        canonical_object_result_fields(
+            preset="braided_like",
+            reportability_status=result.reportability_status,
+            formal_metric_key=result.formal_metric_label,
+            formal_gate_reason=result.formal_gate_reason,
+            provisional_metric_key=result.provisional_metric_label,
+            af95_c=None if result.af95_c is None else float(result.af95_c),
+            aftan_c=None if result.aftan_c is None else float(result.aftan_c),
+            provisional_af95_c=None if result.provisional_af95_c is None else float(result.provisional_af95_c),
+            provisional_aftan_c=None if result.provisional_aftan_c is None else float(result.provisional_aftan_c),
+        )
+    )
     (out_dir / "analysis_metrics.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",

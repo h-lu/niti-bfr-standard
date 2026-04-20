@@ -30,38 +30,96 @@
 `YY/T 1771` 对齐的 BFR 工作流，并同样按 A / B / C 三类几何视角组织量测:
 
 - braided `A = length_axis(T)`
-- braided `B = diameter_max(T)`
+- braided `B = diameter_max(T)`，当前实现定义为 strict body-only `max_s w_orth(s)`，对应 braided 的宽度/直径视角
 - braided `C = area_proj(T)`
 
 需要特别区分长期方法学目标和当前实现状态:
 
 - 从长期方法学上, `A / B / C` 是 braided 的三条并行分析路线, 用于交叉验证和稳健性对照。
-- 从当前实现状态上, braided 的 `formal Af` 默认仍只放行 `A:length_axis(T)`；`B/C` 当前主要作为 quicklook 与 formal 对照量。
+- 从当前实现状态上, braided 的 `formal Af` 默认仍优先 `A:length_axis(T)`；`B:diameter_max(T)` 当前保留为对象级 formal candidate，`C:area_proj(T)` 则稳定输出自己的 route-level result，并带独立 `status / gate / gate_reason`，但仍不是默认对象级 formal candidate。
 - 同理, `wire-like` 当前正式主量默认仍是 `kappa_fit(T)`，这属于当前实现状态，不应误读为项目长期只保留单一 formal 视角。
 
 项目的统一输出口径也应和这个边界保持一致:
 
 - 对每一类对象, `A / B / C` 三条路线都应各自输出结果, 而不是只显示最终被选中的单一路线。
-- “有路线结果”表示该路线给出了自己的几何量、恢复曲线、QC 与可用性判断。
+- “有路线结果”表示该路线给出了自己的几何量、值列/恢复列、Af 估计、QC 与可用性判断。
 - “有 formal 结果”表示该路线通过了对应准入条件, 可以对外给出正式 `Af-95 / Af-tan`。
 - 因此, 同一个 run 里可以同时出现“三条路线都有结果, 但只有其中一条是当前 formal 主量”。
-- 同一个 run 里也可以出现“三条路线都只有 quicklook / provisional / blocked 状态, 没有任何一路被正式放行”。
+- 同一个 run 里也可以出现“三条路线都只有 quicklook / provisional / formal_blocked 状态, 没有任何一路被正式放行”。
 
 换句话说:
 
 - `route-level result` 不等于 `formal passed`
+- `route-level formal_passed` 也不自动等于对象级最终 formal 推荐
 - `formal Af` 是某条路线在满足准入条件后的输出状态, 不是把另外两条路线从页面、结果文件或方法学中删除
 
 当前仓库在收口时应逐步把结果页和 summary 统一成“对象级结果 + 路线级结果”两层语义:
 
 - 对象级结果: 当前 run 的请求模式、实际模式、最终 formal 是否放行、推荐展示主量
-- 路线级结果: `A / B / C` 每条路线自己的 `metric`、`Af-95`、`Af-tan`、`status`、`gate reason`、`warning codes`
+- 路线级结果: `A / B / C` 每条路线自己的 `metric`、值列/恢复列、`Af-95`、`Af-tan`、`status`、`gate reason`、`warning codes`、路线级 QC 摘要与选择标记
+
+当前 route-level 的稳定结果字段约定为:
+
+- `alias`
+- `metric_key`
+- `display_label`
+- `value_series_col`
+- `recovery_series_col`
+- `af95_c`
+- `aftan_c`
+- `fit_rmse`
+- `monotonic_violation_fraction`
+- `dynamic_range`
+- `reportability_status`
+- `gate_reason`
+- `warning_codes`
+- `formal_candidate`
+- `accepted_as_formal_candidate`
+- `selected_as_primary`
+- `selected_as_formal`
+- `formal_role`
+- `auxiliary_metric_keys`
+- `route_qc_summary`
+
+当前对象级结果字段则应单独读取, 不能回写成某一条 route entry 的替代物:
+
+- 主读路径先用 canonical `object_*` contract
+- `object_reportability_status`
+- `object_formal_metric_key` / `object_formal_route_alias`
+- `object_provisional_metric_key` / `object_provisional_route_alias`
+- `object_recommended_metric_key` / `object_recommended_route_alias`
+- `object_formal_gate_reason`
+- `object_formal_af95_c` / `object_formal_aftan_c`
+- `object_provisional_af95_c` / `object_provisional_aftan_c`
+- `formal_metric_label`、`provisional_metric_label`、`primary_metric_label` 继续保留为兼容现有 summary/UI 的展示字段, 但不再作为主 contract
+
+当前 route-level QC 摘要的读取口径也应固定:
+
+- 每条路线至少要先读 `reportability_status`、`gate_reason`、`warning_codes`
+- 再读 `fit_rmse`、`monotonic_violation_fraction`、`dynamic_range`
+- 然后读该路线自己的 `route_qc_summary`
+- `route_qc_summary` 的标准骨架固定为:
+  `valid_points`、`quality_median`、`monotonic_violation_fraction`、`tail_recovery_median`、`stability_metric`
+- `wire-like` 再结合端点稳定性、高温端覆盖、与 B 路线偏差等 gate 语义理解 A/C 的可用性
+- `braided` 再结合 `route_qc_summary.stability_metric.key / route_qc_summary.stability_metric.value` 中与路线相关的稳定性指标:
+  `A:length_axis` 对应 `centerline_disagreement_median`
+  `B:diameter_max` 对应 `axis_peak_position_stability_p95`
+  `C:area_proj` 对应 `area_definition_gap_fraction_p95`
+- 同时结合 `formal_qc`、`centerline_disagreement_median`、`body_mask_attachment_leak_fraction_median`、`area_proj_definition_gap_px2` 等对象级/benchmark QC 理解 A/B/C 的稳定性
+- 也就是说, 当前“route-level QC 摘要”已经有稳定数据骨架, 但展示层仍分布在 `route_results` 与对象级 summary/benchmark summary 两层
 
 这套语义的目标是让用户能同时看到:
 
 - 每条路线都算出了什么
 - 每条路线当前处于 `quicklook`、`provisional`、`formal_blocked` 还是 `formal_passed`
 - 对象级最终 formal 结论是由哪条路线给出的
+
+因此推荐的阅读顺序应固定为:
+
+1. 先看 `route_results` 里的 `A / B / C` 三条路线各自算出了什么、状态如何、gate 为什么关闭或放行
+2. 再看对象级 canonical `object_*` 字段判断 formal / provisional / recommended 的对象级选择
+3. 如需兼容旧 summary/UI，再回看 `formal_metric_label`、`provisional_metric_label`、`primary_metric_label`
+4. 最后判断对象级这次推荐展示哪一路, 而不是倒过来把对象级 winner 当成唯一输出
 
 这里仍然不能误写成“六条路线都已经 fully formalized”。更准确的说法是:
 
@@ -215,6 +273,24 @@ python3 scripts/run_braided_benchmarks.py --list
 python3 scripts/run_braided_benchmarks.py --all
 ```
 
+运行 wire-like calibration benchmarks:
+
+```bash
+python3 scripts/run_wire_benchmarks.py
+```
+
+该命令默认运行 wire 的 calibration benchmark 集合，并写出:
+
+- `outputs/wire_benchmark_suite/benchmark_summary.json`
+- `outputs/wire_benchmark_suite/benchmark_summary.csv`
+
+若要列出全部 wire benchmark 或连同基线一起运行:
+
+```bash
+python3 scripts/run_wire_benchmarks.py --list
+python3 scripts/run_wire_benchmarks.py --all
+```
+
 生成 demo 的路线 A / B 计算过程视频:
 
 ```bash
@@ -286,18 +362,29 @@ python3 scripts/analyze_braided_like.py /path/to/video.mp4
 python3 scripts/analyze_braided_like.py /path/to/video.mp4 --temperature-csv /path/to/temperature.csv
 ```
 
-该脚本当前仅用于 `braided device` 风格对象的:
+该脚本当前会固定产出 braided `A / B / C` 三条路线的结果:
 
-- 包络长度 quicklook
-- 主轴长度 quicklook
-- 最大直径与左右收口定位
-- QC 叠加帧导出
+- 无温度时, 三条路线都保留各自的 quicklook 曲线与 QC 输出
+- 有温度时, `length_axis / diameter_max / area_proj` 都会稳定给出各自的 route-level Af 估计、status 与 gate reason
+- 其中 `B` 路线固定指向 braided 的宽度/直径视角; 当前实现键为 strict body-only `diameter_max(T)`，并保留为对象级 formal candidate
+- `area_proj(T)` 当前稳定输出 route-level result, 承担 provisional / formal_blocked 对照与方法学验证角色
+- 同时继续导出最大直径、左右收口定位和 QC 叠加帧
+
+当前 web / JSON / summary 的阅读口径建议固定为:
+
+- 先读 `route_results` 或 `route_results_by_alias`
+- 固定按 `A / B / C` 顺序读 `metric_key`、`display_label`、`value_series_col`、`recovery_series_col`、`af95_c`、`aftan_c`、`reportability_status`、`gate_reason`、`warning_codes`
+- 若要判断该路线是否属于对象级 formal 候选, 再看 `formal_candidate`、`accepted_as_formal_candidate`
+- 若要判断该路线是否被对象级流程选为 primary / formal, 再看 `selected_as_primary`、`selected_as_formal`、`formal_role`
+- 若要读取路线级 QC, 再看 `route_qc_summary` 的统一骨架:
+  `valid_points`、`quality_median`、`monotonic_violation_fraction`、`tail_recovery_median`、`stability_metric`
+- 若要判断对象级最终推荐的是哪一路, 主读路径先看 canonical `object_*` 字段, 旧的 `formal_metric_label` / `provisional_metric_label` / `primary_metric_label` 仅作兼容展示
 
 当满足温度同步、完整高温平台、主轴长度稳定提取等条件时, 该脚本还可输出:
 
 - `length_axis(T)` 主量对应的 `Af-95`
 - `length_axis(T)` 主量对应的 `Af-tan`
-- `length_axis / length_env / diameter_max` 的恢复曲线对照
+- `length_axis / diameter_max / area_proj` 的路线级恢复曲线对照
 
 按当前方法学定义，这条 braided 路线的正式目标不是 `virtual deployment`，而是:
 
@@ -308,11 +395,48 @@ python3 scripts/analyze_braided_like.py /path/to/video.mp4 --temperature-csv /pa
 - 用二维投影 `length_axis(T)` 作为 braided 试样的主恢复量
 - 把 `R_axis(T) = (L_M - L_axis(T)) / (L_M - L_A)` 作为正式恢复率
 - 再按 `Af-95` 与 `Af-tan` 计算正式结果
-- `length_env`、`diameter_max` 和分区量仅作对照, 不参与正式主量竞争
+- `B` 路线始终表示 braided 的宽度/直径视角; 当前实现用 strict body-only `diameter_max(T)` 承载这一路线, 它保留为对象级 formal candidate, 但不是默认 formal 主量
+- `area_proj(T)` 当前稳定输出 route-level result, 并带自己的 gate / status / gate_reason, 主要承担 provisional / formal_blocked 对照与方法学验证角色
+- `length_env` 和分区量仍主要用于对照与解释层
 
 当前脚本仍是这条正式路线的最小实现 / quicklook 入口；正式口径与后续升级方向以
 [braided-video-formal-method.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-video-formal-method.md)
 为准。
+
+## 路线级 QC 与 Benchmark 读取
+
+当前仓库读取 route-level QC 与 benchmark 的建议顺序如下:
+
+1. 单个 run:
+   先看 `summary.json` 里的 `route_results` / `route_results_by_alias`, 这是 A/B/C 三条路线的统一入口。
+2. 单个 run 的对象级决策:
+   主读路径先看 canonical `object_reportability_status`、`object_formal_metric_key`、`object_provisional_metric_key`、`object_recommended_metric_key`、`object_formal_gate_reason`；`reportability_status`、`formal_metric_label`、`provisional_metric_label` 继续保留为兼容展示层。
+3. 单对象 benchmark:
+   `wire-like` 看各 benchmark 输出目录下的 `summary.json`；
+   `braided` 看各 benchmark 输出目录下的 `analysis_metrics.json` 与 `analysis.csv`。
+4. benchmark suite:
+   `wire-like` 看 `outputs/wire_benchmark_suite/benchmark_summary.json` 与 `benchmark_summary.csv`；
+   `braided` 看 `outputs/braided_benchmark_suite/benchmark_summary.json` 与 `benchmark_summary.csv`。
+
+对 wire 与 braided 的 benchmark 汇总文件, 当前推荐的横向比较方式是一致的:
+
+- 先按路线读 suite summary 里的 A/B/C 行为, 包括 `metric_key`、`reportability_status`、`gate_reason`、`accepted_as_formal_candidate`、`selected_as_primary`、`selected_as_formal`
+- 再看各路线的 `af95_error_c` / `aftan_error_c`、`dynamic_range`、`fit_rmse`、`monotonic_violation_fraction`
+- 再把 `route_qc_summary` 的统一骨架和对象共享 QC 一起读:
+  `wire-like` 重点补看端点稳定性、中心线点数、拟合占比等 shared QC；
+  `braided` 重点补看 `body_mask_attachment_leak_fraction`、`centerline_disagreement_median`、`axis_peak_position_stability_p95`、`area_proj_definition_gap_px2`
+- 最后回到各 benchmark 目录下的 run summary 判断该路线在当前 stressor 下是 `formal_passed`、`provisional` 还是 `formal_blocked`
+
+项目长期目标是让 benchmark 页面或汇总文件能横向比较六条路线:
+
+- wire `A:x_route_a`
+- wire `B:kappa_fit`
+- wire `C:kappa_route_c`
+- braided `A:length_axis`
+- braided `B:diameter_max`
+- braided `C:area_proj`
+
+当前实现已经为 wire 与 braided 都提供了 suite 级 `benchmark_summary.json/csv` 入口；两侧的单场景文件形态还不完全相同, 但 benchmark summary 的阅读体验应统一为“先路线级比较, 再对象级选择, 最后回到单场景 QC 解释”。因此这里说的“六路线横向比较”既是当前可落地的 summary 体验, 也是后续页面层继续对齐的方向。
 
 ## 通俗解释
 

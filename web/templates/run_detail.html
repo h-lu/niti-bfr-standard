@@ -33,6 +33,11 @@
       .route-title { margin: 0; font-size: 16px; }
       .route-metric { color: #475569; font-size: 13px; margin: 2px 0 0; }
       .route-role { display: inline-block; padding: 3px 9px; border-radius: 999px; background: #e0f2fe; color: #075985; font-size: 12px; font-weight: 700; }
+      .route-status { background: #e2e8f0; color: #334155; }
+      .route-quicklook-only { background: #e0f2fe; color: #075985; }
+      .route-formal-blocked { background: #fee2e2; color: #991b1b; }
+      .route-provisional { background: #fef3c7; color: #92400e; }
+      .route-formal-passed { background: #dcfce7; color: #166534; }
       .route-kv { display: grid; grid-template-columns: 92px 1fr; gap: 6px 10px; font-size: 13px; }
       .route-kv div { padding: 1px 0; }
       .subtle-box { border: 1px dashed #cbd5e1; border-radius: 14px; padding: 14px; background: #f8fafc; }
@@ -57,6 +62,8 @@
         <div>
           <a href="{{ request.url_for('home') }}">返回首页</a>
           <span class="muted"> · </span>
+          <a href="{{ request.url_for('benchmark_summary') }}">Benchmark 汇总</a>
+          <span class="muted"> · </span>
           <a href="{{ request.url_for('history') }}">历史任务</a>
         </div>
       </div>
@@ -74,10 +81,27 @@
             <div>结果说明</div><div>{{ run_result_hint(run) }}</div>
             <div>视频</div><div>{{ run['video_filename'] }}</div>
             <div>温度 CSV</div><div>{{ run['temperature_filename'] or '-' }}</div>
-            <div>formal metric</div><div>{% if run['actual_mode'] == 'formal_af' %}{{ run['formal_metric_label'] or '-' }}{% else %}-{% endif %}</div>
-            <div>gate reason</div><div>{{ run['formal_gate_reason'] or '-' }}</div>
-            <div>Af-95</div><div>{% if run['af95_c'] is not none %}{{ '%.2f'|format(run['af95_c']) }} C{% else %}-{% endif %}</div>
-            <div>Af-tan</div><div>{% if run['aftan_c'] is not none %}{{ '%.2f'|format(run['aftan_c']) }} C{% else %}-{% endif %}</div>
+            <div>object formal</div>
+            <div>
+              {% if summary and summary.get('object_formal_route_alias') %}
+                Route {{ summary.get('object_formal_route_alias') }} · {{ summary.get('object_formal_metric_key') }}
+              {% elif run['actual_mode'] == 'formal_af' and run['formal_metric_label'] %}
+                {{ run['formal_metric_label'] }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+            <div>object recommended</div>
+            <div>
+              {% if summary and summary.get('object_recommended_route_alias') %}
+                Route {{ summary.get('object_recommended_route_alias') }} · {{ summary.get('object_recommended_metric_key') }}
+              {% else %}
+                -
+              {% endif %}
+            </div>
+            <div>object gate</div><div>{% if summary %}{{ summary.get('object_formal_gate_reason') or '-' }}{% else %}{{ run['formal_gate_reason'] or '-' }}{% endif %}</div>
+            <div>formal Af-95</div><div>{% if summary %}{{ fmt_temp(summary.get('object_formal_af95_c')) }}{% else %}{% if run['af95_c'] is not none %}{{ '%.2f'|format(run['af95_c']) }} C{% else %}-{% endif %}{% endif %}</div>
+            <div>formal Af-tan</div><div>{% if summary %}{{ fmt_temp(summary.get('object_formal_aftan_c')) }}{% else %}{% if run['aftan_c'] is not none %}{{ '%.2f'|format(run['aftan_c']) }} C{% else %}-{% endif %}{% endif %}</div>
           </div>
 
           {% if run['error_text'] %}
@@ -111,11 +135,37 @@
             </p>
             {% if summary %}
             <div class="kv">
-              <div>reportability</div><div>{{ summary.get('reportability_status') or '-' }}</div>
-              <div>formal winner</div><div>{{ summary.get('formal_metric_label') or '-' }}</div>
-              <div>provisional winner</div><div>{{ summary.get('provisional_metric_label') or '-' }}</div>
+              <div>object reportability</div><div>{{ summary.get('object_reportability_status') or summary.get('reportability_status') or '-' }}</div>
+              <div>object formal</div>
+              <div>
+                {% if summary.get('object_formal_route_alias') %}
+                  Route {{ summary.get('object_formal_route_alias') }} · {{ summary.get('object_formal_metric_key') }}
+                {% else %}
+                  -
+                {% endif %}
+              </div>
+              <div>object provisional</div>
+              <div>
+                {% if summary.get('object_provisional_route_alias') %}
+                  Route {{ summary.get('object_provisional_route_alias') }} · {{ summary.get('object_provisional_metric_key') }}
+                {% else %}
+                  -
+                {% endif %}
+              </div>
+              <div>object recommended</div>
+              <div>
+                {% if summary.get('object_recommended_route_alias') %}
+                  Route {{ summary.get('object_recommended_route_alias') }} · {{ summary.get('object_recommended_metric_key') }}
+                {% else %}
+                  -
+                {% endif %}
+              </div>
               <div>warning codes</div><div>{% if summary.get('warning_codes') %}{{ summary.get('warning_codes') | join(', ') }}{% else %}-{% endif %}</div>
-              <div>formal gate</div><div>{{ summary.get('formal_gate_reason') or '-' }}</div>
+              <div>formal gate</div><div>{{ summary.get('object_formal_gate_reason') or summary.get('formal_gate_reason') or '-' }}</div>
+              <div>formal Af-95</div><div>{{ fmt_temp(summary.get('object_formal_af95_c')) }}</div>
+              <div>formal Af-tan</div><div>{{ fmt_temp(summary.get('object_formal_aftan_c')) }}</div>
+              <div>prov Af-95</div><div>{{ fmt_temp(summary.get('object_provisional_af95_c')) }}</div>
+              <div>prov Af-tan</div><div>{{ fmt_temp(summary.get('object_provisional_aftan_c')) }}</div>
             </div>
             {% else %}
             <p class="muted">{% if refresh %}任务还在跑，页面会自动刷新。{% else %}还没有 summary。{% endif %}</p>
@@ -125,175 +175,33 @@
           <div>
             <h2>路线级结果</h2>
             <p class="muted">
-              这里优先显示 `A / B / C` 三条路线各自的结果、状态和 gate 信息。若主干实现尚未写出 `route_results`，页面会自动降级为兼容视图。
+              这里固定展示 `A / B / C` 三条路线各自的结果、状态和 gate 信息。即使旧 summary 没有完整 `route_results`，页面也会先补成统一展示结构。
             </p>
 
             {% if summary and summary.get('route_results') %}
-            {% set route_results = summary.get('route_results') %}
             <div class="route-grid">
-              {% for route_alias in ['A', 'B', 'C'] %}
-              {% if route_results is mapping %}
-              {% set route = route_results.get(route_alias) %}
-              {% else %}
-              {% set ns = namespace(route=None) %}
-              {% for item in route_results %}
-                {% if item.get('alias') == route_alias or item.get('route_alias') == route_alias %}
-                  {% set ns.route = item %}
-                {% endif %}
-              {% endfor %}
-              {% set route = ns.route %}
-              {% endif %}
+              {% for route in summary.get('route_results') %}
               <article class="route-card">
-                {% if route %}
                 <div class="route-head">
                   <div>
-                    <h3 class="route-title">Route {{ route_alias }}</h3>
-                    <p class="route-metric">{{ route.get('display_label') or route.get('metric_key') or route.get('metric_label') or '-' }}</p>
+                    <h3 class="route-title">Route {{ route.get('alias') }}</h3>
+                    <p class="route-metric">{{ route.get('display_label') or route.get('metric_key') or '-' }}</p>
                   </div>
-                  <span class="route-role">{{ route.get('formal_role') or route.get('reportability_status') or 'route result' }}</span>
+                  <span class="pill route-status route-{{ route.get('reportability_status', 'missing')|replace('_', '-') }}">{{ route.get('reportability_label') or route.get('reportability_status') or 'missing' }}</span>
                 </div>
                 <div class="route-kv">
-                  <div>metric</div><div>{{ route.get('metric_key') or route.get('metric_label') or '-' }}</div>
+                  <div>metric</div><div>{{ route.get('metric_key') or '-' }}</div>
+                  <div>role</div><div>{{ route.get('formal_role') or '-' }}</div>
                   <div>status</div><div>{{ route.get('reportability_status') or '-' }}</div>
                   <div>Af-95</div><div>{{ fmt_temp(route.get('af95_c')) }}</div>
                   <div>Af-tan</div><div>{{ fmt_temp(route.get('aftan_c')) }}</div>
-                  <div>gate</div><div>{{ route.get('gate_reason') or route.get('formal_gate_reason') or '-' }}</div>
+                  <div>gate</div><div>{{ route.get('gate_reason') or '-' }}</div>
                   <div>warnings</div><div>{% if route.get('warning_codes') %}{{ route.get('warning_codes') | join(', ') }}{% else %}-{% endif %}</div>
+                  <div>formal candidate</div><div>{% if route.get('accepted_as_formal_candidate') %}accepted{% elif route.get('formal_candidate') %}candidate{% else %}no{% endif %}</div>
+                  <div>selected</div><div>{% if route.get('selected_as_formal') %}object formal{% elif route.get('selected_as_primary') %}object primary{% else %}-{% endif %}</div>
                 </div>
-                {% else %}
-                <div class="route-head">
-                  <div>
-                    <h3 class="route-title">Route {{ route_alias }}</h3>
-                    <p class="route-metric">pending</p>
-                  </div>
-                  <span class="route-role">missing</span>
-                </div>
-                <p class="muted">summary 已提供 `route_results`，但当前没有这个路线的条目。</p>
-                {% endif %}
               </article>
               {% endfor %}
-            </div>
-            {% elif summary and summary.get('metric_reports') %}
-            {% set metric_reports = summary.get('metric_reports') %}
-            <div class="subtle-box">
-              <p class="muted">
-                当前 summary 尚未包含 `route_results`。下面是根据现有 `metric_reports` 生成的兼容视图，用于给 A / B / C 预留稳定展示位；真正的 route-level `status / gate_reason / warning_codes` 仍以后续主干字段为准。
-              </p>
-            </div>
-            <div class="route-grid">
-              {% if 'braided' in (run['preset'] or '') %}
-              {% set route_a = metric_reports.get('length_axis') %}
-              {% set route_b = metric_reports.get('diameter_max') %}
-              {% set route_c = metric_reports.get('area_proj') %}
-              <article class="route-card">
-                <div class="route-head">
-                  <div>
-                    <h3 class="route-title">Route A</h3>
-                    <p class="route-metric">A:length_axis</p>
-                  </div>
-                  <span class="route-role">{% if summary.get('formal_metric_label') == 'length_axis' %}current formal{% elif summary.get('provisional_metric_label') == 'length_axis' %}current provisional{% else %}legacy summary{% endif %}</span>
-                </div>
-                <div class="route-kv">
-                  <div>metric</div><div>length_axis</div>
-                  <div>status</div><div>route-level status unavailable</div>
-                  <div>Af-95</div><div>{{ fmt_temp(route_a.get('af95_c') if route_a else none) }}</div>
-                  <div>Af-tan</div><div>{{ fmt_temp(route_a.get('aftan_c') if route_a else none) }}</div>
-                  <div>gate</div><div>{% if summary.get('formal_metric_label') == 'length_axis' %}object-level formal gate passed{% else %}-{% endif %}</div>
-                  <div>notes</div><div>兼容当前 `metric_reports` 口径</div>
-                </div>
-              </article>
-              <article class="route-card">
-                <div class="route-head">
-                  <div>
-                    <h3 class="route-title">Route B</h3>
-                    <p class="route-metric">B:diameter_max</p>
-                  </div>
-                  <span class="route-role">{% if summary.get('formal_metric_label') == 'diameter_max' %}current formal{% elif summary.get('provisional_metric_label') == 'diameter_max' %}current provisional{% else %}legacy summary{% endif %}</span>
-                </div>
-                <div class="route-kv">
-                  <div>metric</div><div>diameter_max</div>
-                  <div>status</div><div>route-level status unavailable</div>
-                  <div>Af-95</div><div>{{ fmt_temp(route_b.get('af95_c') if route_b else none) }}</div>
-                  <div>Af-tan</div><div>{{ fmt_temp(route_b.get('aftan_c') if route_b else none) }}</div>
-                  <div>gate</div><div>{% if summary.get('formal_metric_label') == 'diameter_max' %}object-level formal gate passed{% else %}-{% endif %}</div>
-                  <div>notes</div><div>兼容当前 `metric_reports` 口径</div>
-                </div>
-              </article>
-              <article class="route-card">
-                <div class="route-head">
-                  <div>
-                    <h3 class="route-title">Route C</h3>
-                    <p class="route-metric">C:area_proj</p>
-                  </div>
-                  <span class="route-role">legacy summary</span>
-                </div>
-                <div class="route-kv">
-                  <div>metric</div><div>area_proj</div>
-                  <div>status</div><div>route-level status unavailable</div>
-                  <div>Af-95</div><div>{{ fmt_temp(route_c.get('af95_c') if route_c else none) }}</div>
-                  <div>Af-tan</div><div>{{ fmt_temp(route_c.get('aftan_c') if route_c else none) }}</div>
-                  <div>gate</div><div>-</div>
-                  <div>notes</div><div>兼容当前 `metric_reports` 口径</div>
-                </div>
-              </article>
-              {% else %}
-              {% set route_a = metric_reports.get('x_route_a') %}
-              {% set route_b = metric_reports.get('kappa_fit') %}
-              {% set route_b_aux = metric_reports.get('x_fit') %}
-              {% set route_c = metric_reports.get('kappa_route_c') %}
-              {% set route_c_aux = metric_reports.get('x_route_c') %}
-              <article class="route-card">
-                <div class="route-head">
-                  <div>
-                    <h3 class="route-title">Route A</h3>
-                    <p class="route-metric">A:x_route_a</p>
-                  </div>
-                  <span class="route-role">legacy summary</span>
-                </div>
-                <div class="route-kv">
-                  <div>metric</div><div>x_route_a</div>
-                  <div>status</div><div>route-level status unavailable</div>
-                  <div>Af-95</div><div>{{ fmt_temp(route_a.get('af95_c') if route_a else none) }}</div>
-                  <div>Af-tan</div><div>{{ fmt_temp(route_a.get('aftan_c') if route_a else none) }}</div>
-                  <div>gate</div><div>-</div>
-                  <div>notes</div><div>兼容当前 `metric_reports` 口径</div>
-                </div>
-              </article>
-              <article class="route-card">
-                <div class="route-head">
-                  <div>
-                    <h3 class="route-title">Route B</h3>
-                    <p class="route-metric">B:kappa_fit</p>
-                  </div>
-                  <span class="route-role">{% if summary.get('formal_metric_label') == 'kappa_fit' %}current formal{% elif summary.get('provisional_metric_label') == 'kappa_fit' %}current provisional{% else %}legacy summary{% endif %}</span>
-                </div>
-                <div class="route-kv">
-                  <div>metric</div><div>kappa_fit</div>
-                  <div>status</div><div>route-level status unavailable</div>
-                  <div>Af-95</div><div>{{ fmt_temp(route_b.get('af95_c') if route_b else none) }}</div>
-                  <div>Af-tan</div><div>{{ fmt_temp(route_b.get('aftan_c') if route_b else none) }}</div>
-                  <div>gate</div><div>{% if summary.get('formal_metric_label') == 'kappa_fit' %}object-level formal gate passed{% else %}-{% endif %}</div>
-                  <div>notes</div><div>{% if route_b_aux %}兼容视图中保留 `x_fit` 为同路线辅助量{% else %}兼容当前 `metric_reports` 口径{% endif %}</div>
-                </div>
-              </article>
-              <article class="route-card">
-                <div class="route-head">
-                  <div>
-                    <h3 class="route-title">Route C</h3>
-                    <p class="route-metric">C:kappa_route_c</p>
-                  </div>
-                  <span class="route-role">legacy summary</span>
-                </div>
-                <div class="route-kv">
-                  <div>metric</div><div>kappa_route_c</div>
-                  <div>status</div><div>route-level status unavailable</div>
-                  <div>Af-95</div><div>{{ fmt_temp(route_c.get('af95_c') if route_c else none) }}</div>
-                  <div>Af-tan</div><div>{{ fmt_temp(route_c.get('aftan_c') if route_c else none) }}</div>
-                  <div>gate</div><div>-</div>
-                  <div>notes</div><div>{% if route_c_aux %}兼容视图中保留 `x_route_c` 为同路线辅助量{% else %}兼容当前 `metric_reports` 口径{% endif %}</div>
-                </div>
-              </article>
-              {% endif %}
             </div>
             {% else %}
             <p class="muted">{% if refresh %}任务还在跑，route-level results 会在 summary 落盘后出现。{% else %}当前没有可展示的路线级结果。{% endif %}</p>

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 import sqlite3
 import shutil
@@ -16,12 +17,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .extract_braided import BraidedExtractionConfig
+from .export_contract import (
+    ROUTE_ALIAS_ORDER,
+    ROUTE_RESULTS_SCHEMA_VERSION,
+    canonical_object_result_fields,
+    route_results_dataframe,
+    route_results_by_alias as canonical_route_results_by_alias,
+)
 from .extract import ExtractionConfig
 from .pipeline import (
     AnalysisResult,
     BRAIDED_FORMAL_CANDIDATES,
     BRAIDED_METRIC_ALIAS_TO_KEY,
     BRAIDED_METRIC_KEY_TO_ALIAS,
+    WIRE_ROUTE_ALIAS_TO_KEY,
     analyze_braided_video_quicklook,
     analyze_video,
     compute_braided_acceptance,
@@ -42,6 +51,7 @@ DATA_ROOT = ROOT / "var" / "webapp"
 RUNS_ROOT = DATA_ROOT / "runs"
 DB_PATH = DATA_ROOT / "runs.db"
 CONFIG_PATH = ROOT / "configs" / "minimal.yaml"
+PROJECT_OUTPUTS_ROOT = ROOT / "outputs"
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 RUNS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -111,6 +121,76 @@ MODE_DISPLAY: dict[str, dict[str, str]] = {
     },
 }
 
+ROUTE_STATUS_LABELS = {
+    "quicklook_only": "quicklook only",
+    "formal_blocked": "formal blocked",
+    "provisional": "provisional",
+    "formal_passed": "formal passed",
+    "missing": "missing",
+}
+WIRE_ROUTE_SPECS: dict[str, dict[str, Any]] = {
+    "A": {
+        "metric_key": WIRE_ROUTE_ALIAS_TO_KEY["A"],
+        "display_label": "A:x_route_a",
+        "metric_family": ("x_route_a",),
+        "formal_candidate": False,
+    },
+    "B": {
+        "metric_key": WIRE_ROUTE_ALIAS_TO_KEY["B"],
+        "display_label": "B:kappa_fit",
+        "metric_family": ("kappa_fit", "x_fit"),
+        "formal_candidate": True,
+    },
+    "C": {
+        "metric_key": WIRE_ROUTE_ALIAS_TO_KEY["C"],
+        "display_label": "C:kappa_route_c",
+        "metric_family": ("kappa_route_c", "x_route_c"),
+        "formal_candidate": False,
+    },
+}
+BRAIDED_ROUTE_SPECS: dict[str, dict[str, Any]] = {
+    "A": {
+        "metric_key": BRAIDED_METRIC_ALIAS_TO_KEY["A"],
+        "display_label": "A:length_axis",
+        "metric_family": ("length_axis", "length_env"),
+        "formal_candidate": True,
+    },
+    "B": {
+        "metric_key": BRAIDED_METRIC_ALIAS_TO_KEY["B"],
+        "display_label": "B:diameter_max",
+        "metric_family": ("diameter_max",),
+        "formal_candidate": True,
+    },
+    "C": {
+        "metric_key": BRAIDED_METRIC_ALIAS_TO_KEY["C"],
+        "display_label": "C:area_proj",
+        "metric_family": ("area_proj",),
+        "formal_candidate": False,
+    },
+}
+BENCHMARK_FAMILY_DISPLAY: dict[str, dict[str, Any]] = {
+    "wire": {
+        "label": "wire-like",
+        "preset": "demo",
+        "suite_path": PROJECT_OUTPUTS_ROOT / "wire_benchmark_suite" / "benchmark_summary.json",
+    },
+    "braided": {
+        "label": "braided",
+        "preset": "braided_demo",
+        "suite_path": PROJECT_OUTPUTS_ROOT / "braided_benchmark_suite" / "benchmark_summary.json",
+    },
+}
+WIRE_LEGACY_ROUTE_METRICS = {
+    "A": ("x_route_a", "x_route_a_vs_x_true", "x_af95_c", "x_aftan_c"),
+    "B": ("kappa_fit", "kappa_fit_vs_kappa_true", "kappa_af95_c", "kappa_aftan_c"),
+    "C": ("kappa_route_c", "kappa_route_c_vs_kappa_true", "kappa_af95_c", "kappa_aftan_c"),
+}
+BRAIDED_SUITE_ROUTE_FIELDS = {
+    "A": ("length_axis", "length_axis_af95_error_c", "length_axis_aftan_error_c"),
+    "B": ("diameter_max", "diameter_af95_error_c", "diameter_aftan_error_c"),
+    "C": ("area_proj", "area_af95_error_c", "area_aftan_error_c"),
+}
+
 
 @app.middleware("http")
 async def forwarded_prefix_middleware(request: Request, call_next):
@@ -168,6 +248,791 @@ def _run_result_hint(run: sqlite3.Row | dict[str, Any]) -> str:
     return gate_reason or "-"
 
 
+def _is_braided_preset(preset: str | None) -> bool:
+    return str(preset or "").startswith("braided")
+
+
+def _route_specs_for_preset(preset: str | None) -> dict[str, dict[str, Any]]:
+    return BRAIDED_ROUTE_SPECS if _is_braided_preset(preset) else WIRE_ROUTE_SPECS
+
+
+def _route_status_label(status: str | None) -> str:
+    return ROUTE_STATUS_LABELS.get(str(status or ""), str(status or "missing").replace("_", " "))
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(numeric):
+        return None
+    return numeric
+
+
+def _coerce_warning_codes(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if item not in {None, ""}]
+    if value == "":
+        return []
+    return [str(value)]
+
+
+def _metric_report_field(report: Any, field: str) -> Any:
+    if report is None:
+        return None
+    if isinstance(report, dict):
+        return report.get(field)
+    return getattr(report, field, None)
+
+
+def _route_alias_from_metric_key(preset: str | None, metric_key: str | None) -> str | None:
+    if metric_key is None:
+        return None
+    for alias, spec in _route_specs_for_preset(preset).items():
+        if metric_key in spec["metric_family"]:
+            return alias
+    return None
+
+
+def _route_metric_report(metric_reports: dict[str, Any] | None, spec: dict[str, Any]) -> Any:
+    if not metric_reports:
+        return None
+    for metric_key in spec["metric_family"]:
+        if metric_key in metric_reports:
+            return metric_reports[metric_key]
+    return None
+
+
+def _temperature_available_for_summary(summary_like: dict[str, Any]) -> bool:
+    if summary_like.get("temperature_filename"):
+        return True
+    return summary_like.get("temperature_c_min") is not None or summary_like.get("temperature_c_max") is not None
+
+
+def _fallback_route_status(
+    *,
+    metric_key: str,
+    route_entry: dict[str, Any],
+    requested_mode: str | None,
+    actual_mode: str | None,
+    temperature_available: bool,
+    formal_metric_label: str | None,
+    provisional_metric_label: str | None,
+    report: Any,
+) -> str:
+    if route_entry.get("selected_as_formal") or formal_metric_label == metric_key:
+        return "formal_passed" if actual_mode == "formal_af" else "provisional"
+    if provisional_metric_label == metric_key:
+        return "provisional"
+    if not temperature_available:
+        return "quicklook_only"
+    if requested_mode == "quicklook" and actual_mode == "quicklook":
+        return "quicklook_only"
+    if report is None and route_entry.get("af95_c") is None and route_entry.get("aftan_c") is None:
+        return "formal_blocked"
+    return "formal_blocked"
+
+
+def _fallback_route_gate_reason(
+    *,
+    metric_key: str,
+    route_entry: dict[str, Any],
+    temperature_available: bool,
+    requested_mode: str | None,
+    actual_mode: str | None,
+    object_gate_reason: str | None,
+    report: Any,
+    route_status: str,
+) -> str | None:
+    if route_status in {"formal_passed", "provisional"}:
+        return None
+    if not temperature_available:
+        return "temperature_sync_missing"
+    if report is None and route_entry.get("af95_c") is None and route_entry.get("aftan_c") is None:
+        return f"{metric_key}_insufficient_points"
+    if requested_mode == "formal_af" and actual_mode == "quicklook":
+        return object_gate_reason or "legacy_route_status_unavailable"
+    return "legacy_route_status_unavailable"
+
+
+def _normalize_route_results(
+    *,
+    preset: str | None,
+    route_results: Any,
+    metric_reports: dict[str, Any] | None,
+    requested_mode: str | None,
+    actual_mode: str | None,
+    temperature_filename: str | None,
+    temperature_c_min: float | None = None,
+    temperature_c_max: float | None = None,
+    primary_metric_label: str | None = None,
+    formal_metric_label: str | None = None,
+    provisional_metric_label: str | None = None,
+    object_gate_reason: str | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    route_specs = _route_specs_for_preset(preset)
+    metric_reports = metric_reports or {}
+    normalized_input = {
+        "temperature_filename": temperature_filename,
+        "temperature_c_min": temperature_c_min,
+        "temperature_c_max": temperature_c_max,
+    }
+    temperature_available = _temperature_available_for_summary(normalized_input)
+
+    raw_entries: list[dict[str, Any]] = []
+    if isinstance(route_results, dict):
+        for container_key, value in route_results.items():
+            entry = dict(value or {})
+            entry.setdefault("_container_key", container_key)
+            raw_entries.append(entry)
+    elif isinstance(route_results, list):
+        raw_entries = [dict(item or {}) for item in route_results]
+
+    entries_by_alias: dict[str, dict[str, Any]] = {}
+    for raw_entry in raw_entries:
+        metric_key = raw_entry.get("metric_key")
+        alias = (
+            raw_entry.get("alias")
+            or raw_entry.get("route_alias")
+            or (
+                raw_entry.get("_container_key")
+                if raw_entry.get("_container_key") in ROUTE_ALIAS_ORDER
+                else None
+            )
+            or _route_alias_from_metric_key(preset, metric_key)
+        )
+        if alias not in route_specs:
+            continue
+        merged = dict(entries_by_alias.get(alias, {}))
+        merged.update(raw_entry)
+        merged["alias"] = alias
+        entries_by_alias[alias] = merged
+
+    normalized_results: list[dict[str, Any]] = []
+    route_results_by_alias: dict[str, dict[str, Any]] = {}
+    for alias in ROUTE_ALIAS_ORDER:
+        spec = route_specs[alias]
+        entry = dict(entries_by_alias.get(alias, {}))
+        metric_key = str(entry.get("metric_key") or spec["metric_key"])
+        report = _route_metric_report(metric_reports, spec)
+        route_status = entry.get("reportability_status")
+        if route_status is None:
+            route_status = _fallback_route_status(
+                metric_key=metric_key,
+                route_entry=entry,
+                requested_mode=requested_mode,
+                actual_mode=actual_mode,
+                temperature_available=temperature_available,
+                formal_metric_label=formal_metric_label,
+                provisional_metric_label=provisional_metric_label,
+                report=report,
+            )
+        gate_reason = entry.get("gate_reason") or entry.get("formal_gate_reason")
+        if gate_reason is None:
+            gate_reason = _fallback_route_gate_reason(
+                metric_key=metric_key,
+                route_entry=entry,
+                temperature_available=temperature_available,
+                requested_mode=requested_mode,
+                actual_mode=actual_mode,
+                object_gate_reason=object_gate_reason,
+                report=report,
+                route_status=route_status,
+            )
+        warning_codes = _coerce_warning_codes(entry.get("warning_codes"))
+        if not warning_codes and gate_reason is not None and route_status not in {"formal_passed", "provisional"}:
+            warning_codes = [gate_reason]
+
+        normalized = {
+            "alias": alias,
+            "route_alias": alias,
+            "metric_key": metric_key,
+            "display_label": entry.get("display_label") or spec["display_label"],
+            "af95_c": _coerce_float(entry.get("af95_c")),
+            "aftan_c": _coerce_float(entry.get("aftan_c")),
+            "fit_rmse": _coerce_float(entry.get("fit_rmse")),
+            "monotonic_violation_fraction": _coerce_float(entry.get("monotonic_violation_fraction")),
+            "dynamic_range": _coerce_float(entry.get("dynamic_range")),
+            "reportability_status": route_status,
+            "reportability_label": _route_status_label(route_status),
+            "gate_reason": gate_reason,
+            "warning_codes": warning_codes,
+            "formal_candidate": bool(entry.get("formal_candidate", spec["formal_candidate"])),
+            "accepted_as_formal_candidate": bool(
+                entry.get(
+                    "accepted_as_formal_candidate",
+                    entry.get("selected_as_formal") or (route_status == "formal_passed"),
+                )
+            ),
+            "selected_as_primary": bool(entry.get("selected_as_primary", primary_metric_label == metric_key)),
+            "selected_as_formal": bool(entry.get("selected_as_formal", formal_metric_label == metric_key)),
+            "formal_role": entry.get("formal_role"),
+            "auxiliary_metric_keys": list(entry.get("auxiliary_metric_keys") or []),
+            "source": "route_results" if alias in entries_by_alias else "summary_fallback",
+        }
+        if normalized["af95_c"] is None:
+            normalized["af95_c"] = _coerce_float(_metric_report_field(report, "af95_c"))
+        if normalized["aftan_c"] is None:
+            normalized["aftan_c"] = _coerce_float(_metric_report_field(report, "aftan_c"))
+        if normalized["fit_rmse"] is None:
+            normalized["fit_rmse"] = _coerce_float(_metric_report_field(report, "fit_rmse"))
+        if normalized["monotonic_violation_fraction"] is None:
+            normalized["monotonic_violation_fraction"] = _coerce_float(
+                _metric_report_field(report, "monotonic_violation_fraction")
+            )
+        if normalized["dynamic_range"] is None:
+            normalized["dynamic_range"] = _coerce_float(_metric_report_field(report, "dynamic_range"))
+        if normalized["selected_as_formal"]:
+            normalized["formal_role"] = normalized["formal_role"] or "object_formal"
+            normalized["accepted_as_formal_candidate"] = True
+        elif normalized["selected_as_primary"]:
+            normalized["formal_role"] = normalized["formal_role"] or "object_primary"
+        elif normalized["formal_candidate"]:
+            normalized["formal_role"] = normalized["formal_role"] or "formal_candidate"
+        else:
+            normalized["formal_role"] = normalized["formal_role"] or "route_result"
+
+        route_results_by_alias[alias] = normalized
+        normalized_results.append(normalized)
+
+    return normalized_results, route_results_by_alias
+
+
+def _prepare_summary_for_display(run: sqlite3.Row | dict[str, Any], summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    if summary is None:
+        return None
+    prepared = dict(summary)
+    route_results, route_results_by_alias = _normalize_route_results(
+        preset=prepared.get("preset") or run["preset"],
+        route_results=prepared.get("route_results"),
+        metric_reports=prepared.get("metric_reports"),
+        requested_mode=prepared.get("requested_mode") or run["requested_mode"],
+        actual_mode=prepared.get("actual_mode") or run["actual_mode"],
+        temperature_filename=prepared.get("temperature_filename") or run["temperature_filename"],
+        temperature_c_min=prepared.get("temperature_c_min"),
+        temperature_c_max=prepared.get("temperature_c_max"),
+        primary_metric_label=prepared.get("primary_metric_label"),
+        formal_metric_label=prepared.get("formal_metric_label"),
+        provisional_metric_label=prepared.get("provisional_metric_label"),
+        object_gate_reason=prepared.get("formal_gate_reason"),
+    )
+    prepared["route_results"] = route_results
+    prepared["route_results_by_alias"] = route_results_by_alias
+    prepared["route_alias_order"] = list(ROUTE_ALIAS_ORDER)
+    prepared["route_results_schema_version"] = ROUTE_RESULTS_SCHEMA_VERSION
+    prepared["recommended_route_alias"] = None
+    if prepared.get("formal_metric_label"):
+        prepared["recommended_route_alias"] = _route_alias_from_metric_key(
+            prepared.get("preset") or run["preset"],
+            prepared.get("formal_metric_label"),
+        )
+    elif prepared.get("provisional_metric_label"):
+        prepared["recommended_route_alias"] = _route_alias_from_metric_key(
+            prepared.get("preset") or run["preset"],
+            prepared.get("provisional_metric_label"),
+        )
+    prepared.update(
+        canonical_object_result_fields(
+            preset=prepared.get("preset") or run["preset"],
+            reportability_status=prepared.get("reportability_status"),
+            formal_metric_key=prepared.get("formal_metric_label"),
+            formal_gate_reason=prepared.get("formal_gate_reason"),
+            provisional_metric_key=prepared.get("provisional_metric_label"),
+            af95_c=prepared.get("af95_c"),
+            aftan_c=prepared.get("aftan_c"),
+            provisional_af95_c=prepared.get("provisional_af95_c"),
+            provisional_aftan_c=prepared.get("provisional_aftan_c"),
+        )
+    )
+    return prepared
+
+
+def _route_metric_key_for_alias(preset: str | None, alias: str) -> str | None:
+    return _route_specs_for_preset(preset).get(alias, {}).get("metric_key")
+
+
+def _resolve_output_dir(value: Any, *, fallback: Path) -> Path:
+    if value in {None, ""}:
+        return fallback.resolve()
+    path = Path(str(value))
+    if not path.is_absolute():
+        path = ROOT / path
+    return path.resolve()
+
+
+def _safe_read_json(path: Path) -> Any | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _mean_or_none(values: list[float]) -> float | None:
+    if not values:
+        return None
+    return float(sum(values) / len(values))
+
+
+def _infer_benchmark_family(summary: dict[str, Any]) -> str | None:
+    preset = str(summary.get("preset") or "")
+    if preset.startswith("braided"):
+        return "braided"
+    if preset in {"wire_like", "demo"}:
+        return "wire"
+    if any(key in summary for key in {"metric_aliases", "af_comparison_by_alias", "formal_qc"}):
+        return "braided"
+    if any(key in summary for key in {"route_aliases", "route_benchmark_overview_by_alias", "wire_qc"}):
+        return "wire"
+    metric_reports = summary.get("metric_reports") or {}
+    if any(key in metric_reports for key in {"length_axis", "diameter_max", "area_proj"}):
+        return "braided"
+    if any(key in metric_reports for key in {"x_route_a", "kappa_fit", "kappa_route_c"}):
+        return "wire"
+    return None
+
+
+def _prepare_summary_like_for_display(summary: dict[str, Any], preset_hint: str) -> dict[str, Any]:
+    mapped = dict(summary)
+    mapped.setdefault("preset", preset_hint)
+    mapped.setdefault("actual_mode", mapped.get("mode"))
+    if mapped.get("requested_mode") is None:
+        if mapped.get("actual_mode") == "formal_af" or mapped.get("formal_metric_label") or mapped.get("provisional_metric_label"):
+            mapped["requested_mode"] = "formal_af"
+        else:
+            mapped["requested_mode"] = "quicklook"
+    fake_run = {
+        "id": mapped.get("run_id") or mapped.get("benchmark_name") or "benchmark",
+        "preset": mapped.get("preset") or preset_hint,
+        "requested_mode": mapped.get("requested_mode"),
+        "actual_mode": mapped.get("actual_mode"),
+        "temperature_filename": mapped.get("temperature_filename"),
+    }
+    prepared = _prepare_summary_for_display(fake_run, mapped)
+    return prepared or mapped
+
+
+def _benchmark_detail_lookup(family: str) -> dict[str, Any]:
+    entries: list[dict[str, Any]] = []
+    for path in sorted(PROJECT_OUTPUTS_ROOT.glob("*/analysis_metrics.json")):
+        raw = _safe_read_json(path)
+        if not isinstance(raw, dict):
+            continue
+        if _infer_benchmark_family(raw) != family:
+            continue
+        output_dir = _resolve_output_dir(raw.get("demo_output"), fallback=path.parent)
+        benchmark_name = str(raw.get("benchmark_name") or output_dir.name)
+        entries.append(
+            {
+                "benchmark_name": benchmark_name,
+                "output_dir": output_dir,
+                "summary": raw,
+                "path": path.resolve(),
+            }
+        )
+    by_name = {entry["benchmark_name"]: entry for entry in entries}
+    by_output_dir = {str(entry["output_dir"]): entry for entry in entries}
+    by_dir_name = {entry["output_dir"].name: entry for entry in entries}
+    return {
+        "entries": entries,
+        "by_name": by_name,
+        "by_output_dir": by_output_dir,
+        "by_dir_name": by_dir_name,
+    }
+
+
+def _match_benchmark_detail(row: dict[str, Any], lookup: dict[str, Any]) -> dict[str, Any] | None:
+    output_dir_value = row.get("output_dir") or row.get("demo_output")
+    if output_dir_value not in {None, ""}:
+        resolved = _resolve_output_dir(output_dir_value, fallback=PROJECT_OUTPUTS_ROOT)
+        detail = lookup["by_output_dir"].get(str(resolved))
+        if detail is not None:
+            return detail
+        detail = lookup["by_dir_name"].get(resolved.name)
+        if detail is not None:
+            return detail
+    benchmark_name = row.get("benchmark_name")
+    if benchmark_name is not None:
+        detail = lookup["by_name"].get(str(benchmark_name))
+        if detail is not None:
+            return detail
+    return None
+
+
+def _wire_benchmark_comparison_by_alias(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    overview = summary.get("route_benchmark_overview_by_alias")
+    if isinstance(overview, dict) and overview:
+        return {alias: dict(entry or {}) for alias, entry in overview.items()}
+
+    comparisons: dict[str, dict[str, Any]] = {}
+    has_suite_fields = any(summary.get(f"route_{alias}_metric_key") is not None for alias in ROUTE_ALIAS_ORDER)
+    if has_suite_fields:
+        for alias in ROUTE_ALIAS_ORDER:
+            prefix = f"route_{alias}"
+            comparisons[alias] = {
+                "alias": alias,
+                "metric_key": summary.get(f"{prefix}_metric_key"),
+                "display_label": summary.get(f"{prefix}_display_label"),
+                "available": summary.get(f"{prefix}_available"),
+                "reportability_status": summary.get(f"{prefix}_status"),
+                "gate_reason": summary.get(f"{prefix}_gate_reason"),
+                "accepted_as_formal_candidate": summary.get(f"{prefix}_accepted_as_formal_candidate"),
+                "selected_as_primary": summary.get(f"{prefix}_selected_as_primary"),
+                "selected_as_formal": summary.get(f"{prefix}_selected_as_formal"),
+                "measured_af95_c": summary.get(f"{prefix}_af95_c"),
+                "measured_aftan_c": summary.get(f"{prefix}_aftan_c"),
+                "truth_af95_c": summary.get(f"{prefix}_truth_af95_c"),
+                "truth_aftan_c": summary.get(f"{prefix}_truth_aftan_c"),
+                "af95_error_c": summary.get(f"{prefix}_af95_error_c"),
+                "aftan_error_c": summary.get(f"{prefix}_aftan_error_c"),
+                "fit_rmse": summary.get(f"{prefix}_fit_rmse"),
+                "dynamic_range": summary.get(f"{prefix}_dynamic_range"),
+                "monotonic_violation_fraction": summary.get(f"{prefix}_monotonic_violation_fraction"),
+            }
+        return comparisons
+
+    metric_reports = summary.get("metric_reports") or {}
+    truth_metrics = summary.get("truth_metrics") or {}
+    truth_comparison = summary.get("metric_truth_comparison") or {}
+    for alias, (metric_key, comparison_key, truth_af95_key, truth_aftan_key) in WIRE_LEGACY_ROUTE_METRICS.items():
+        report = metric_reports.get(metric_key) or {}
+        comparison = truth_comparison.get(comparison_key) or {}
+        comparisons[alias] = {
+            "alias": alias,
+            "metric_key": metric_key,
+            "display_label": _route_specs_for_preset("demo")[alias]["display_label"],
+            "available": report.get("af95_c") is not None and report.get("aftan_c") is not None,
+            "measured_af95_c": report.get("af95_c"),
+            "measured_aftan_c": report.get("aftan_c"),
+            "truth_af95_c": truth_metrics.get(truth_af95_key),
+            "truth_aftan_c": truth_metrics.get(truth_aftan_key),
+            "af95_error_c": comparison.get("af95_error_c"),
+            "aftan_error_c": comparison.get("aftan_error_c"),
+            "fit_rmse": report.get("fit_rmse"),
+            "dynamic_range": report.get("dynamic_range"),
+            "monotonic_violation_fraction": report.get("monotonic_violation_fraction"),
+        }
+    return comparisons
+
+
+def _braided_benchmark_comparison_by_alias(summary: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    comparisons = summary.get("af_comparison_by_alias")
+    if isinstance(comparisons, dict) and comparisons:
+        return {alias: dict(entry or {}) for alias, entry in comparisons.items()}
+
+    suite_comparisons: dict[str, dict[str, Any]] = {}
+    for alias, (metric_key, af95_key, aftan_key) in BRAIDED_SUITE_ROUTE_FIELDS.items():
+        if not any(key in summary for key in {af95_key, aftan_key}):
+            continue
+        suite_comparisons[alias] = {
+            "alias": alias,
+            "metric_key": metric_key,
+            "display_label": _route_specs_for_preset("braided_demo")[alias]["display_label"],
+            "af95_error_c": summary.get(af95_key),
+            "aftan_error_c": summary.get(aftan_key),
+        }
+    return suite_comparisons
+
+
+def _benchmark_qc_highlights(summary: dict[str, Any], family: str) -> list[dict[str, Any]]:
+    if family == "wire":
+        wire_qc = summary.get("wire_qc") or {}
+        return [
+            {"label": "quality median", "value": summary.get("quality_median", wire_qc.get("quality_median"))},
+            {
+                "label": "route A endpoint jump p95",
+                "value": wire_qc.get("route_a_endpoint_jump_p95_px"),
+                "suffix": "px",
+            },
+            {
+                "label": "centerline pts median",
+                "value": wire_qc.get("centerline_points_median"),
+            },
+            {"label": "quadratic fraction", "value": wire_qc.get("quadratic_fraction")},
+        ]
+    return [
+        {"label": "quality median", "value": summary.get("quality_median")},
+        {
+            "label": "attachment leak",
+            "value": summary.get("body_mask_attachment_leak_fraction"),
+        },
+        {
+            "label": "centerline disagreement",
+            "value": summary.get("centerline_disagreement_median"),
+        },
+        {
+            "label": "endpoint jump p95",
+            "value": summary.get("endpoint_jump_p95_px"),
+            "suffix": "px",
+        },
+    ]
+
+
+def _merge_benchmark_route(
+    *,
+    alias: str,
+    preset: str,
+    prepared_route: dict[str, Any] | None,
+    comparison_entry: dict[str, Any] | None,
+) -> dict[str, Any]:
+    spec = _route_specs_for_preset(preset)[alias]
+    route = dict(prepared_route or {})
+    comparison_entry = comparison_entry or {}
+    metric_key = comparison_entry.get("metric_key") or route.get("metric_key") or spec["metric_key"]
+    measured_af95 = _coerce_float(comparison_entry.get("measured_af95_c"))
+    if measured_af95 is None:
+        measured_af95 = _coerce_float(route.get("af95_c"))
+    measured_aftan = _coerce_float(comparison_entry.get("measured_aftan_c"))
+    if measured_aftan is None:
+        measured_aftan = _coerce_float(route.get("aftan_c"))
+    truth_af95 = _coerce_float(comparison_entry.get("truth_af95_c"))
+    truth_aftan = _coerce_float(comparison_entry.get("truth_aftan_c"))
+    af95_error = _coerce_float(comparison_entry.get("af95_error_c"))
+    if af95_error is None and measured_af95 is not None and truth_af95 is not None:
+        af95_error = measured_af95 - truth_af95
+    aftan_error = _coerce_float(comparison_entry.get("aftan_error_c"))
+    if aftan_error is None and measured_aftan is not None and truth_aftan is not None:
+        aftan_error = measured_aftan - truth_aftan
+    reportability_status = route.get("reportability_status") or comparison_entry.get("reportability_status")
+    reportability_label = route.get("reportability_label")
+    if reportability_label is None and reportability_status is not None:
+        reportability_label = _route_status_label(reportability_status)
+
+    return {
+        **route,
+        "alias": alias,
+        "metric_key": metric_key,
+        "display_label": comparison_entry.get("display_label") or route.get("display_label") or spec["display_label"],
+        "reportability_status": reportability_status,
+        "reportability_label": reportability_label or "-",
+        "gate_reason": route.get("gate_reason") or comparison_entry.get("gate_reason"),
+        "accepted_as_formal_candidate": bool(
+            route.get("accepted_as_formal_candidate", comparison_entry.get("accepted_as_formal_candidate"))
+        ),
+        "selected_as_primary": bool(route.get("selected_as_primary", comparison_entry.get("selected_as_primary"))),
+        "selected_as_formal": bool(route.get("selected_as_formal", comparison_entry.get("selected_as_formal"))),
+        "formal_candidate": bool(route.get("formal_candidate", spec["formal_candidate"])),
+        "measured_af95_c": measured_af95,
+        "measured_aftan_c": measured_aftan,
+        "truth_af95_c": truth_af95,
+        "truth_aftan_c": truth_aftan,
+        "af95_error_c": af95_error,
+        "aftan_error_c": aftan_error,
+        "abs_af95_error_c": None if af95_error is None else abs(af95_error),
+        "abs_aftan_error_c": None if aftan_error is None else abs(aftan_error),
+        "fit_rmse": _coerce_float(comparison_entry.get("fit_rmse") or route.get("fit_rmse")),
+        "dynamic_range": _coerce_float(comparison_entry.get("dynamic_range") or route.get("dynamic_range")),
+        "monotonic_violation_fraction": _coerce_float(
+            comparison_entry.get("monotonic_violation_fraction") or route.get("monotonic_violation_fraction")
+        ),
+        "available": bool(
+            comparison_entry.get("available")
+            if comparison_entry.get("available") is not None
+            else measured_af95 is not None or measured_aftan is not None
+        ),
+    }
+
+
+def _normalize_benchmark_entry(
+    *,
+    family: str,
+    row: dict[str, Any],
+    detail: dict[str, Any] | None,
+    source_kind: str,
+) -> dict[str, Any]:
+    preset_hint = str(BENCHMARK_FAMILY_DISPLAY[family]["preset"])
+    detail_summary = detail["summary"] if detail is not None else None
+    merged = dict(detail_summary or {})
+    for key, value in row.items():
+        current = merged.get(key)
+        if key not in merged or current is None or current == "" or current == [] or current == {}:
+            merged[key] = value
+    merged.setdefault("benchmark_name", row.get("benchmark_name") or merged.get("benchmark_name"))
+    merged.setdefault("benchmark_description", row.get("description") or merged.get("benchmark_description"))
+    merged.setdefault("demo_output", row.get("output_dir") or merged.get("demo_output"))
+    prepared = _prepare_summary_like_for_display(merged, preset_hint)
+    comparisons = (
+        _wire_benchmark_comparison_by_alias(merged) if family == "wire" else _braided_benchmark_comparison_by_alias(merged)
+    )
+
+    routes: list[dict[str, Any]] = []
+    routes_by_alias = prepared.get("route_results_by_alias") or {}
+    for alias in ROUTE_ALIAS_ORDER:
+        routes.append(
+            _merge_benchmark_route(
+                alias=alias,
+                preset=preset_hint,
+                prepared_route=routes_by_alias.get(alias),
+                comparison_entry=comparisons.get(alias),
+            )
+        )
+
+    output_dir = _resolve_output_dir(
+        merged.get("demo_output") or merged.get("output_dir"),
+        fallback=detail["output_dir"] if detail is not None else PROJECT_OUTPUTS_ROOT,
+    )
+    source_label = (
+        "suite summary + analysis_metrics"
+        if source_kind == "suite_summary" and detail_summary is not None
+        else "suite summary"
+        if source_kind == "suite_summary"
+        else "analysis_metrics"
+    )
+    return {
+        "family": family,
+        "benchmark_name": str(merged.get("benchmark_name") or output_dir.name),
+        "description": merged.get("benchmark_description") or merged.get("description") or "",
+        "output_dir": str(output_dir),
+        "output_dir_name": output_dir.name,
+        "source_kind": source_kind,
+        "source_label": source_label,
+        "object_reportability_status": prepared.get("object_reportability_status"),
+        "object_formal_metric_key": prepared.get("object_formal_metric_key"),
+        "object_formal_route_alias": prepared.get("object_formal_route_alias"),
+        "object_formal_gate_reason": prepared.get("object_formal_gate_reason"),
+        "object_formal_af95_c": prepared.get("object_formal_af95_c"),
+        "object_formal_aftan_c": prepared.get("object_formal_aftan_c"),
+        "object_provisional_metric_key": prepared.get("object_provisional_metric_key"),
+        "object_provisional_route_alias": prepared.get("object_provisional_route_alias"),
+        "object_provisional_af95_c": prepared.get("object_provisional_af95_c"),
+        "object_provisional_aftan_c": prepared.get("object_provisional_aftan_c"),
+        "object_recommended_metric_key": prepared.get("object_recommended_metric_key"),
+        "object_recommended_route_alias": prepared.get("object_recommended_route_alias"),
+        "warning_codes": prepared.get("warning_codes") or merged.get("warning_codes") or [],
+        "requested_mode": prepared.get("requested_mode"),
+        "actual_mode": prepared.get("actual_mode"),
+        "routes": routes,
+        "routes_by_alias": {entry["alias"]: entry for entry in routes},
+        "qc_highlights": _benchmark_qc_highlights(merged, family),
+    }
+
+
+def _build_family_route_rollups(family: str, benchmarks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    preset_hint = str(BENCHMARK_FAMILY_DISPLAY[family]["preset"])
+    rollups: list[dict[str, Any]] = []
+    for alias in ROUTE_ALIAS_ORDER:
+        spec = _route_specs_for_preset(preset_hint)[alias]
+        entries = [benchmark["routes_by_alias"][alias] for benchmark in benchmarks if alias in benchmark["routes_by_alias"]]
+        status_counts = Counter((entry.get("reportability_status") or "unrecorded") for entry in entries)
+        gate_counts = Counter(str(entry.get("gate_reason")) for entry in entries if entry.get("gate_reason"))
+        rollups.append(
+            {
+                "alias": alias,
+                "display_label": spec["display_label"],
+                "metric_key": spec["metric_key"],
+                "benchmark_count": len(entries),
+                "available_count": sum(1 for entry in entries if entry.get("available")),
+                "formal_passed_count": status_counts.get("formal_passed", 0),
+                "provisional_count": status_counts.get("provisional", 0),
+                "formal_blocked_count": status_counts.get("formal_blocked", 0),
+                "quicklook_only_count": status_counts.get("quicklook_only", 0),
+                "unrecorded_count": status_counts.get("unrecorded", 0),
+                "selected_as_formal_count": sum(1 for entry in entries if entry.get("selected_as_formal")),
+                "selected_as_primary_count": sum(1 for entry in entries if entry.get("selected_as_primary")),
+                "mean_abs_af95_error_c": _mean_or_none(
+                    [entry["abs_af95_error_c"] for entry in entries if entry.get("abs_af95_error_c") is not None]
+                ),
+                "mean_abs_aftan_error_c": _mean_or_none(
+                    [entry["abs_aftan_error_c"] for entry in entries if entry.get("abs_aftan_error_c") is not None]
+                ),
+                "mean_fit_rmse": _mean_or_none(
+                    [entry["fit_rmse"] for entry in entries if entry.get("fit_rmse") is not None]
+                ),
+                "mean_monotonic_violation_fraction": _mean_or_none(
+                    [
+                        entry["monotonic_violation_fraction"]
+                        for entry in entries
+                        if entry.get("monotonic_violation_fraction") is not None
+                    ]
+                ),
+                "dominant_gate_reason": gate_counts.most_common(1)[0][0] if gate_counts else None,
+            }
+        )
+    return rollups
+
+
+def _build_benchmark_family_view(family: str) -> dict[str, Any]:
+    lookup = _benchmark_detail_lookup(family)
+    suite_path = Path(BENCHMARK_FAMILY_DISPLAY[family]["suite_path"])
+    suite_rows = _safe_read_json(suite_path) if suite_path.exists() else None
+    benchmarks: list[dict[str, Any]] = []
+    used_outputs: set[str] = set()
+
+    if isinstance(suite_rows, list) and suite_rows:
+        for raw_row in suite_rows:
+            if not isinstance(raw_row, dict):
+                continue
+            detail = _match_benchmark_detail(raw_row, lookup)
+            if detail is not None:
+                used_outputs.add(str(detail["output_dir"]))
+            benchmarks.append(
+                _normalize_benchmark_entry(
+                    family=family,
+                    row=raw_row,
+                    detail=detail,
+                    source_kind="suite_summary",
+                )
+            )
+
+    for detail in lookup["entries"]:
+        if str(detail["output_dir"]) in used_outputs:
+            continue
+        benchmarks.append(
+            _normalize_benchmark_entry(
+                family=family,
+                row=detail["summary"],
+                detail=detail,
+                source_kind="analysis_metrics",
+            )
+        )
+
+    if not isinstance(suite_rows, list):
+        benchmarks.sort(key=lambda item: item["benchmark_name"])
+
+    route_rollups = _build_family_route_rollups(family, benchmarks)
+    return {
+        "key": family,
+        "label": BENCHMARK_FAMILY_DISPLAY[family]["label"],
+        "suite_available": bool(isinstance(suite_rows, list) and suite_rows),
+        "suite_path": str(suite_path),
+        "source_label": "suite summary preferred" if isinstance(suite_rows, list) and suite_rows else "analysis_metrics fallback",
+        "benchmark_count": len(benchmarks),
+        "benchmarks": benchmarks,
+        "route_rollups": route_rollups,
+        "route_rollups_by_alias": {entry["alias"]: entry for entry in route_rollups},
+    }
+
+
+def _build_benchmark_page_data() -> dict[str, Any]:
+    families = {family: _build_benchmark_family_view(family) for family in BENCHMARK_FAMILY_DISPLAY}
+    comparison_rows = [
+        {
+            "alias": alias,
+            "wire": families["wire"]["route_rollups_by_alias"].get(alias),
+            "braided": families["braided"]["route_rollups_by_alias"].get(alias),
+        }
+        for alias in ROUTE_ALIAS_ORDER
+    ]
+    return {
+        "families": families,
+        "comparison_rows": comparison_rows,
+    }
+
+
+def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
+    payload = dict(run)
+    summary = _prepare_summary_for_display(payload, _load_summary(payload["id"]))
+    payload["summary"] = summary
+    payload["route_results_preview"] = summary["route_results"] if summary is not None else []
+    if summary is not None:
+        payload["reportability_status"] = summary.get("reportability_status")
+    return payload
+
+
 templates.env.globals.update(
     preset_label=_preset_label,
     preset_description=_preset_description,
@@ -179,7 +1044,7 @@ templates.env.globals.update(
 
 @app.get("/")
 def home(request: Request) -> Any:
-    runs = _list_runs(limit=12)
+    runs = [_build_run_card(run) for run in _list_runs(limit=12)]
     return templates.TemplateResponse(
         "index.html",
         {
@@ -208,6 +1073,20 @@ def history(request: Request) -> Any:
             "mode_label": _mode_label,
             "run_result_hint": _run_result_hint,
             "request": request,
+        },
+    )
+
+
+@app.get("/benchmarks")
+def benchmark_summary(request: Request) -> Any:
+    benchmark_page = _build_benchmark_page_data()
+    return templates.TemplateResponse(
+        "benchmark_summary.html",
+        {
+            "request": request,
+            "benchmark_page": benchmark_page,
+            "comparison_rows": benchmark_page["comparison_rows"],
+            "families": benchmark_page["families"],
         },
     )
 
@@ -316,7 +1195,7 @@ def run_detail(request: Request, run_id: str) -> Any:
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
 
-    summary = _load_summary(run_id)
+    summary = _prepare_summary_for_display(run, _load_summary(run_id))
     image_files = []
     download_files = []
     outputs_dir = RUNS_ROOT / run_id / "outputs"
@@ -390,6 +1269,7 @@ def _execute_run(run_id: str) -> None:
         result.series.to_csv(outputs_dir / "analysis.csv", index=False)
         summary = _build_summary(run, result)
         _write_summary(outputs_dir / "summary.json", summary)
+        route_results_dataframe(summary.get("route_results")).to_csv(outputs_dir / "route_results.csv", index=False)
         _write_plots(outputs_dir, result)
 
         _update_run(
@@ -415,7 +1295,6 @@ def _public_formal_metric_label(result: AnalysisResult) -> str | None:
 def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
     series = result.series
     public_formal_metric_label = _public_formal_metric_label(result)
-    route_results = result.route_results or []
     summary: dict[str, Any] = {
         "run_id": run["id"],
         "preset": run["preset"],
@@ -435,8 +1314,10 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "quality_median": float(series["quality"].median()) if "quality" in series else None,
         "video_filename": run["video_filename"],
         "temperature_filename": run["temperature_filename"],
-        "route_results": route_results,
+        "primary_metric_label": result.primary_metric_label,
     }
+    if result.formal_candidate_gates is not None:
+        summary["formal_candidate_gates"] = result.formal_candidate_gates
     if str(run["preset"]).startswith("braided"):
         summary["metric_aliases"] = BRAIDED_METRIC_ALIAS_TO_KEY
         summary["metric_display_labels"] = {
@@ -499,6 +1380,38 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
             }
             for key, report in result.metric_reports.items()
         }
+    route_results, route_results_by_alias = _normalize_route_results(
+        preset=run["preset"],
+        route_results=result.route_results,
+        metric_reports=result.metric_reports,
+        requested_mode=run["requested_mode"],
+        actual_mode=result.mode,
+        temperature_filename=run["temperature_filename"],
+        temperature_c_min=summary.get("temperature_c_min"),
+        temperature_c_max=summary.get("temperature_c_max"),
+        primary_metric_label=result.primary_metric_label,
+        formal_metric_label=public_formal_metric_label,
+        provisional_metric_label=result.provisional_metric_label,
+        object_gate_reason=result.formal_gate_reason,
+    )
+    summary["route_results"] = route_results
+    summary["route_results_by_alias"] = canonical_route_results_by_alias(route_results)
+    summary["route_alias_order"] = list(ROUTE_ALIAS_ORDER)
+    summary["route_order"] = list(ROUTE_ALIAS_ORDER)
+    summary["route_results_schema_version"] = ROUTE_RESULTS_SCHEMA_VERSION
+    summary.update(
+        canonical_object_result_fields(
+            preset=run["preset"],
+            reportability_status=result.reportability_status,
+            formal_metric_key=public_formal_metric_label,
+            formal_gate_reason=result.formal_gate_reason,
+            provisional_metric_key=result.provisional_metric_label,
+            af95_c=result.af95_c,
+            aftan_c=result.aftan_c,
+            provisional_af95_c=result.provisional_af95_c,
+            provisional_aftan_c=result.provisional_aftan_c,
+        )
+    )
     return summary
 
 

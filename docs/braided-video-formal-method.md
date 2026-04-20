@@ -28,32 +28,99 @@
 - `B = diameter_max`
 - `C = area_proj`
 
+其中 `B` 的长期方法学定位是 braided 的宽度/直径视角; 当前实现里这一路线由 strict body-only 最大正交宽度
+`diameter_max = max_s w_orth(s)` 承载, 不应用 `diameter_mid_p90`、厚度 proxy 或 Feret proxy 混写成 route B 本身。
+
 其中:
 
 - `A / B / C` 代表 braided 的三条并行分析路线
 - 每一次 braided 分析都应为 `A / B / C` 三条路线分别输出自己的 route-level result
-- route-level result 至少表示该路线“算出了什么、状态如何、为什么可能不能 formal”，不等于该路线已经 `formal passed`
+- route-level result 至少表示该路线“算出了什么、值列/恢复列是什么、状态如何、为什么可能不能 formal”，不等于该路线已经 `formal passed`
 - 当前对象级默认 formal 主量仍是 `A`
-- 当前代码实现里 `B` 已进入 braided formal candidate
-- `C` 当前仍主要作为对照量、交叉验证量和 route-level 输出
+- 当前代码实现里 `B` 已进入 braided object-level formal candidate
+- `C` 当前稳定输出自己的 route-level result, 并带独立 `reportability_status / gate_reason / warning_codes / route_qc_summary`, 但仍不是默认 object-level formal candidate
 - 对外表述可写成 `A:length_axis`、`B:diameter_max`、`C:area_proj`
 
 这里要明确区分:
 
 - “当前实现默认 formal 放行 `A`” 属于实现状态
-- “当前代码里 `B` 已进入 candidate, `C` 仍未进入对象级 formal candidate” 也属于实现状态
+- “当前代码里 `B` 已进入对象级 formal candidate, `C` 稳定输出 route-level result 但仍未进入默认对象级 formal candidate” 也属于实现状态
 - “A / B / C 长期并行保留并比较” 属于项目的方法学目标
 
 进一步地, 当前文档默认采用下面的语义:
 
-- `route-level result` = 该路线自己的量、恢复曲线、Af 估计、QC 与状态
+- `route-level result` = 该路线自己的量、值列/恢复列、Af 估计、QC 与状态
 - `object-level formal result` = 当前 run 最终允许对外作为正式结论的主路线结果
+- `object-level selection` = 当前 run 在 route-level result 之上做出的 `primary / formal / recommended` 选择
+
+route-level 的稳定字段口径也应固定为:
+
+- `alias`
+- `metric_key`
+- `display_label`
+- `value_series_col`
+- `recovery_series_col`
+- `af95_c`
+- `aftan_c`
+- `fit_rmse`
+- `monotonic_violation_fraction`
+- `dynamic_range`
+- `reportability_status`
+- `gate_reason`
+- `warning_codes`
+- `formal_candidate`
+- `accepted_as_formal_candidate`
+- `selected_as_primary`
+- `selected_as_formal`
+- `formal_role`
+- `auxiliary_metric_keys`
+- `route_qc_summary`
+
+对象级字段则应作为 route-level 的平行层读取:
+
+- 主读路径先用 canonical `object_*` contract
+- `object_reportability_status`
+- `object_formal_metric_key` / `object_formal_route_alias`
+- `object_provisional_metric_key` / `object_provisional_route_alias`
+- `object_recommended_metric_key` / `object_recommended_route_alias`
+- `object_formal_gate_reason`
+- `object_formal_af95_c` / `object_formal_aftan_c`
+- `object_provisional_af95_c` / `object_provisional_aftan_c`
+- `formal_metric_label`、`provisional_metric_label`、`primary_metric_label` 继续保留为兼容现有 summary/UI 的展示字段, 但不再作为主 contract
+
+同时要明确:
+
+- route-level `formal_passed` 表示该路线自己的 gate 已放行
+- `selected_as_primary` / `selected_as_formal` 表示该路线是否被对象级流程选中
+- 对象级 canonical `object_*` 字段表示当前 run 最终推荐展示的是哪一路; `formal_metric_label` / `provisional_metric_label` 仅保留为兼容展示层
+- 二者相关, 但不是同一个层次的判断
 
 因此, 同一个 braided run 里可以同时出现:
 
 - `A / B / C` 三条路线都有结果
 - 其中只有一条是当前对象级 formal 主量
-- 或三条路线都只有 `quicklook / provisional / blocked` 状态, 没有任何一路被放行为正式结论
+- 或三条路线都只有 `quicklook / provisional / formal_blocked` 状态, 没有任何一路被放行为正式结论
+
+route-level QC 摘要的读取顺序也应固定:
+
+1. 先读 `reportability_status`、`gate_reason`、`warning_codes`
+2. 再读跨路线可比的 `fit_rmse`、`monotonic_violation_fraction`、`dynamic_range`
+3. 再读该路线自己的 `route_qc_summary`, 并固定按统一骨架理解:
+   `valid_points`、`quality_median`、`monotonic_violation_fraction`、`tail_recovery_median`、`stability_metric`
+4. 对 braided 再补读 area/axis/body-only 相关 QC:
+   `formal_qc`、`centerline_disagreement_median`、`body_mask_attachment_leak_fraction_median`、`area_proj_definition_gap_px2`
+
+其中 braided 三条路线当前应按下面的 route-specific QC 语义理解:
+
+- `A:length_axis` 重点看 `route_qc_summary.stability_metric.key = centerline_disagreement_median`
+- `B:diameter_max` 重点看 `route_qc_summary.stability_metric.key = axis_peak_position_stability_p95`
+- `C:area_proj` 重点看 `route_qc_summary.stability_metric.key = area_definition_gap_fraction_p95`
+
+换句话说, braided 的 route-level QC 摘要并不意味着“所有 QC 都塞回 route entry 一个字段”; 更准确的定义是:
+
+- route entry 提供稳定的路线级结果骨架
+- 对象级 summary 和 benchmark summary 提供对象/场景共享的关键 QC 量
+- 页面、JSON、benchmark 汇总都应按这套口径组织阅读
 
 ## 1. 方法边界
 
@@ -197,13 +264,21 @@
 | 文献中的视频/图像量测法 | 2D 图像或视频 | `axis/projected centerline + D(x)` | `L`、`Dmax`、`D(x)`、`foreshortening`、zone-based geometry | 二维投影几何量测、分区化描述、时序变化追踪 | 不能直接替代 3D patient-specific virtual deployment |
 | 商业/学术虚拟部署方法 | `3DRA/CBCT`、血管 `centerline`、器械参数、部署边界条件 | vessel centerline + envelope + device model + wire model | deployment result、landing、device sizing、local porosity、apposition | patient-specific planning、部署后几何预测、落点和贴壁分析 | 不能由单纯视频 quicklook 等价获得 |
 | 高保真仿真/FE/ROM 方法 | 3D 几何、器械参数、材料与接触模型 | wire-level geometry / shell / FE model | deployment mechanics、stress、apposition、porosity、final geometry | 更高保真地研究部署行为与结构响应 | 不能由当前仓库视频输入直接落地 |
-| 当前仓库 braided 方法 | 视频 | 外轮廓 + 主轴 quicklook + 宽度相关量 | 包络长度、主轴长度、最大直径、左右收口定位、QC 叠加帧 | 可作为 `video-only geometric quicklook`，适合做基线与 QC | 不应声称 patient-specific virtual deployment、clinical-grade porosity、apposition |
+| 当前仓库 braided 方法 | 视频 | 外轮廓 + 主轴/宽度/面积三路线量测 | 主轴长度、最大直径、投影面积、左右收口定位、route-level status/gate reason、QC 叠加帧 | 可作为 `video-only 2D geometric measurement and zone analysis`，适合做路线级比较、QC 与方法学验证 | 不应声称 patient-specific virtual deployment、clinical-grade porosity、apposition |
 
 当前仓库与主流方法的关系应理解为:
 
 - 它已经进入了 `2D 图像几何量测法` 这一大类
-- 但目前仍偏 `quicklook`
+- 当前实现已经稳定输出 `A / B / C` 三条路线的 route-level result, 不再只是单一路径的 quicklook 对照
+- 当前 route B 的稳定口径是 braided 的宽度/直径路线, 当前实现键为 strict body-only `diameter_max`, 不是中段 proxy 的统称
 - 与文献和商业软件的共同语言已经出现，但尚未达到它们的高级主张条件
+
+因此在对外展示层, 更合适的读取顺序是:
+
+1. 先看 `A / B / C` 三条路线各自的 route-level result 与 QC 摘要
+2. 再看对象级 canonical `object_*` 字段, 尤其是 `object_reportability_status`、`object_formal_metric_key`、`object_provisional_metric_key`、`object_recommended_metric_key`、`object_formal_gate_reason`
+3. 如需兼容旧 summary/UI，再回看 `formal_metric_label`、`provisional_metric_label`、`primary_metric_label`
+4. 最后才下结论“本次 braided run 的对象级正式推荐是谁”
 
 ## 4. 当前仓库 braided 路线的建议定位
 
@@ -269,11 +344,11 @@
 
 - 当前默认 formal 主量为 `length_axis(T)`
 - `A / B / C` 三条路线都应输出各自的 route-level result
-- route-level result 可以包含各自的 `Af-95` / `Af-tan` 估计、QC 与 gate reason
+- route-level result 可以包含各自的 `Af-95` / `Af-tan` 估计、QC、status 与 gate reason
 - 但 route-level result 本身不等于对象级 formal passed
 - 当前对象级默认 formal 主量仍为 `length_axis(T)`
-- 当前代码实现已允许 `diameter_max(T)` 进入对象级 formal candidate
-- `area_proj(T)` 当前仍主要作为 route-level 对照与方法学验证量, 不作为默认对象级 formal candidate
+- 当前代码实现已允许 `diameter_max(T)` 进入对象级 formal candidate; 这里的 `diameter_max(T)` 固定指 strict body-only `max_s w_orth(s)`
+- `area_proj(T)` 当前稳定输出自己的 route-level result, 并带 area-specific gate、status 与 gate reason, 但仍不作为默认对象级 formal candidate
 - 该量表示二维投影下 braided 试样的主轴功能长度
 - 升温恢复时, 该量对当前对象应单调减小
 - 正式恢复率定义为:
@@ -300,6 +375,19 @@
 - `area_proj_contour_width_integral_px2`: 旧 contour-width integral, 仅作对照
 - `area_proj_contour_px2`: body-only contour area, 用于面积定义差检查
 
+route-level / summary 命名也应按下面的层级理解:
+
+- route-level 入口: `route_results`、`route_results_by_alias`、`route_alias_order`
+- route-level 状态字段: `reportability_status`、`gate_reason`、`warning_codes`
+- route-level 选择字段: `formal_candidate`、`accepted_as_formal_candidate`、`selected_as_primary`、`selected_as_formal`、`formal_role`
+- route-level QC 字段: `fit_rmse`、`monotonic_violation_fraction`、`dynamic_range`、`route_qc_summary`
+- `route_qc_summary` 标准骨架: `valid_points`、`quality_median`、`monotonic_violation_fraction`、`tail_recovery_median`、`stability_metric`
+- canonical 对象级字段: `object_reportability_status`、`object_formal_metric_key`、`object_provisional_metric_key`、`object_recommended_metric_key`
+- 兼容展示字段: `formal_metric_label`、`provisional_metric_label`、`primary_metric_label`
+- benchmark/summary 里的 QC 补充字段: `formal_qc`、`quality_median`、`centerline_disagreement_median`、`body_mask_attachment_leak_fraction`、`axis_peak_position_stability_p95`
+
+这四层不能混写成“一个字段同时表达路线结果和对象级推荐”。
+
 路线级对照与交叉验证量允许保留:
 
 - `length_env(T)`
@@ -310,11 +398,11 @@
 这些量在当前实现中的角色应区分为:
 
 - `diameter_max(T)`:
-  当前代码里已进入对象级 formal candidate, 但不是默认 formal 主量
+  braided 的 route B 当前固定由 strict body-only `max_s w_orth(s)` 承载; 当前代码里它已进入对象级 formal candidate, 但不是默认 formal 主量
 - `length_env(T)`、`foreshortening_axis(T)`、`foreshortening_env(T)`:
   当前主要用于 route-level 对照、交叉检查与解释层
 - `area_proj(T)`:
-  当前应稳定输出 route-level result, 但仍主要是对照量与方法学验证量
+  当前应稳定输出 route-level result, 并带独立 gate / status / gate_reason, 但仍主要是对照量与方法学验证量, 不是默认对象级 formal candidate
 
 除已进入对象级 candidate 的 `diameter_max(T)` 外, 其他量当前主要用于:
 
@@ -348,9 +436,43 @@
 1. 固定 `A / B / C` 三条路线都输出 route-level result, 不因对象级 formal 只放行一条路线就隐藏其他路线结果。
 2. 对象级默认 formal 主量仍保持 `length_axis(T)`。
 3. 在当前实现状态下, 允许 `diameter_max(T)` 作为对象级 formal candidate 参与比较, 但不要把这件事误写成 “braided 已经三路等权 formal 化”。
-4. `area_proj(T)` 先保持 route-level 输出、对照与方法学验证角色, 不提前包装成已放行的对象级 formal 主量。
+4. `area_proj(T)` 先保持 route-level 输出、对照与方法学验证角色; 它应稳定带自己的 gate / status / gate_reason, 但不提前包装成已放行的对象级 formal 主量。
 5. 只在温度同步可用、恢复覆盖到高温平台、相应主量曲线单调性可接受时给对象级正式 `Af`。
 6. 需要更高层解释时，再把分区量和密度代理量作为结果解释层叠加。
+7. benchmark 页面或汇总文件应优先支持六路线横向比较, 但在当前实现状态下先以 braided benchmark suite 打底, 不把“目标中的六路线页面”误写成“今天已经完全对称可用”。
+
+## 6A. Benchmark 页面 / 汇总文件应如何比较路线
+
+当前 braided benchmark 的稳定读取入口是:
+
+- 单场景目录下的 `analysis_metrics.json`
+- 单场景目录下的 `analysis.csv`
+- suite 目录下的 `benchmark_summary.json`
+- suite 目录下的 `benchmark_summary.csv`
+
+对 braided A/B/C 三条路线, 当前推荐的横向比较顺序是:
+
+1. 先看 `af_comparison` 或 `af_comparison_by_alias` 里的 `af95_error_c` / `aftan_error_c`
+2. 再看 `route_results` / `route_results_by_alias` 里的 `reportability_status`、`gate_reason`、`accepted_as_formal_candidate`
+3. 再看各路线自己的 `selected_as_primary`、`selected_as_formal` 与标准化 `route_qc_summary`
+4. 再看 benchmark 共享 QC:
+   `quality_median`、`body_mask_attachment_leak_fraction`、`centerline_disagreement_median`、`endpoint_jump_p95_px`、`axis_peak_position_stability_p95`
+5. 如需解释面积路线, 额外回看 `area_proj_definition_gap_px2` 或 `area_definition_gap` 相关字段
+
+项目长期上, benchmark 页面或汇总文件应能横向比较六条路线:
+
+- wire `A:x_route_a`
+- wire `B:kappa_fit`
+- wire `C:kappa_route_c`
+- braided `A:length_axis`
+- braided `B:diameter_max`
+- braided `C:area_proj`
+
+但在当前实现状态下:
+
+- braided 与 wire 都已经有 suite 级 `benchmark_summary.json/csv` 汇总入口
+- 两侧单场景文件形态仍不完全相同, 但 summary 阅读体验应统一成“先路线级比较, 再 canonical 对象级选择, 最后回到单场景 QC”
+- 因此文档里应把“六路线横向比较”写成当前可落地的 summary 体验与后续页面层继续对齐的方向, 而不是说仓库今天已经在所有页面上完全对称
 
 ## 7. 应如何对外表述
 
@@ -360,9 +482,12 @@
 - 该方法从视频中提取 `axis / projected centerline`、`D(x)`、`foreshortening` 以及 `landing / transition / compaction` 分区。
 - 该方法适合做二维投影几何量测、QC、时序跟踪和方法学验证。
 - 对同一个 braided run, `A / B / C` 三条路线都应输出自己的 route-level result。
-- route-level result 不等于 formal passed; 它也可以是 `quicklook`、`provisional` 或 `blocked`。
+- route-level result 不等于 formal passed; 它也可以是 `quicklook`、`provisional`、`formal_blocked` 或 `formal_passed`。
+- route B 在长期方法学上表示 braided 的宽度/直径路线; 当前实现固定用 strict body-only `diameter_max` 承载, 不与 `diameter_mid_p90` 等 proxy 混写。
+- canonical `object_*` 字段是在 route-level result 之上的第二层选择语义, 不能反过来覆盖掉 A/B/C 三条路线自身的输出; `formal_metric_label` / `provisional_metric_label` 继续保留为兼容展示层。
 - 当实验布置满足温度同步与完整恢复条件时, 当前仓库还可提供一条 `YY/T 1771-aligned` 的 braided `formal Af` 工作流。
-- 这条 `formal Af` 工作流当前默认以 `length_axis(T)` 为对象级 formal 主量; 当前代码实现里 `diameter_max(T)` 已进入 candidate, `area_proj(T)` 仍主要是 route-level 对照输出。
+- 这条 `formal Af` 工作流当前默认以 `length_axis(T)` 为对象级 formal 主量; 当前代码实现里 `diameter_max(T)` 已进入对象级 formal candidate, `area_proj(T)` 则稳定输出带 gate / status / gate_reason 的 route-level result, 但仍不是默认对象级 formal candidate。
+- benchmark 汇总应优先用于横向比较各路线的可用性、QC 稳定性与 Af 偏差, 不应只盯对象级最后选中的一路。
 
 同时，建议明确写出下面这些限制:
 
