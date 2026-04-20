@@ -17,10 +17,12 @@ from niti_bfr.webapp import (
     SAMPLE_RUNS,
     _build_benchmark_page_data,
     _mode_label,
+    _plot_route_titles_for_series,
     _prepare_summary_for_display,
     _preset_label,
     _refresh_plot_outputs_for_display,
     _run_result_hint,
+    _worker_output_label,
 )
 
 
@@ -66,6 +68,19 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(webapp._worker_route_title("demo", "A"), "两端距离")
         self.assertEqual(webapp._worker_route_title("demo", "B"), "整体弯曲程度")
         self.assertEqual(webapp._worker_route_title("braided_demo", "C"), "投影面积")
+
+    def test_route_curve_labels_follow_object_type(self) -> None:
+        self.assertEqual(_worker_output_label("route_a_metric_over_time.png", "demo"), "两端距离变化图")
+        self.assertEqual(_worker_output_label("route_c_recovery_vs_temperature.png", "demo"), "连续跟踪后的弯曲程度温度曲线")
+        self.assertEqual(_worker_output_label("route_a_metric_over_time.png", "braided_demo"), "主体长度变化图")
+        self.assertEqual(_worker_output_label("route_b_recovery_vs_temperature.png", "braided_demo"), "主体宽度温度曲线")
+        self.assertEqual(_worker_output_label("route_c_recovery_vs_temperature.png", "braided_demo"), "投影面积温度曲线")
+
+    def test_plot_route_titles_follow_series_family(self) -> None:
+        wire_titles = _plot_route_titles_for_series(pd.DataFrame({"x_route_a_px": [1.0], "kappa_fit_px_inv": [0.1]}))
+        braided_titles = _plot_route_titles_for_series(pd.DataFrame({"length_axis_px": [10.0], "diameter_max_px": [2.0]}))
+        self.assertEqual(wire_titles, {"A": "两端距离", "B": "整体弯曲程度", "C": "连续跟踪后的弯曲程度"})
+        self.assertEqual(braided_titles, {"A": "主体长度", "B": "主体宽度", "C": "投影面积"})
 
     def test_result_hint_shows_formal_downgrade(self) -> None:
         run = {
@@ -521,6 +536,77 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertNotIn("B:kappa_fit", text)
         self.assertNotIn("formal Af", text)
         self.assertNotIn("quicklook", text)
+
+    def test_braided_run_detail_uses_braided_curve_labels(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "run-detail-braided-curves"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "completed",
+                        "run_name": "braided formal",
+                        "preset": "braided_demo",
+                        "requested_mode": "formal_af",
+                        "frame_stride": 1,
+                        "actual_mode": "formal_af",
+                        "formal_metric_label": "diameter_max",
+                        "formal_gate_reason": None,
+                        "af95_c": 52.1,
+                        "aftan_c": 50.9,
+                        "original_frame_count": 100,
+                        "analyzed_frame_count": 100,
+                        "annotated_video_filename": None,
+                        "video_filename": "braided.mp4",
+                        "temperature_filename": "temp.csv",
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "braided_demo",
+                        "requested_mode": "formal_af",
+                        "actual_mode": "formal_af",
+                        "reportability_status": "formal",
+                        "formal_metric_label": "diameter_max",
+                        "provisional_metric_label": "diameter_max",
+                        "temperature_c_min": 20.0,
+                        "temperature_c_max": 65.0,
+                        "analyzed_frame_count": 100,
+                        "route_results": [
+                            {"alias": "A", "metric_key": "length_axis", "display_label": "A:length_axis", "reportability_status": "formal_blocked", "af95_c": 53.4, "aftan_c": 50.7},
+                            {"alias": "B", "metric_key": "diameter_max", "display_label": "B:diameter_max", "reportability_status": "formal_passed", "selected_as_formal": True, "selected_as_primary": True, "af95_c": 53.1, "aftan_c": 50.8},
+                            {"alias": "C", "metric_key": "area_proj", "display_label": "C:area_proj", "reportability_status": "provisional", "af95_c": 52.5, "aftan_c": 50.0},
+                        ],
+                    },
+                )
+                for name in [
+                    "analysis_process.mp4",
+                    "route_a_recovery_vs_temperature.png",
+                    "route_b_recovery_vs_temperature.png",
+                    "route_c_recovery_vs_temperature.png",
+                ]:
+                    (outputs_dir / name).write_bytes(b"demo")
+
+                client = TestClient(webapp.app)
+                response = client.get(f"/runs/{run_id}")
+
+        self.assertEqual(response.status_code, 200)
+        text = response.text
+        self.assertIn("编织对象测量结果", text)
+        self.assertIn("主体长度温度曲线", text)
+        self.assertIn("主体宽度温度曲线", text)
+        self.assertIn("投影面积温度曲线", text)
+        self.assertNotIn("两端距离温度曲线", text)
+        self.assertNotIn("整体弯曲程度温度曲线", text)
 
 
 if __name__ == "__main__":

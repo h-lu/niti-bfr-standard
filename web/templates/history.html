@@ -229,22 +229,6 @@
         opacity: 0.52;
         cursor: not-allowed;
       }
-      .route-preview {
-        margin-top: 8px;
-        display: grid;
-        gap: 8px;
-      }
-      .route-item {
-        padding: 10px 12px;
-        border-radius: 16px;
-        background: rgba(243, 239, 230, 0.88);
-        border: 1px solid rgba(24, 32, 43, 0.06);
-      }
-      .route-item strong {
-        display: block;
-        margin-bottom: 4px;
-        font-size: 13px;
-      }
       .empty {
         padding: 34px 28px;
         color: var(--muted);
@@ -303,7 +287,7 @@
         <span class="eyebrow">任务归档与回看</span>
         <h1>历史记录</h1>
         <p class="copy">
-          这里集中展示所有真实分析任务。你可以快速回看每次提交的对象类型、提交流程、输出模式和结果摘要，
+          这里集中展示所有真实分析任务。你可以快速回看每次提交的对象类型和输入信息，
           也可以直接删除已经不需要保留的历史任务。
         </p>
 
@@ -335,8 +319,7 @@
               <th>任务</th>
               <th>提交时间</th>
               <th>状态</th>
-              <th>输入与流程</th>
-              <th>结果摘要</th>
+              <th>输入信息</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -349,23 +332,19 @@
                   <span>{{ preset_label(run['preset']) }}</span>
                   <span>{{ run["video_filename"] }}</span>
                 </div>
-                {% if run["route_results_preview"] %}
-                <div class="route-preview">
-                  {% for route in run["route_results_preview"][:2] %}
-                  <div class="route-item">
-                    <strong>路线 {{ route["alias"] }}</strong>
-                    <div class="muted">{{ route["display_label"] or route["metric_key"] or "-" }}</div>
-                  </div>
-                  {% endfor %}
-                </div>
-                {% endif %}
               </td>
               <td data-label="提交时间" class="muted">{{ run["created_at"][:19].replace("T", " ") }}</td>
               <td data-label="状态">
                 <span class="pill status-{{ run['status'] }}">{{ run["status_label"] }}</span>
               </td>
-              <td data-label="输入与流程" class="muted">
-                <div>{{ requested_flow_label(run["temperature_filename"]) }}</div>
+              <td data-label="输入信息" class="muted">
+                <div>
+                  {% if run.temperature_filename is defined and run.temperature_filename %}
+                  视频 + 温度 CSV
+                  {% else %}
+                  仅视频
+                  {% endif %}
+                </div>
                 <div class="meta">
                   {% if run.temperature_filename is defined and run.temperature_filename %}
                   <span>已附带温度 CSV</span>
@@ -376,17 +355,6 @@
                   <span>抽帧步长 {{ run.frame_stride }}</span>
                   {% endif %}
                 </div>
-              </td>
-              <td data-label="结果摘要">
-                {% if run["actual_mode"] %}
-                <div>{{ mode_label(run["actual_mode"]) }}</div>
-                {% else %}
-                <div class="muted">等待处理</div>
-                {% endif %}
-                <div class="muted">{{ run_result_hint(run) }}</div>
-                {% if run["af95_c"] is not none %}
-                <div class="meta"><span>Af-95 {{ "%.2f"|format(run["af95_c"]) }} C</span></div>
-                {% endif %}
               </td>
               <td data-label="操作">
                 <div class="action-stack">
