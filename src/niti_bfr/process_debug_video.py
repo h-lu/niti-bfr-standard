@@ -6,6 +6,7 @@ from typing import Any, Literal
 import cv2
 import numpy as np
 import pandas as pd
+from PIL import Image, ImageDraw, ImageFont
 
 from .extract import ExtractionConfig, extract_geometry
 from .extract_braided import BraidedExtractionConfig, extract_braided_geometry
@@ -23,6 +24,7 @@ ROUTE_COLORS: dict[str, tuple[int, int, int]] = {
     "B": (220, 60, 220),
     "C": (60, 180, 80),
 }
+CHINESE_FONT_PATH = "/System/Library/Fonts/Hiragino Sans GB.ttc"
 
 
 def render_process_debug_video(
@@ -245,17 +247,17 @@ def _render_wire_debug_frame(
     canvas = _make_canvas(overlay)
     panel_x = overlay.shape[1] + 18
     lines = [
-        "wire-like analysis process",
+        "细丝对象分析过程",
         _frame_line(row),
-        f"A endpoint/chord  x={_fmt(_row_value(row, 'x_route_a_px'), suffix=' px')}"
+        f"两端距离  数值={_fmt(_row_value(row, 'x_route_a_px'), suffix=' px')}"
         f"  rec={_fmt(_row_value(row, 'x_route_a_recovery'), precision=3)}",
-        f"B shape-fit  x_fit={_fmt(_row_value(row, 'x_fit_px'), suffix=' px')}"
+        f"整体弯曲程度  辅助值={_fmt(_row_value(row, 'x_fit_px'), suffix=' px')}"
         f"  kappa={_fmt(_row_value(row, 'kappa_fit_px_inv'), precision=5)}",
-        f"C temporal  x={_fmt(_row_value(row, 'x_route_c_px'), suffix=' px')}"
+        f"连续跟踪后的弯曲程度  数值={_fmt(_row_value(row, 'x_route_c_px'), suffix=' px')}"
         f"  kappa={_fmt(_row_value(row, 'kappa_route_c_px_inv'), precision=5)}",
-        f"quality={_fmt(_row_value(row, 'quality'), precision=3)}"
-        f"  model={_row_text(row, 'model_name') or '-'}",
-        "A: magenta chord  B: cyan/orange fit  C: green temporal chord",
+        f"质量={_fmt(_row_value(row, 'quality'), precision=3)}"
+        f"  模型={_row_text(row, 'model_name') or '-'}",
+        "橙色：两端距离  紫色：整体弯曲程度  绿色：连续跟踪后的弯曲程度",
     ]
     _draw_text_block(canvas, lines, origin_xy=(panel_x, 36), width=SIDEBAR_WIDTH - 36)
     _draw_trend_plot(
@@ -264,11 +266,11 @@ def _render_wire_debug_frame(
         frame_idx=frame_idx,
         origin_xy=(panel_x, 248),
         size_xy=(SIDEBAR_WIDTH - 36, 150),
-        title="A/B/C recovery trend",
+        title="三种测量方式恢复趋势",
         metric_specs=[
-            ("x_route_a_recovery", ROUTE_COLORS["A"], "A"),
-            ("kappa_fit_recovery", ROUTE_COLORS["B"], "B"),
-            ("kappa_route_c_recovery", ROUTE_COLORS["C"], "C"),
+            ("x_route_a_recovery", ROUTE_COLORS["A"], "两端距离"),
+            ("kappa_fit_recovery", ROUTE_COLORS["B"], "整体弯曲"),
+            ("kappa_route_c_recovery", ROUTE_COLORS["C"], "连续跟踪"),
         ],
     )
     return canvas
@@ -330,18 +332,18 @@ def _render_braided_debug_frame(
     canvas = _make_canvas(overlay)
     panel_x = overlay.shape[1] + 18
     lines = [
-        "braided analysis process",
+        "编织对象分析过程",
         _frame_line(row),
-        f"A axis-length={_fmt(_row_value(row, 'length_axis_px'), suffix=' px')}"
+        f"主体长度  数值={_fmt(_row_value(row, 'length_axis_px'), suffix=' px')}"
         f"  rec={_fmt(_row_value(row, 'length_axis_recovery'), precision=3)}",
-        f"B max-width={_fmt(_row_value(row, 'diameter_max_px'), suffix=' px')}"
+        f"主体宽度  数值={_fmt(_row_value(row, 'diameter_max_px'), suffix=' px')}"
         f"  rec={_fmt(_row_value(row, 'diameter_max_recovery'), precision=3)}",
-        f"C area={_fmt(_row_value(row, 'area_proj_px2'), suffix=' px2', precision=0)}"
+        f"投影面积  数值={_fmt(_row_value(row, 'area_proj_px2'), suffix=' px2', precision=0)}"
         f"  rec={_fmt(_row_value(row, 'area_proj_recovery'), precision=3)}",
-        f"qc jump={_fmt(_row_value(row, 'endpoint_jump_px'), suffix=' px')}"
-        f"  leak={_fmt(_row_value(row, 'body_mask_attachment_leak_fraction'), precision=3)}",
-        f"centerline disagreement={_fmt(_row_value(row, 'centerline_disagreement'), precision=3)}"
-        f"  quality={_fmt(_row_value(row, 'quality'), precision=3)}",
+        f"端点跳动={_fmt(_row_value(row, 'endpoint_jump_px'), suffix=' px')}"
+        f"  泄漏={_fmt(_row_value(row, 'body_mask_attachment_leak_fraction'), precision=3)}",
+        f"中心线差异={_fmt(_row_value(row, 'centerline_disagreement'), precision=3)}"
+        f"  质量={_fmt(_row_value(row, 'quality'), precision=3)}",
     ]
     _draw_text_block(canvas, lines, origin_xy=(panel_x, 36), width=SIDEBAR_WIDTH - 36)
     _draw_trend_plot(
@@ -350,11 +352,11 @@ def _render_braided_debug_frame(
         frame_idx=frame_idx,
         origin_xy=(panel_x, 248),
         size_xy=(SIDEBAR_WIDTH - 36, 150),
-        title="A/B/C recovery trend",
+        title="三种测量方式恢复趋势",
         metric_specs=[
-            ("length_axis_recovery", ROUTE_COLORS["A"], "A"),
-            ("diameter_max_recovery", ROUTE_COLORS["B"], "B"),
-            ("area_proj_recovery", ROUTE_COLORS["C"], "C"),
+            ("length_axis_recovery", ROUTE_COLORS["A"], "主体长度"),
+            ("diameter_max_recovery", ROUTE_COLORS["B"], "主体宽度"),
+            ("area_proj_recovery", ROUTE_COLORS["C"], "投影面积"),
         ],
     )
     return canvas
@@ -364,7 +366,7 @@ def _render_error_canvas(*, frame_bgr: np.ndarray, title: str, message: str) -> 
     canvas = _make_canvas(frame_bgr)
     panel_x = frame_bgr.shape[1] + 18
     _draw_text_block(canvas, [title, message], origin_xy=(panel_x, 36), width=SIDEBAR_WIDTH - 36, text_color=ERROR_COLOR)
-    cv2.putText(canvas, message, (24, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.72, ERROR_COLOR, 2, cv2.LINE_AA)
+    _draw_unicode_text(canvas, message, (24, 18), font_size=26, color_bgr=ERROR_COLOR)
     return canvas
 
 
@@ -395,18 +397,11 @@ def _draw_text_block(
     height = line_h * len(lines) + 18
     cv2.rectangle(canvas, (ox - 8, oy - 24), (ox + width, oy - 24 + height), (245, 245, 245), -1)
     cv2.rectangle(canvas, (ox - 8, oy - 24), (ox + width, oy - 24 + height), (120, 120, 120), 1)
+    text_entries: list[tuple[str, tuple[int, int], int, tuple[int, int, int]]] = []
     for idx, line in enumerate(lines):
         color = MUTED_TEXT if idx == 0 else text_color
-        cv2.putText(
-            canvas,
-            line,
-            (ox, oy + idx * line_h),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.56,
-            color,
-            1,
-            cv2.LINE_AA,
-        )
+        text_entries.append((line, (ox, oy - 14 + idx * line_h), 18, color))
+    _draw_unicode_texts(canvas, text_entries)
 
 
 def _draw_trend_plot(
@@ -425,7 +420,7 @@ def _draw_trend_plot(
     y1 = oy + height
     cv2.rectangle(canvas, (ox, oy), (x1, y1), (248, 248, 248), -1)
     cv2.rectangle(canvas, (ox, oy), (x1, y1), (120, 120, 120), 1)
-    cv2.putText(canvas, title, (ox + 10, oy + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, TEXT_COLOR, 1, cv2.LINE_AA)
+    _draw_unicode_text(canvas, title, (ox + 10, oy + 6), font_size=18, color_bgr=TEXT_COLOR)
 
     plot_x0 = ox + 12
     plot_y0 = oy + 32
@@ -456,7 +451,7 @@ def _draw_trend_plot(
             px = int(round(float(x_values[frame_idx])))
             py = int(round(float(plot_y0 + plot_h - np.clip(value_now, 0.0, 1.0) * plot_h)))
             cv2.circle(canvas, (px, py), 4, color, -1)
-            cv2.putText(canvas, label, (px + 6, py - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+            _draw_unicode_text(canvas, label, (px + 6, py - 14), font_size=16, color_bgr=color)
 
     px = int(round(float(x_values[frame_idx])))
     cv2.line(canvas, (px, plot_y0), (px, plot_y0 + plot_h), (150, 150, 150), 1, cv2.LINE_AA)
@@ -499,10 +494,51 @@ def _max_segment(segments_xy: np.ndarray) -> np.ndarray | None:
 
 def _frame_line(row: Any) -> str:
     return (
-        f"frame={int(_row_value(row, 'frame') or 0):04d}"
-        f"  time={_fmt(_row_value(row, 'time_sec'), suffix='s', precision=2)}"
-        f"  temp={_fmt(_row_value(row, 'temperature_c'), suffix='C', precision=2)}"
+        f"帧={int(_row_value(row, 'frame') or 0):04d}"
+        f"  时间={_fmt(_row_value(row, 'time_sec'), suffix='秒', precision=2)}"
+        f"  温度={_fmt(_row_value(row, 'temperature_c'), suffix='℃', precision=2)}"
     )
+
+
+def _draw_unicode_text(
+    canvas: np.ndarray,
+    text: str,
+    origin_xy: tuple[int, int],
+    *,
+    font_size: int,
+    color_bgr: tuple[int, int, int],
+) -> None:
+    _draw_unicode_texts(canvas, [(text, origin_xy, font_size, color_bgr)])
+
+
+def _draw_unicode_texts(
+    canvas: np.ndarray,
+    entries: list[tuple[str, tuple[int, int], int, tuple[int, int, int]]],
+) -> None:
+    if not entries:
+        return
+    image = Image.fromarray(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(image)
+    for text, origin_xy, font_size, color_bgr in entries:
+        draw.text(
+            origin_xy,
+            text,
+            font=_load_font(font_size),
+            fill=(int(color_bgr[2]), int(color_bgr[1]), int(color_bgr[0])),
+        )
+    canvas[:] = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+
+
+_FONT_CACHE: dict[int, ImageFont.FreeTypeFont] = {}
+
+
+def _load_font(font_size: int) -> ImageFont.FreeTypeFont:
+    cached = _FONT_CACHE.get(font_size)
+    if cached is not None:
+        return cached
+    font = ImageFont.truetype(CHINESE_FONT_PATH, font_size)
+    _FONT_CACHE[font_size] = font
+    return font
 
 
 def _row_value(row: Any, field: str) -> float | None:

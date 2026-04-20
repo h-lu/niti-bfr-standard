@@ -456,9 +456,9 @@ def _worker_output_label(filename: str) -> str:
         "route_a_metric_over_time.png": "测量方式一变化图",
         "route_b_metric_over_time.png": "测量方式二变化图",
         "route_c_metric_over_time.png": "测量方式三变化图",
-        "route_a_recovery_vs_temperature.png": "测量方式一温度曲线",
-        "route_b_recovery_vs_temperature.png": "测量方式二温度曲线",
-        "route_c_recovery_vs_temperature.png": "测量方式三温度曲线",
+        "route_a_recovery_vs_temperature.png": "两端距离温度曲线",
+        "route_b_recovery_vs_temperature.png": "整体弯曲程度温度曲线",
+        "route_c_recovery_vs_temperature.png": "连续跟踪后的弯曲程度温度曲线",
     }
     return mapping.get(filename, filename)
 
@@ -2109,11 +2109,11 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"temperature_c", "x_route_a_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["x_route_a_recovery"], label="测量方式一", linewidth=2.0, color="#7c3aed")
+        plt.plot(series["temperature_c"], series["x_route_a_recovery"], label="两端距离", linewidth=2.0, color="#7c3aed")
         _draw_route_temperature_markers("A")
         plt.xlabel("温度（℃）")
         plt.ylabel("恢复比例")
-        plt.title("测量方式一温度曲线")
+        plt.title("两端距离温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_a_recovery_vs_temperature.png", dpi=160)
@@ -2121,11 +2121,11 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"temperature_c", "kappa_fit_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["kappa_fit_recovery"], label="测量方式二", linewidth=2.0, color="#ea580c")
+        plt.plot(series["temperature_c"], series["kappa_fit_recovery"], label="整体弯曲程度", linewidth=2.0, color="#ea580c")
         _draw_route_temperature_markers("B")
         plt.xlabel("温度（℃）")
         plt.ylabel("恢复比例")
-        plt.title("测量方式二温度曲线")
+        plt.title("整体弯曲程度温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_b_recovery_vs_temperature.png", dpi=160)
@@ -2133,11 +2133,11 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"temperature_c", "kappa_route_c_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["kappa_route_c_recovery"], label="测量方式三", linewidth=2.0, color="#16a34a")
+        plt.plot(series["temperature_c"], series["kappa_route_c_recovery"], label="连续跟踪后的弯曲程度", linewidth=2.0, color="#16a34a")
         _draw_route_temperature_markers("C")
         plt.xlabel("温度（℃）")
         plt.ylabel("恢复比例")
-        plt.title("测量方式三温度曲线")
+        plt.title("连续跟踪后的弯曲程度温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_c_recovery_vs_temperature.png", dpi=160)
@@ -2189,11 +2189,11 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"temperature_c", "length_axis_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="测量方式一", linewidth=2.0, color="#2563eb")
+        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="主体长度", linewidth=2.0, color="#2563eb")
         _draw_route_temperature_markers("A")
         plt.xlabel("温度（℃）")
         plt.ylabel("恢复比例")
-        plt.title("测量方式一温度曲线")
+        plt.title("主体长度温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_a_recovery_vs_temperature.png", dpi=160)
@@ -2201,11 +2201,11 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"temperature_c", "diameter_max_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="测量方式二", linewidth=2.0, color="#d946ef")
+        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="主体宽度", linewidth=2.0, color="#d946ef")
         _draw_route_temperature_markers("B")
         plt.xlabel("温度（℃）")
         plt.ylabel("恢复比例")
-        plt.title("测量方式二温度曲线")
+        plt.title("主体宽度温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_b_recovery_vs_temperature.png", dpi=160)
@@ -2213,11 +2213,11 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"temperature_c", "area_proj_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="测量方式三", linewidth=2.0, color="#16a34a")
+        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="投影面积", linewidth=2.0, color="#16a34a")
         _draw_route_temperature_markers("C")
         plt.xlabel("温度（℃）")
         plt.ylabel("恢复比例")
-        plt.title("测量方式三温度曲线")
+        plt.title("投影面积温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_c_recovery_vs_temperature.png", dpi=160)
