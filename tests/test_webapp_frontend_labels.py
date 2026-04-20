@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
 
+import pandas as pd
 from fastapi.testclient import TestClient
 
 from niti_bfr.export_contract import ROUTE_RESULTS_SCHEMA_VERSION
@@ -18,6 +19,7 @@ from niti_bfr.webapp import (
     _mode_label,
     _prepare_summary_for_display,
     _preset_label,
+    _refresh_plot_outputs_for_display,
     _run_result_hint,
 )
 
@@ -156,6 +158,100 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertFalse(route_c["formal_candidate"])
         self.assertFalse(route_c["accepted_as_formal_candidate"])
         self.assertEqual(route_c["reportability_status"], "formal_blocked")
+
+    def test_prepare_summary_backfills_smoothed_values_from_analysis_csv(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "wire-run-smoothed-backfill"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                pd.DataFrame(
+                    {
+                        "temperature_c": [20.0, 28.0, 36.0, 44.0, 52.0, 58.0, 62.0, 66.0],
+                        "x_route_a_recovery": [0.0, 0.03, 0.1, 0.45, 0.92, 0.98, 1.0, 1.0],
+                        "kappa_fit_recovery": [0.0, 0.02, 0.08, 0.25, 0.82, 0.97, 1.0, 1.0],
+                        "kappa_route_c_recovery": [0.0, 0.01, 0.06, 0.2, 0.8, 0.96, 1.0, 1.0],
+                    }
+                ).to_csv(outputs_dir / "analysis.csv", index=False)
+
+                run = {
+                    "id": run_id,
+                    "preset": "demo",
+                    "requested_mode": "formal_af",
+                    "actual_mode": "formal_af",
+                    "temperature_filename": "temp.csv",
+                    "run_dir": str(run_dir),
+                }
+                summary = {
+                    "preset": "demo",
+                    "requested_mode": "formal_af",
+                    "actual_mode": "formal_af",
+                    "reportability_status": "formal",
+                    "formal_metric_label": "kappa_fit",
+                    "provisional_metric_label": "kappa_fit",
+                    "route_results": [
+                        {"alias": "A", "metric_key": "x_route_a", "af95_c": 50.0, "aftan_c": 48.0},
+                        {"alias": "B", "metric_key": "kappa_fit", "af95_c": 53.0, "aftan_c": 51.0},
+                        {"alias": "C", "metric_key": "kappa_route_c", "af95_c": 53.1, "aftan_c": 51.1},
+                    ],
+                }
+
+                prepared = _prepare_summary_for_display(run, summary)
+
+        self.assertIsNotNone(prepared)
+        assert prepared is not None
+        self.assertIsNotNone(prepared["route_results_by_alias"]["B"]["smoothed_af95_c"])
+        self.assertIsNotNone(prepared["route_results_by_alias"]["B"]["smoothed_aftan_c"])
+        self.assertIsNotNone(prepared["object_smoothed_af95_c"])
+        self.assertEqual(prepared["object_smoothed_route_alias"], "B")
+
+    def test_refresh_plot_outputs_for_display_rewrites_legacy_temperature_plots(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "wire-run-plot-refresh"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                pd.DataFrame(
+                    {
+                        "temperature_c": [20.0, 28.0, 36.0, 44.0, 52.0, 58.0, 62.0, 66.0],
+                        "x_route_a_recovery": [0.0, 0.03, 0.1, 0.45, 0.92, 0.98, 1.0, 1.0],
+                        "kappa_fit_recovery": [0.0, 0.02, 0.08, 0.25, 0.82, 0.97, 1.0, 1.0],
+                        "kappa_route_c_recovery": [0.0, 0.01, 0.06, 0.2, 0.8, 0.96, 1.0, 1.0],
+                    }
+                ).to_csv(outputs_dir / "analysis.csv", index=False)
+
+                run = {
+                    "id": run_id,
+                    "preset": "demo",
+                    "requested_mode": "formal_af",
+                    "actual_mode": "formal_af",
+                    "temperature_filename": "temp.csv",
+                    "run_dir": str(run_dir),
+                }
+                summary = {
+                    "preset": "demo",
+                    "requested_mode": "formal_af",
+                    "actual_mode": "formal_af",
+                    "reportability_status": "formal",
+                    "formal_metric_label": "kappa_fit",
+                    "provisional_metric_label": "kappa_fit",
+                    "route_results": [
+                        {"alias": "A", "metric_key": "x_route_a", "af95_c": 50.0, "aftan_c": 48.0},
+                        {"alias": "B", "metric_key": "kappa_fit", "af95_c": 53.0, "aftan_c": 51.0},
+                        {"alias": "C", "metric_key": "kappa_route_c", "af95_c": 53.1, "aftan_c": 51.1},
+                    ],
+                }
+
+                prepared = _prepare_summary_for_display(run, summary)
+                _refresh_plot_outputs_for_display(run, prepared)
+
+                route_a_plot = outputs_dir / "route_a_recovery_vs_temperature.png"
+                self.assertTrue(route_a_plot.exists())
+                self.assertGreater(route_a_plot.stat().st_size, 0)
 
     def test_benchmark_page_falls_back_to_analysis_metrics(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -393,13 +489,15 @@ class WebappFrontendLabelTests(unittest.TestCase):
                         "reportability_status": "formal",
                         "formal_metric_label": "kappa_fit",
                         "provisional_metric_label": "kappa_fit",
+                        "object_smoothed_af95_c": 52.81,
+                        "object_smoothed_aftan_c": 50.84,
                         "temperature_c_min": 20.0,
                         "temperature_c_max": 65.0,
                         "analyzed_frame_count": 480,
                         "route_results": [
-                            {"alias": "A", "metric_key": "x_route_a", "display_label": "A:x_route_a", "reportability_status": "provisional", "af95_c": 49.6, "aftan_c": 48.2},
-                            {"alias": "B", "metric_key": "kappa_fit", "display_label": "B:kappa_fit", "reportability_status": "formal_passed", "selected_as_formal": True, "selected_as_primary": True, "af95_c": 52.8, "aftan_c": 50.8},
-                            {"alias": "C", "metric_key": "kappa_route_c", "display_label": "C:kappa_route_c", "reportability_status": "formal_blocked", "gate_reason": "kappa_route_c_dynamic_range_too_small", "af95_c": 52.9, "aftan_c": 51.0},
+                            {"alias": "A", "metric_key": "x_route_a", "display_label": "A:x_route_a", "reportability_status": "provisional", "af95_c": 49.6, "aftan_c": 48.2, "smoothed_af95_c": 49.68, "smoothed_aftan_c": 47.94},
+                            {"alias": "B", "metric_key": "kappa_fit", "display_label": "B:kappa_fit", "reportability_status": "formal_passed", "selected_as_formal": True, "selected_as_primary": True, "af95_c": 52.8, "aftan_c": 50.8, "smoothed_af95_c": 52.81, "smoothed_aftan_c": 50.84},
+                            {"alias": "C", "metric_key": "kappa_route_c", "display_label": "C:kappa_route_c", "reportability_status": "formal_blocked", "gate_reason": "kappa_route_c_dynamic_range_too_small", "af95_c": 52.9, "aftan_c": 51.0, "smoothed_af95_c": 52.90, "smoothed_aftan_c": 51.02},
                         ],
                     },
                 )
@@ -417,7 +515,8 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertIn("整体弯曲程度", text)
         self.assertIn("95%恢复温度", text)
         self.assertIn("分析过程视频", text)
-        self.assertIn("现场看这一个就够了", text)
+        self.assertIn("稳健参考", text)
+        self.assertIn("52.81℃", text)
         self.assertNotIn("A:x_route_a", text)
         self.assertNotIn("B:kappa_fit", text)
         self.assertNotIn("formal Af", text)

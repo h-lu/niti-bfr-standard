@@ -330,15 +330,6 @@
         font-size: 13px;
         line-height: 1.6;
       }
-      .run-result {
-        margin-top: 10px;
-        padding: 10px 12px;
-        border-radius: 16px;
-        background: var(--card-soft);
-        color: var(--text);
-        font-size: 13px;
-        font-weight: 700;
-      }
       .empty {
         padding: 18px;
         border-radius: 18px;
@@ -490,13 +481,6 @@
                 处理失败
                 {% endif %}
               </p>
-
-              {% if run["summary"] and run["summary"].get("object_formal_af95_c") is not none %}
-              <div class="run-result">正式结果温度 {{ "%.2f"|format(run["summary"].get("object_formal_af95_c")) }} ℃</div>
-              {% elif run["summary"] and run["summary"].get("object_provisional_af95_c") is not none %}
-              <div class="run-result">参考结果温度 {{ "%.2f"|format(run["summary"].get("object_provisional_af95_c")) }} ℃</div>
-              {% endif %}
-
               <a class="run-link" href="{{ request.url_for('run_detail', run_id=run['id']) }}">查看结果</a>
             </article>
             {% endfor %}

@@ -11,6 +11,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+import pandas as pd
 import yaml
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
@@ -26,6 +27,7 @@ from .export_contract import (
     route_results_by_alias as canonical_route_results_by_alias,
 )
 from .extract import ExtractionConfig
+from .metrics import af_95, af_tan
 from .pipeline import (
     AnalysisResult,
     BRAIDED_FORMAL_CANDIDATES,
@@ -577,6 +579,199 @@ def _coerce_float(value: Any) -> float | None:
     return numeric
 
 
+def _route_recovery_series_column(preset: str | None, alias: str) -> str | None:
+    if _is_braided_preset(preset):
+        return {
+            "A": "length_axis_recovery",
+            "B": "diameter_max_recovery",
+            "C": "area_proj_recovery",
+        }.get(alias)
+    return {
+        "A": "x_route_a_recovery",
+        "B": "kappa_fit_recovery",
+        "C": "kappa_route_c_recovery",
+    }.get(alias)
+
+
+def _smoothed_temperature_recovery(
+    temp_c: Any,
+    recovery: Any,
+    *,
+    window: int = 7,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int] | None:
+    temp_arr = np.asarray(temp_c, dtype=float)
+    recovery_arr = np.asarray(recovery, dtype=float)
+    valid = np.isfinite(temp_arr) & np.isfinite(recovery_arr)
+    if np.count_nonzero(valid) < 4:
+        return None
+
+    temp_valid = temp_arr[valid]
+    recovery_valid = recovery_arr[valid]
+    order = np.argsort(temp_valid)
+    temp_valid = temp_valid[order]
+    recovery_valid = recovery_valid[order]
+
+    smooth_window = min(int(window), len(recovery_valid))
+    if smooth_window % 2 == 0:
+        smooth_window -= 1
+    if smooth_window >= 3:
+        smoothed = (
+            pd.Series(recovery_valid)
+            .rolling(window=smooth_window, center=True, min_periods=1)
+            .median()
+            .to_numpy(dtype=float)
+        )
+    else:
+        smooth_window = 1
+        smoothed = recovery_valid
+    return temp_valid, recovery_valid, smoothed, smooth_window
+
+
+def _build_smoothed_route_results(preset: str | None, series: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    if "temperature_c" not in series.columns:
+        return {}
+
+    route_smoothed: dict[str, dict[str, Any]] = {}
+    for alias in ROUTE_ALIAS_ORDER:
+        recovery_col = _route_recovery_series_column(preset, alias)
+        if recovery_col is None or recovery_col not in series.columns:
+            continue
+        smoothed_payload = _smoothed_temperature_recovery(series["temperature_c"], series[recovery_col], window=7)
+        if smoothed_payload is None:
+            continue
+        temp_valid, _raw_valid, smoothed, smooth_window = smoothed_payload
+        route_smoothed[alias] = {
+            "smoothed_af95_c": _coerce_float(af_95(temp_valid, smoothed)),
+            "smoothed_aftan_c": _coerce_float(af_tan(temp_valid, smoothed)),
+            "smoothing_method": "centered_rolling_median_temperature",
+            "smoothing_window": smooth_window,
+        }
+    return route_smoothed
+
+
+def _analysis_csv_path_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
+    run_dir: str | None = None
+    run_id: str | None = None
+    if isinstance(run, dict):
+        run_dir = run.get("run_dir")
+        run_id = run.get("id")
+    else:
+        run_dir = run["run_dir"] if "run_dir" in run.keys() else None
+        run_id = run["id"] if "id" in run.keys() else None
+    if run_dir:
+        return Path(str(run_dir)) / "outputs" / "analysis.csv"
+    return RUNS_ROOT / str(run_id or "") / "outputs" / "analysis.csv"
+
+
+def _backfill_smoothed_summary_fields(
+    run: sqlite3.Row | dict[str, Any],
+    prepared: dict[str, Any],
+) -> dict[str, Any]:
+    route_results = prepared.get("route_results") or []
+    has_route_smoothed = any(
+        entry.get("smoothed_af95_c") is not None or entry.get("smoothed_aftan_c") is not None for entry in route_results
+    )
+    has_object_smoothed = (
+        prepared.get("object_smoothed_af95_c") is not None or prepared.get("object_smoothed_aftan_c") is not None
+    )
+    if has_route_smoothed and has_object_smoothed:
+        return prepared
+
+    analysis_csv = _analysis_csv_path_for_run(run)
+    if not analysis_csv.exists():
+        return prepared
+    try:
+        series = pd.read_csv(analysis_csv)
+    except Exception:  # noqa: BLE001
+        return prepared
+
+    preset = prepared.get("preset") or (run.get("preset") if isinstance(run, dict) else run["preset"])
+    smoothed_route_results = _build_smoothed_route_results(preset, series)
+    if not smoothed_route_results:
+        return prepared
+    prepared["_smoothed_backfilled"] = True
+
+    updated_route_results: list[dict[str, Any]] = []
+    for route in route_results:
+        route_copy = dict(route)
+        route_copy.update(smoothed_route_results.get(route_copy.get("alias"), {}))
+        updated_route_results.append(route_copy)
+    prepared["route_results"] = updated_route_results
+    prepared["route_results_by_alias"] = canonical_route_results_by_alias(updated_route_results)
+    prepared.setdefault("route_smoothing_method", "centered_rolling_median_temperature")
+    prepared.setdefault("route_smoothing_window", 7)
+
+    if not has_object_smoothed:
+        preferred_metric_key = (
+            prepared.get("formal_metric_label")
+            or prepared.get("object_formal_metric_key")
+            or prepared.get("provisional_metric_label")
+            or prepared.get("object_provisional_metric_key")
+        )
+        preferred_alias = _route_alias_from_metric_key(preset, preferred_metric_key)
+        preferred_smoothed = smoothed_route_results.get(preferred_alias or "")
+        if preferred_smoothed is not None:
+            prepared["object_smoothed_metric_key"] = preferred_metric_key
+            prepared["object_smoothed_route_alias"] = preferred_alias
+            prepared["object_smoothed_af95_c"] = preferred_smoothed.get("smoothed_af95_c")
+            prepared["object_smoothed_aftan_c"] = preferred_smoothed.get("smoothed_aftan_c")
+    return prepared
+
+
+def _result_for_display_plots(
+    run: sqlite3.Row | dict[str, Any],
+    prepared: dict[str, Any],
+    series: pd.DataFrame,
+) -> AnalysisResult:
+    preset = prepared.get("preset") or (run.get("preset") if isinstance(run, dict) else run["preset"])
+    _ = preset  # keep parity with call sites and future route-specific branching
+    return AnalysisResult(
+        series=series,
+        fit=None,
+        af95_c=_coerce_float(prepared.get("af95_c")),
+        aftan_c=_coerce_float(prepared.get("aftan_c")),
+        metric_reports=None,
+        primary_metric_label=prepared.get("primary_metric_label"),
+        mode=str(prepared.get("actual_mode") or (run.get("actual_mode") if isinstance(run, dict) else run["actual_mode"]) or "quicklook"),
+        formal_metric_label=prepared.get("formal_metric_label"),
+        formal_gate_reason=prepared.get("formal_gate_reason"),
+        provisional_metric_label=prepared.get("provisional_metric_label"),
+        provisional_af95_c=_coerce_float(prepared.get("provisional_af95_c")),
+        provisional_aftan_c=_coerce_float(prepared.get("provisional_aftan_c")),
+        reportability_status=str(prepared.get("reportability_status") or "quicklook_only"),
+        warning_codes=list(prepared.get("warning_codes") or []),
+        acceptance_profile=prepared.get("acceptance_profile"),
+        route_results=list(prepared.get("route_results") or []),
+        formal_candidate_gates=prepared.get("formal_candidate_gates"),
+        input_fps=_coerce_float(prepared.get("input_fps")),
+        original_frame_count=prepared.get("original_frame_count"),
+        analyzed_frame_count=prepared.get("analyzed_frame_count"),
+        frame_stride=int(prepared.get("frame_stride") or 1),
+    )
+
+
+def _refresh_plot_outputs_for_display(
+    run: sqlite3.Row | dict[str, Any],
+    prepared: dict[str, Any] | None,
+) -> None:
+    if prepared is None or not prepared.get("_smoothed_backfilled"):
+        return
+    analysis_csv = _analysis_csv_path_for_run(run)
+    if not analysis_csv.exists():
+        return
+    try:
+        series = pd.read_csv(analysis_csv)
+    except Exception:  # noqa: BLE001
+        return
+
+    outputs_dir = analysis_csv.parent
+    result = _result_for_display_plots(run, prepared, series)
+    try:
+        _write_plots(outputs_dir, result)
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _coerce_warning_codes(value: Any) -> list[str]:
     if value is None:
         return []
@@ -760,6 +955,10 @@ def _normalize_route_results(
             "display_label": entry.get("display_label") or spec["display_label"],
             "af95_c": _coerce_float(entry.get("af95_c")),
             "aftan_c": _coerce_float(entry.get("aftan_c")),
+            "smoothed_af95_c": _coerce_float(entry.get("smoothed_af95_c")),
+            "smoothed_aftan_c": _coerce_float(entry.get("smoothed_aftan_c")),
+            "smoothing_method": entry.get("smoothing_method"),
+            "smoothing_window": entry.get("smoothing_window"),
             "fit_rmse": _coerce_float(entry.get("fit_rmse")),
             "monotonic_violation_fraction": _coerce_float(entry.get("monotonic_violation_fraction")),
             "dynamic_range": _coerce_float(entry.get("dynamic_range")),
@@ -854,7 +1053,7 @@ def _prepare_summary_for_display(run: sqlite3.Row | dict[str, Any], summary: dic
             provisional_aftan_c=prepared.get("provisional_aftan_c"),
         )
     )
-    return prepared
+    return _backfill_smoothed_summary_fields(run, prepared)
 
 
 def _route_metric_key_for_alias(preset: str | None, alias: str) -> str | None:
@@ -1544,6 +1743,7 @@ def run_detail(request: Request, run_id: str) -> Any:
     run = dict(run_row)
 
     summary = _prepare_summary_for_display(run, _load_summary(run_id))
+    _refresh_plot_outputs_for_display(run, summary)
     temperature_available = bool(
         run.get("temperature_filename")
         or (summary and (summary.get("temperature_c_min") is not None or summary.get("temperature_c_max") is not None))
@@ -1865,11 +2065,25 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         provisional_metric_label=result.provisional_metric_label,
         object_gate_reason=result.formal_gate_reason,
     )
+    smoothed_route_results = _build_smoothed_route_results(run["preset"], series)
+    for route in route_results:
+        route.update(smoothed_route_results.get(route["alias"], {}))
     summary["route_results"] = route_results
     summary["route_results_by_alias"] = canonical_route_results_by_alias(route_results)
     summary["route_alias_order"] = list(ROUTE_ALIAS_ORDER)
     summary["route_order"] = list(ROUTE_ALIAS_ORDER)
     summary["route_results_schema_version"] = ROUTE_RESULTS_SCHEMA_VERSION
+    if smoothed_route_results:
+        summary["route_smoothing_method"] = "centered_rolling_median_temperature"
+        summary["route_smoothing_window"] = 7
+        preferred_metric_key = public_formal_metric_label or result.provisional_metric_label
+        preferred_alias = _route_alias_from_metric_key(run["preset"], preferred_metric_key)
+        preferred_smoothed = smoothed_route_results.get(preferred_alias or "")
+        if preferred_smoothed is not None:
+            summary["object_smoothed_metric_key"] = preferred_metric_key
+            summary["object_smoothed_route_alias"] = preferred_alias
+            summary["object_smoothed_af95_c"] = preferred_smoothed.get("smoothed_af95_c")
+            summary["object_smoothed_aftan_c"] = preferred_smoothed.get("smoothed_aftan_c")
     summary.update(
         canonical_object_result_fields(
             preset=run["preset"],

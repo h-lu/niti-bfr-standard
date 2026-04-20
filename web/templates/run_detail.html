@@ -7,8 +7,6 @@
 {%- endmacro %}
 {% set object_summary = summary.get('object_summary') if summary and summary.get('object_summary') else summary %}
 {% set route_results = summary.get('route_results') if summary and summary.get('route_results') else [] %}
-{% set primary_af95 = object_summary.get('object_formal_af95_c') if object_summary and object_summary.get('object_formal_af95_c') is not none else (object_summary.get('object_provisional_af95_c') if object_summary else none) %}
-{% set primary_aftan = object_summary.get('object_formal_aftan_c') if object_summary and object_summary.get('object_formal_aftan_c') is not none else (object_summary.get('object_provisional_aftan_c') if object_summary else none) %}
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -107,7 +105,7 @@
       }
       .summary-grid {
         display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
         gap: 12px;
         margin-top: 20px;
       }
@@ -148,6 +146,12 @@
       .section h2 {
         margin: 0 0 14px;
         font-size: 24px;
+      }
+      .section-note {
+        margin: -2px 0 14px;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.7;
       }
       .route-grid {
         display: grid;
@@ -344,14 +348,6 @@
 
         <div class="summary-grid">
           <div class="summary-item">
-            <strong>{{ fmt_temp(primary_af95) }}</strong>
-            <span>95%恢复温度</span>
-          </div>
-          <div class="summary-item">
-            <strong>{{ fmt_temp(primary_aftan) }}</strong>
-            <span>切线法温度</span>
-          </div>
-          <div class="summary-item">
             <strong>{{ route_results|length }}</strong>
             <span>测量方式数</span>
           </div>
@@ -366,6 +362,14 @@
               {% endif %}
             </strong>
             <span>已分析画面数</span>
+          </div>
+          <div class="summary-item">
+            <strong>{{ mode_label(run['actual_mode']) }}</strong>
+            <span>输出方式</span>
+          </div>
+          <div class="summary-item">
+            <strong>{{ run_status_label(run['status']) }}</strong>
+            <span>任务状态</span>
           </div>
         </div>
 
@@ -391,6 +395,7 @@
 
       <section class="card section">
         <h2>测量方式</h2>
+        <div class="section-note">页面同时展示当前测量结果和稳健参考结果。稳健参考仅用于对照抖动敏感性，不替代默认测量口径。</div>
         {% if route_results %}
         <div class="route-grid">
           {% for route in route_results %}
@@ -404,11 +409,19 @@
             <div class="metric-grid">
               <div class="metric-box">
                 <strong>{{ fmt_temp(route.get('af95_c')) }}</strong>
-                <span>95%恢复温度</span>
+                <span>当前测量 95%恢复温度</span>
               </div>
               <div class="metric-box">
                 <strong>{{ fmt_temp(route.get('aftan_c')) }}</strong>
-                <span>切线法温度</span>
+                <span>当前测量 切线法温度</span>
+              </div>
+              <div class="metric-box">
+                <strong>{{ fmt_temp(route.get('smoothed_af95_c')) }}</strong>
+                <span>稳健参考 95%恢复温度</span>
+              </div>
+              <div class="metric-box">
+                <strong>{{ fmt_temp(route.get('smoothed_aftan_c')) }}</strong>
+                <span>稳健参考 切线法温度</span>
               </div>
             </div>
           </article>

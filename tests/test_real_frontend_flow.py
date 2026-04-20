@@ -41,7 +41,50 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertNotIn("Benchmark 汇总", text)
         self.assertNotIn("直接运行这个示例", text)
         self.assertNotIn("分析模式", text)
-        self.assertIn("提交分析任务", text)
+        self.assertIn("开始分析", text)
+
+    def test_home_page_recent_runs_hide_single_result_temperature_copy(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp):
+                webapp._ensure_storage()
+                run_id = "recent-run-copy"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "completed",
+                        "run_name": "recent",
+                        "preset": "demo",
+                        "requested_mode": "formal_af",
+                        "frame_stride": 1,
+                        "actual_mode": "formal_af",
+                        "formal_metric_label": "kappa_fit",
+                        "formal_gate_reason": None,
+                        "af95_c": 52.8,
+                        "aftan_c": 50.8,
+                        "original_frame_count": 480,
+                        "analyzed_frame_count": 480,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": "temp.csv",
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+                (outputs_dir / "summary.json").write_text(
+                    '{"object_formal_af95_c": 52.8, "object_provisional_af95_c": 52.8}',
+                    encoding="utf-8",
+                )
+                client = TestClient(webapp.app)
+                response = client.get("/")
+
+        self.assertEqual(response.status_code, 200)
+        text = response.text
+        self.assertNotIn("正式结果温度", text)
+        self.assertNotIn("参考结果温度", text)
 
     def test_history_page_supports_deleting_completed_runs(self) -> None:
         with TemporaryDirectory() as tmp:
