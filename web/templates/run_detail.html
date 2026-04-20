@@ -7,7 +7,6 @@
 {%- endmacro %}
 {% set object_summary = summary.get('object_summary') if summary and summary.get('object_summary') else summary %}
 {% set route_results = summary.get('route_results') if summary and summary.get('route_results') else [] %}
-{% set worker_state = worker_result_summary(run, summary) %}
 {% set primary_af95 = object_summary.get('object_formal_af95_c') if object_summary and object_summary.get('object_formal_af95_c') is not none else (object_summary.get('object_provisional_af95_c') if object_summary else none) %}
 {% set primary_aftan = object_summary.get('object_formal_aftan_c') if object_summary and object_summary.get('object_formal_aftan_c') is not none else (object_summary.get('object_provisional_aftan_c') if object_summary else none) %}
 <!doctype html>
@@ -56,6 +55,9 @@
         border-radius: 20px;
         background: #f7f5f1;
       }
+      img.zoomable {
+        cursor: zoom-in;
+      }
       .shell {
         max-width: 1120px;
         margin: 0 auto;
@@ -98,41 +100,10 @@
         padding: 24px;
         margin-bottom: 16px;
       }
-      .badge {
-        display: inline-flex;
-        align-items: center;
-        min-height: 32px;
-        padding: 0 12px;
-        border-radius: 999px;
-        font-size: 13px;
-        font-weight: 800;
-      }
-      .badge-ok {
-        color: var(--ok);
-        background: var(--ok-bg);
-      }
-      .badge-warn {
-        color: var(--warn);
-        background: var(--warn-bg);
-      }
-      .badge-info {
-        color: var(--info);
-        background: var(--info-bg);
-      }
-      .badge-danger {
-        color: var(--danger);
-        background: var(--danger-bg);
-      }
       .hero h1 {
-        margin: 14px 0 10px;
+        margin: 0;
         font-size: clamp(30px, 5vw, 44px);
         line-height: 1.15;
-      }
-      .lead {
-        margin: 0;
-        color: var(--muted);
-        font-size: 16px;
-        line-height: 1.8;
       }
       .summary-grid {
         display: grid;
@@ -175,13 +146,8 @@
         margin-bottom: 16px;
       }
       .section h2 {
-        margin: 0 0 8px;
+        margin: 0 0 14px;
         font-size: 24px;
-      }
-      .section-copy {
-        margin: 0 0 16px;
-        color: var(--muted);
-        line-height: 1.75;
       }
       .route-grid {
         display: grid;
@@ -195,26 +161,17 @@
         background: #fffcf7;
       }
       .route-head {
-        display: flex;
-        justify-content: space-between;
-        gap: 10px;
-        align-items: start;
-        margin-bottom: 10px;
+        margin-bottom: 14px;
       }
       .route-name {
-        color: var(--accent);
+        margin-bottom: 6px;
+        color: var(--muted);
         font-size: 13px;
-        font-weight: 800;
+        font-weight: 700;
       }
       .route-card h3 {
-        margin: 4px 0 6px;
-        font-size: 22px;
-      }
-      .route-desc {
         margin: 0 0 16px;
-        color: var(--muted);
-        font-size: 14px;
-        line-height: 1.7;
+        font-size: 20px;
       }
       .metric-grid {
         display: grid;
@@ -237,36 +194,34 @@
         color: var(--muted);
         font-size: 13px;
       }
-      .route-note {
-        margin: 0;
-        color: var(--muted);
-        font-size: 14px;
-        line-height: 1.75;
-      }
       .media-card {
         overflow: hidden;
       }
       figure {
         margin: 0;
       }
-      figcaption {
-        padding-top: 10px;
-        color: var(--muted);
-        font-size: 14px;
-        line-height: 1.7;
+      .curve-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
       }
-      .media-note {
-        margin-top: 6px;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.7;
+      .curve-card {
+        padding: 14px;
+        border-radius: 20px;
+        border: 1px solid #efe5d8;
+        background: #fffcf7;
       }
-      .download-list {
+      .curve-card strong {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 16px;
+      }
+      .file-list {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
       }
-      .download-link {
+      .file-link {
         display: flex;
         justify-content: space-between;
         align-items: center;
@@ -277,10 +232,23 @@
         border: 1px solid #efe5d8;
         background: #fffaf3;
       }
-      .download-link span:last-child {
+      .file-link span:last-child {
         color: var(--accent);
         font-weight: 700;
         white-space: nowrap;
+      }
+      details.files {
+        border-radius: 18px;
+        background: #faf6f0;
+        border: 1px solid #efe5d8;
+        padding: 14px 16px 16px;
+      }
+      details.files summary {
+        cursor: pointer;
+        font-weight: 700;
+      }
+      details.files[open] summary {
+        margin-bottom: 12px;
       }
       .empty {
         padding: 18px;
@@ -288,6 +256,35 @@
         background: #faf6f0;
         color: var(--muted);
         line-height: 1.75;
+      }
+      .lightbox {
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 28px;
+        background: rgba(24, 31, 40, 0.78);
+      }
+      .lightbox.open {
+        display: flex;
+      }
+      .lightbox-dialog {
+        max-width: min(1200px, 100%);
+        max-height: min(90vh, 100%);
+        padding: 10px;
+        border-radius: 24px;
+        background: rgba(255, 253, 249, 0.98);
+        box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
+      }
+      .lightbox-image {
+        max-width: min(1120px, calc(100vw - 76px));
+        max-height: calc(90vh - 20px);
+        width: auto;
+        height: auto;
+        border-radius: 18px;
+        background: #fff;
       }
       .error {
         padding: 18px;
@@ -305,7 +302,8 @@
       @media (max-width: 920px) {
         .summary-grid,
         .route-grid,
-        .download-list {
+        .curve-grid,
+        .file-list {
           grid-template-columns: 1fr;
         }
       }
@@ -321,6 +319,13 @@
         .section {
           padding: 18px;
         }
+        .lightbox {
+          padding: 14px;
+        }
+        .lightbox-image {
+          max-width: calc(100vw - 48px);
+          max-height: calc(100vh - 48px);
+        }
       }
     </style>
   </head>
@@ -335,12 +340,7 @@
       </header>
 
       <section class="card hero">
-        <span class="badge {% if worker_state['badge'] == '可直接使用' %}badge-ok{% elif worker_state['badge'] == '仅供参考' %}badge-warn{% elif worker_state['badge'] == '处理中' %}badge-info{% else %}badge-info{% endif %}">
-          {{ worker_state['badge'] }}
-        </span>
         <h1>{{ worker_object_label(run['preset']) }}测量结果</h1>
-        <p class="lead">{{ worker_state['headline'] }}</p>
-        <p class="lead" style="margin-top: 6px;">{{ worker_state['description'] }}</p>
 
         <div class="summary-grid">
           <div class="summary-item">
@@ -352,8 +352,8 @@
             <span>切线法温度</span>
           </div>
           <div class="summary-item">
-            <strong>{{ worker_primary_route_label(summary, run['preset']) }}</strong>
-            <span>本次建议采用</span>
+            <strong>{{ route_results|length }}</strong>
+            <span>测量方式数</span>
           </div>
           <div class="summary-item">
             <strong>
@@ -385,13 +385,12 @@
 
       {% if refresh %}
       <section class="card section">
-        <div class="empty">系统仍在处理中，页面每 3 秒会自动刷新一次。</div>
+        <div class="empty">处理中，页面会自动刷新。</div>
       </section>
       {% endif %}
 
       <section class="card section">
-        <h2>三种测量方式</h2>
-        <p class="section-copy">每一种都是不同的看法。现场优先看“本次建议采用”或标记为“可直接使用”的那一种。</p>
+        <h2>测量方式</h2>
         {% if route_results %}
         <div class="route-grid">
           {% for route in route_results %}
@@ -401,11 +400,7 @@
                 <div class="route-name">{{ worker_route_name(run['preset'], route.get('alias')) }}</div>
                 <h3>{{ worker_route_title(run['preset'], route.get('alias')) }}</h3>
               </div>
-              <span class="badge {% if worker_route_status_label(route.get('reportability_status')) == '可直接使用' %}badge-ok{% elif worker_route_status_label(route.get('reportability_status')) == '可参考' %}badge-warn{% elif worker_route_status_label(route.get('reportability_status')) == '暂不建议用' %}badge-danger{% else %}badge-info{% endif %}">
-                {{ worker_route_status_label(route.get('reportability_status')) }}
-              </span>
             </div>
-            <p class="route-desc">{{ worker_route_description(run['preset'], route.get('alias')) }}</p>
             <div class="metric-grid">
               <div class="metric-box">
                 <strong>{{ fmt_temp(route.get('af95_c')) }}</strong>
@@ -416,7 +411,6 @@
                 <span>切线法温度</span>
               </div>
             </div>
-            <p class="route-note">{{ worker_route_note(route) }}</p>
           </article>
           {% endfor %}
         </div>
@@ -427,52 +421,55 @@
 
       <section class="card section">
         <h2>回看视频</h2>
-        <p class="section-copy">这里只保留一个视频，方便直接回看分析过程。</p>
         {% if primary_video %}
         <figure class="media-card">
           <video controls preload="metadata" {% if primary_video.get('poster_url') %}poster="{{ primary_video.get('poster_url') }}"{% endif %}>
             <source src="{{ primary_video['url'] }}">
             当前浏览器不能直接播放视频，请改用打开文件。
           </video>
-          <figcaption>{{ primary_video['label'] }}</figcaption>
-          <div class="media-note">这个视频已经包含主要测量信息和过程细节，现场看这一个就够了。</div>
         </figure>
         {% else %}
         <div class="empty">当前还没有可回看的视频。</div>
         {% endif %}
       </section>
 
-      {% if primary_curve %}
+      {% if route_curve_files %}
       <section class="card section">
         <h2>变化曲线</h2>
-        <p class="section-copy">
-          {% if temperature_available %}
-          这张图用来查看温度升高时，恢复是否平稳。
-          {% else %}
-          这张图用来查看随时间变化的趋势。
-          {% endif %}
-        </p>
+        <div class="curve-grid">
+          {% for item in route_curve_files %}
+          <figure class="curve-card">
+            <strong>{{ item['label'] }}</strong>
+            <img class="zoomable" src="{{ item['url'] }}" alt="{{ item['label'] }}">
+          </figure>
+          {% endfor %}
+        </div>
+      </section>
+      {% elif primary_curve %}
+      <section class="card section">
+        <h2>变化曲线</h2>
         <figure class="media-card">
-          <img src="{{ primary_curve['url'] }}" alt="{{ primary_curve['label'] }}">
-          <figcaption>{{ primary_curve['label'] }}</figcaption>
+          <img class="zoomable" src="{{ primary_curve['url'] }}" alt="{{ primary_curve['label'] }}">
         </figure>
       </section>
       {% endif %}
 
       <section class="card section">
-        <h2>导出文件</h2>
-        <p class="section-copy">需要留档或转发时，直接从这里打开。</p>
+        <h2>文件</h2>
         {% if download_files %}
-        <div class="download-list">
-          {% for item in download_files %}
-          <a class="download-link" href="{{ item['url'] }}" target="_blank">
-            <span>{{ item['label'] }}</span>
-            <span>打开</span>
-          </a>
-          {% endfor %}
-        </div>
+        <details class="files">
+          <summary>查看文件</summary>
+          <div class="file-list">
+            {% for item in download_files %}
+            <a class="file-link" href="{{ item['url'] }}" target="_blank">
+              <span>{{ item['label'] }}</span>
+              <span>打开</span>
+            </a>
+            {% endfor %}
+          </div>
+        </details>
         {% else %}
-        <div class="empty">任务完成后，这里会列出可导出的文件。</div>
+        <div class="empty">暂无文件。</div>
         {% endif %}
       </section>
 
@@ -485,5 +482,45 @@
       </section>
       {% endif %}
     </div>
+
+    <div class="lightbox" id="image_lightbox" aria-hidden="true">
+      <div class="lightbox-dialog">
+        <img class="lightbox-image" id="lightbox_image" alt="">
+      </div>
+    </div>
+
+    <script>
+      const lightbox = document.getElementById("image_lightbox");
+      const lightboxImage = document.getElementById("lightbox_image");
+      const zoomableImages = Array.from(document.querySelectorAll("img.zoomable"));
+
+      function closeLightbox() {
+        lightbox.classList.remove("open");
+        lightbox.setAttribute("aria-hidden", "true");
+        lightboxImage.removeAttribute("src");
+        lightboxImage.alt = "";
+      }
+
+      zoomableImages.forEach((image) => {
+        image.addEventListener("click", () => {
+          lightboxImage.src = image.src;
+          lightboxImage.alt = image.alt || "";
+          lightbox.classList.add("open");
+          lightbox.setAttribute("aria-hidden", "false");
+        });
+      });
+
+      lightbox.addEventListener("click", (event) => {
+        if (event.target === lightbox) {
+          closeLightbox();
+        }
+      });
+
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && lightbox.classList.contains("open")) {
+          closeLightbox();
+        }
+      });
+    </script>
   </body>
 </html>

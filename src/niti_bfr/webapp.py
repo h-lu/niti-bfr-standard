@@ -456,6 +456,9 @@ def _worker_output_label(filename: str) -> str:
         "route_a_metric_over_time.png": "测量方式一变化图",
         "route_b_metric_over_time.png": "测量方式二变化图",
         "route_c_metric_over_time.png": "测量方式三变化图",
+        "route_a_recovery_vs_temperature.png": "测量方式一温度曲线",
+        "route_b_recovery_vs_temperature.png": "测量方式二温度曲线",
+        "route_c_recovery_vs_temperature.png": "测量方式三温度曲线",
     }
     return mapping.get(filename, filename)
 
@@ -1606,6 +1609,24 @@ def run_detail(request: Request, run_id: str) -> Any:
     primary_curve = None
     if curve_files:
         primary_curve = sorted(curve_files, key=lambda item: _curve_priority(item["name"], temperature_available))[0]
+    route_curve_names = (
+        [
+            "route_a_recovery_vs_temperature.png",
+            "route_b_recovery_vs_temperature.png",
+            "route_c_recovery_vs_temperature.png",
+        ]
+        if temperature_available
+        else [
+            "route_a_metric_over_time.png",
+            "route_b_metric_over_time.png",
+            "route_c_metric_over_time.png",
+        ]
+    )
+    route_curve_files = []
+    for filename in route_curve_names:
+        matched = next((item for item in curve_files if item["name"] == filename), None)
+        if matched is not None:
+            route_curve_files.append(matched)
 
     return templates.TemplateResponse(
         "run_detail.html",
@@ -1622,6 +1643,7 @@ def run_detail(request: Request, run_id: str) -> Any:
             "process_video": process_video,
             "primary_video": primary_video,
             "primary_curve": primary_curve,
+            "route_curve_files": route_curve_files,
             "download_files": download_files,
             "refresh": run["status"] in {"queued", "running"},
             "preset_label": _preset_label,
@@ -1870,13 +1892,33 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
     series = result.series
     if series.empty:
         return
+    plt.rcParams["font.sans-serif"] = [
+        "PingFang SC",
+        "Hiragino Sans GB",
+        "Microsoft YaHei",
+        "Noto Sans CJK SC",
+        "SimHei",
+        "Arial Unicode MS",
+        "DejaVu Sans",
+    ]
+    plt.rcParams["axes.unicode_minus"] = False
+    route_entries = canonical_route_results_by_alias(result.route_results)
+
+    def _draw_route_temperature_markers(alias: str) -> None:
+        entry = route_entries.get(alias) or {}
+        af95_c = entry.get("af95_c")
+        aftan_c = entry.get("aftan_c")
+        if af95_c is not None:
+            plt.axvline(af95_c, color="tab:green", linestyle="--", label=f"95%恢复温度 {af95_c:.2f}℃")
+        if aftan_c is not None:
+            plt.axvline(aftan_c, color="tab:red", linestyle="--", label=f"切线法温度 {aftan_c:.2f}℃")
 
     if {"time_sec", "x_route_a_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["x_route_a_px"], label="A:x_route_a", linewidth=2.0, color="#7c3aed")
-        plt.xlabel("Time (s)")
-        plt.ylabel("x_route_a (px)")
-        plt.title("Route A metric over time")
+        plt.plot(series["time_sec"], series["x_route_a_px"], label="测量方式一", linewidth=2.0, color="#7c3aed")
+        plt.xlabel("时间（秒）")
+        plt.ylabel("距离（像素）")
+        plt.title("测量方式一变化曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_a_metric_over_time.png", dpi=160)
@@ -1884,12 +1926,12 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"time_sec", "kappa_fit_px_inv"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["kappa_fit_px_inv"], label="B:kappa_fit", linewidth=2.0, color="#ea580c")
+        plt.plot(series["time_sec"], series["kappa_fit_px_inv"], label="测量方式二", linewidth=2.0, color="#ea580c")
         if "x_fit_px" in series.columns:
-            plt.plot(series["time_sec"], series["x_fit_px"], label="B:x_fit", linewidth=1.4, alpha=0.35, color="#f59e0b")
-        plt.xlabel("Time (s)")
-        plt.ylabel("kappa_fit / x_fit")
-        plt.title("Route B metric over time")
+            plt.plot(series["time_sec"], series["x_fit_px"], label="辅助量", linewidth=1.4, alpha=0.35, color="#f59e0b")
+        plt.xlabel("时间（秒）")
+        plt.ylabel("弯曲程度")
+        plt.title("测量方式二变化曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_b_metric_over_time.png", dpi=160)
@@ -1897,12 +1939,12 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"time_sec", "kappa_route_c_px_inv"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["kappa_route_c_px_inv"], label="C:kappa_route_c", linewidth=2.0, color="#16a34a")
+        plt.plot(series["time_sec"], series["kappa_route_c_px_inv"], label="测量方式三", linewidth=2.0, color="#16a34a")
         if "x_route_c_px" in series.columns:
-            plt.plot(series["time_sec"], series["x_route_c_px"], label="C:x_route_c", linewidth=1.4, alpha=0.35, color="#22c55e")
-        plt.xlabel("Time (s)")
-        plt.ylabel("kappa_route_c / x_route_c")
-        plt.title("Route C metric over time")
+            plt.plot(series["time_sec"], series["x_route_c_px"], label="辅助量", linewidth=1.4, alpha=0.35, color="#22c55e")
+        plt.xlabel("时间（秒）")
+        plt.ylabel("弯曲程度")
+        plt.title("测量方式三变化曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_c_metric_over_time.png", dpi=160)
@@ -1910,10 +1952,10 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"time_sec", "length_axis_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["length_axis_px"], label="A:length_axis", linewidth=2.0, color="#2563eb")
-        plt.xlabel("Time (s)")
-        plt.ylabel("length_axis (px)")
-        plt.title("Route A metric over time")
+        plt.plot(series["time_sec"], series["length_axis_px"], label="测量方式一", linewidth=2.0, color="#2563eb")
+        plt.xlabel("时间（秒）")
+        plt.ylabel("长度（像素）")
+        plt.title("测量方式一变化曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_a_metric_over_time.png", dpi=160)
@@ -1921,10 +1963,10 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"time_sec", "diameter_max_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["diameter_max_px"], label="B:diameter_max", linewidth=2.0, color="#d946ef")
-        plt.xlabel("Time (s)")
-        plt.ylabel("diameter_max (px)")
-        plt.title("Route B metric over time")
+        plt.plot(series["time_sec"], series["diameter_max_px"], label="测量方式二", linewidth=2.0, color="#d946ef")
+        plt.xlabel("时间（秒）")
+        plt.ylabel("宽度（像素）")
+        plt.title("测量方式二变化曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_b_metric_over_time.png", dpi=160)
@@ -1932,10 +1974,10 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
 
     if {"time_sec", "area_proj_px2"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["area_proj_px2"], label="C:area_proj", linewidth=2.0, color="#16a34a")
-        plt.xlabel("Time (s)")
-        plt.ylabel("area_proj (px^2)")
-        plt.title("Route C metric over time")
+        plt.plot(series["time_sec"], series["area_proj_px2"], label="测量方式三", linewidth=2.0, color="#16a34a")
+        plt.xlabel("时间（秒）")
+        plt.ylabel("面积（像素²）")
+        plt.title("测量方式三变化曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_c_metric_over_time.png", dpi=160)
@@ -2033,36 +2075,72 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
     if "temperature_c" not in series.columns or not series["temperature_c"].notna().any():
         return
 
-    if {"x_route_a_recovery", "x_fit_recovery", "x_route_c_recovery"}.issubset(series.columns):
+    if {"x_route_a_recovery", "kappa_fit_recovery", "kappa_route_c_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["x_route_a_recovery"], label="route A recovery", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["x_fit_recovery"], label="route B recovery", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["x_route_c_recovery"], label="route C recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["x_route_a_recovery"], label="测量方式一", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["kappa_fit_recovery"], label="测量方式二", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["kappa_route_c_recovery"], label="测量方式三", linewidth=1.8)
         if result.mode == "formal_af" and result.af95_c is not None:
-            plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"Af-95 {result.af95_c:.2f}C")
+            plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"95%恢复温度 {result.af95_c:.2f}℃")
         elif result.provisional_af95_c is not None:
             plt.axvline(
                 result.provisional_af95_c,
                 color="tab:green",
                 linestyle=":",
-                label=f"provisional Af-95 {result.provisional_af95_c:.2f}C",
+                label=f"参考95%恢复温度 {result.provisional_af95_c:.2f}℃",
             )
         if result.mode == "formal_af" and result.aftan_c is not None:
-            plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=f"Af-tan {result.aftan_c:.2f}C")
+            plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=f"切线法温度 {result.aftan_c:.2f}℃")
         elif result.provisional_aftan_c is not None:
             plt.axvline(
                 result.provisional_aftan_c,
                 color="tab:red",
                 linestyle=":",
-                label=f"provisional Af-tan {result.provisional_aftan_c:.2f}C",
+                label=f"参考切线法温度 {result.provisional_aftan_c:.2f}℃",
             )
-        plt.xlabel("Temperature (C)")
-        plt.ylabel("Recovery ratio")
-        plt.title("Recovery over temperature")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("三种测量方式温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_recovery_vs_temperature.png", dpi=160)
         fig.savefig(out_dir / "recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+    if {"temperature_c", "x_route_a_recovery"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["x_route_a_recovery"], label="测量方式一", linewidth=2.0, color="#7c3aed")
+        _draw_route_temperature_markers("A")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("测量方式一温度曲线")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_a_recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+    if {"temperature_c", "kappa_fit_recovery"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["kappa_fit_recovery"], label="测量方式二", linewidth=2.0, color="#ea580c")
+        _draw_route_temperature_markers("B")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("测量方式二温度曲线")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_b_recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+    if {"temperature_c", "kappa_route_c_recovery"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["kappa_route_c_recovery"], label="测量方式三", linewidth=2.0, color="#16a34a")
+        _draw_route_temperature_markers("C")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("测量方式三温度曲线")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_c_recovery_vs_temperature.png", dpi=160)
         plt.close(fig)
 
     if {"temperature_c", "kappa_fit_px_inv", "kappa_route_c_px_inv"}.issubset(series.columns):
@@ -2077,37 +2155,72 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         fig.savefig(out_dir / "kappa_vs_temperature.png", dpi=160)
         plt.close(fig)
 
-    if {"temperature_c", "length_axis_recovery", "length_env_recovery", "diameter_max_recovery", "area_proj_recovery"}.issubset(series.columns):
+    if {"temperature_c", "length_axis_recovery", "diameter_max_recovery", "area_proj_recovery"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="A recovery", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["length_env_recovery"], label="env recovery", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="B recovery", linewidth=1.8)
-        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="C recovery", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="测量方式一", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="测量方式二", linewidth=1.8)
+        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="测量方式三", linewidth=1.8)
         if result.mode == "formal_af" and result.af95_c is not None:
-            plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"Af-95 {result.af95_c:.2f}C")
+            plt.axvline(result.af95_c, color="tab:green", linestyle="--", label=f"95%恢复温度 {result.af95_c:.2f}℃")
         elif result.provisional_af95_c is not None:
             plt.axvline(
                 result.provisional_af95_c,
                 color="tab:green",
                 linestyle=":",
-                label=f"provisional Af-95 {result.provisional_af95_c:.2f}C",
+                label=f"参考95%恢复温度 {result.provisional_af95_c:.2f}℃",
             )
         if result.mode == "formal_af" and result.aftan_c is not None:
-            plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=f"Af-tan {result.aftan_c:.2f}C")
+            plt.axvline(result.aftan_c, color="tab:red", linestyle="--", label=f"切线法温度 {result.aftan_c:.2f}℃")
         elif result.provisional_aftan_c is not None:
             plt.axvline(
                 result.provisional_aftan_c,
                 color="tab:red",
                 linestyle=":",
-                label=f"provisional Af-tan {result.provisional_aftan_c:.2f}C",
+                label=f"参考切线法温度 {result.provisional_aftan_c:.2f}℃",
             )
-        plt.xlabel("Temperature (C)")
-        plt.ylabel("Recovery ratio")
-        plt.title("Braided recovery over temperature")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("三种测量方式温度曲线")
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_recovery_vs_temperature.png", dpi=160)
         fig.savefig(out_dir / "braided_recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+    if {"temperature_c", "length_axis_recovery"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["length_axis_recovery"], label="测量方式一", linewidth=2.0, color="#2563eb")
+        _draw_route_temperature_markers("A")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("测量方式一温度曲线")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_a_recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+    if {"temperature_c", "diameter_max_recovery"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["diameter_max_recovery"], label="测量方式二", linewidth=2.0, color="#d946ef")
+        _draw_route_temperature_markers("B")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("测量方式二温度曲线")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_b_recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
+    if {"temperature_c", "area_proj_recovery"}.issubset(series.columns):
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["area_proj_recovery"], label="测量方式三", linewidth=2.0, color="#16a34a")
+        _draw_route_temperature_markers("C")
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title("测量方式三温度曲线")
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "route_c_recovery_vs_temperature.png", dpi=160)
         plt.close(fig)
 
     if {"temperature_c", "length_env_px", "length_axis_px", "diameter_max_px"}.issubset(series.columns):
