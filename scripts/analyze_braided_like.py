@@ -12,8 +12,22 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from niti_bfr.export_contract import canonical_object_result_fields
 from niti_bfr.extract_braided import BraidedExtractionConfig, extract_braided_geometry
-from niti_bfr.pipeline import analyze_braided_video_quicklook
+from niti_bfr.pipeline import BRAIDED_FORMAL_CANDIDATES, analyze_braided_video_quicklook, compute_braided_acceptance
+
+
+def _copy_route_results(route_results: list[dict[str, object]] | None) -> list[dict[str, object]]:
+    return [dict(entry) for entry in (route_results or [])]
+
+
+def _route_results_by_alias(route_results: list[dict[str, object]] | None) -> dict[str, dict[str, object]]:
+    by_alias: dict[str, dict[str, object]] = {}
+    for entry in _copy_route_results(route_results):
+        alias = entry.get("alias")
+        if isinstance(alias, str) and alias:
+            by_alias[alias] = entry
+    return by_alias
 
 
 def _load_frame(video_path: Path, frame_idx: int) -> np.ndarray:
@@ -291,12 +305,22 @@ def main() -> None:
         overlay = _make_overlay(frame, extraction_cfg)
         cv2.imwrite(str(preview_dir / f"frame_{frame_idx:04d}.png"), overlay)
 
+    formal_qc = compute_braided_acceptance(result.series, acceptance_profile=result.acceptance_profile or "real_video")
+    route_results = _copy_route_results(result.route_results)
     summary = {
         "metric_aliases": {
             "A": "length_axis",
             "B": "diameter_max",
             "C": "area_proj",
         },
+        "formal_candidate_metrics": [
+            {
+                "label": metric_label,
+                "alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(metric_label),
+            }
+            for metric_label in BRAIDED_FORMAL_CANDIDATES
+        ],
+        "formal_qc_scope": "current braided formal-gate QC snapshot; not an overall A/B/C verdict",
         "frames": frame_count,
         "length_env_median_px": float(result.series["length_env_px"].median()),
         "length_axis_median_px": float(result.series["length_axis_px"].median()),
@@ -323,16 +347,40 @@ def main() -> None:
         "quality_median": float(result.series["quality"].median()),
         "quality_lt_0_5_fraction": float((result.series["quality"] < 0.5).mean()),
         "endpoint_jump_p95_px": float(result.series["endpoint_jump_px"].quantile(0.95)),
+        "endpoint_frame_jump_p95_px": float(result.series["endpoint_frame_jump_px"].quantile(0.95)),
         "axis_peak_position_stability_p95": float(result.series["axis_peak_position_stability"].quantile(0.95)),
         "mode": result.mode,
+        "reportability_status": result.reportability_status,
+        "warning_codes": result.warning_codes,
+        "acceptance_profile": result.acceptance_profile,
         "formal_metric_label": result.formal_metric_label,
         "formal_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.formal_metric_label),
         "primary_metric_label": result.primary_metric_label,
         "primary_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.primary_metric_label),
+        "provisional_metric_label": result.provisional_metric_label,
+        "provisional_metric_alias": {"length_axis": "A", "diameter_max": "B", "area_proj": "C"}.get(result.provisional_metric_label),
         "formal_gate_reason": result.formal_gate_reason,
         "af95_c": None if result.af95_c is None else float(result.af95_c),
         "aftan_c": None if result.aftan_c is None else float(result.aftan_c),
+        "provisional_af95_c": None if result.provisional_af95_c is None else float(result.provisional_af95_c),
+        "provisional_aftan_c": None if result.provisional_aftan_c is None else float(result.provisional_aftan_c),
+        "route_results": route_results,
+        "route_results_by_alias": _route_results_by_alias(route_results),
+        "formal_qc": formal_qc,
     }
+    summary.update(
+        canonical_object_result_fields(
+            preset="braided_like",
+            reportability_status=result.reportability_status,
+            formal_metric_key=result.formal_metric_label,
+            formal_gate_reason=result.formal_gate_reason,
+            provisional_metric_key=result.provisional_metric_label,
+            af95_c=None if result.af95_c is None else float(result.af95_c),
+            aftan_c=None if result.aftan_c is None else float(result.aftan_c),
+            provisional_af95_c=None if result.provisional_af95_c is None else float(result.provisional_af95_c),
+            provisional_aftan_c=None if result.provisional_aftan_c is None else float(result.provisional_aftan_c),
+        )
+    )
     (out_dir / "summary.yaml").write_text(yaml.safe_dump(summary, sort_keys=False), encoding="utf-8")
     print(f"quicklook saved to {out_dir}")
 

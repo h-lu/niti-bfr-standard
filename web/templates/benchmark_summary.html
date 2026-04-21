@@ -1,0 +1,378 @@
+{% macro fmt_num(value, digits=3, suffix='') -%}
+  {%- if value is not none -%}
+    {{ ('%.' ~ digits ~ 'f')|format(value) }}{{ suffix }}
+  {%- else -%}
+    -
+  {%- endif -%}
+{%- endmacro %}
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NiTi BFR 基准汇总</title>
+    {% include "_theme.html" %}
+    <style>
+      .benchmark-stack {
+        display: grid;
+        gap: 18px;
+      }
+
+      .hero-card,
+      .family-card {
+        padding: 26px;
+      }
+
+      .compare-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .route-summary,
+      .benchmark-card {
+        padding: 18px;
+        border-radius: 24px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background: rgba(255, 255, 255, 0.54);
+      }
+
+      .route-summary h3,
+      .family-card h2 {
+        margin-top: 6px;
+      }
+
+      .mini-table,
+      .route-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      .mini-table th,
+      .mini-table td,
+      .route-table th,
+      .route-table td {
+        padding: 10px 8px;
+        border-bottom: 1px solid rgba(16, 23, 34, 0.08);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .mini-table tr:last-child td,
+      .route-table tr:last-child td {
+        border-bottom: none;
+      }
+
+      .kpi {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .kpi div {
+        padding: 10px 12px;
+        border-radius: 16px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background: rgba(255, 255, 255, 0.56);
+      }
+
+      .family-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .family-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+
+      .family-head p {
+        margin: 0;
+      }
+
+      .benchmark-list {
+        display: grid;
+        gap: 14px;
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: 128px 1fr;
+        gap: 6px 10px;
+        font-size: 13px;
+        margin: 10px 0 14px;
+      }
+
+      .qc-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+
+      .qc-chip {
+        display: inline-flex;
+        align-items: center;
+        min-height: 32px;
+        padding: 0 10px;
+        border-radius: 999px;
+        background: rgba(42, 121, 132, 0.1);
+        color: var(--teal-600);
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      @media (max-width: 1120px) {
+        .compare-grid,
+        .family-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .hero-card,
+        .family-card {
+          padding: 18px;
+        }
+
+        .family-head {
+          flex-direction: column;
+        }
+
+        .meta-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .kpi {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="topbar">
+        <a class="brand" href="{{ request.url_for('home') }}">
+          <span class="brand-mark">NB</span>
+          <span class="brand-copy">
+            <strong>NiTi BFR</strong>
+          </span>
+        </a>
+        <nav class="nav" aria-label="主导航">
+          <a class="nav-link" href="{{ request.url_for('home') }}">返回分析台</a>
+          <a class="nav-link" href="{{ request.url_for('history') }}">查看历史记录</a>
+        </nav>
+      </header>
+
+      <div class="benchmark-stack">
+        <section class="hero-surface hero-card">
+          <span class="eyebrow">基准</span>
+          <h1>基准汇总</h1>
+        </section>
+
+        <section class="compare-grid">
+          {% for row in comparison_rows %}
+          <article class="route-summary">
+            <div class="muted">路线 {{ row['alias'] }}</div>
+            <h3>
+              {% if row['wire'] %}
+                {{ row['wire']['display_label'] }}
+              {% elif row['braided'] %}
+                {{ row['braided']['display_label'] }}
+              {% else %}
+                路线 {{ row['alias'] }}
+              {% endif %}
+            </h3>
+
+            <table class="mini-table">
+              <thead>
+                <tr>
+                  <th>对象</th>
+                  <th>样本数</th>
+                  <th>|Af-95 误差|</th>
+                  <th>|Af-tan 误差|</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>wire-like</td>
+                  <td>{% if row['wire'] %}{{ row['wire']['benchmark_count'] }}{% else %}-{% endif %}</td>
+                  <td>{% if row['wire'] %}{{ fmt_num(row['wire']['mean_abs_af95_error_c']) }} C{% else %}-{% endif %}</td>
+                  <td>{% if row['wire'] %}{{ fmt_num(row['wire']['mean_abs_aftan_error_c']) }} C{% else %}-{% endif %}</td>
+                </tr>
+                <tr>
+                  <td>braided</td>
+                  <td>{% if row['braided'] %}{{ row['braided']['benchmark_count'] }}{% else %}-{% endif %}</td>
+                  <td>{% if row['braided'] %}{{ fmt_num(row['braided']['mean_abs_af95_error_c']) }} C{% else %}-{% endif %}</td>
+                  <td>{% if row['braided'] %}{{ fmt_num(row['braided']['mean_abs_aftan_error_c']) }} C{% else %}-{% endif %}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="kpi">
+              <div>
+                <strong>wire</strong>
+                <div class="muted">
+                  {% if row['wire'] %}
+                    formal 通过 {{ row['wire']['formal_passed_count'] }} · 临时 {{ row['wire']['provisional_count'] }} · 阻断 {{ row['wire']['formal_blocked_count'] }}
+                  {% else %}
+                    暂无数据
+                  {% endif %}
+                </div>
+              </div>
+              <div>
+                <strong>braided</strong>
+                <div class="muted">
+                  {% if row['braided'] %}
+                    formal 通过 {{ row['braided']['formal_passed_count'] }} · 临时 {{ row['braided']['provisional_count'] }} · 阻断 {{ row['braided']['formal_blocked_count'] }}
+                  {% else %}
+                    暂无数据
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+          </article>
+          {% endfor %}
+        </section>
+
+        <section class="family-grid">
+          {% for family_key, family in families.items() %}
+          <article class="surface family-card">
+            <div class="family-head">
+              <div>
+                <h2>{{ family['label'] }}</h2>
+                <p class="muted">{{ family['benchmark_count'] }} 个基准案例 · {{ family['source_label'] }}</p>
+              </div>
+              <p class="muted" style="max-width: 340px; text-align: right;">
+                {% if family['suite_available'] %}
+                  suite 文件：{{ family['suite_path'] }}
+                {% else %}
+                  缺少 suite 汇总，当前展示 analysis_metrics 回退结果
+                {% endif %}
+              </p>
+            </div>
+
+            <div style="margin-bottom: 18px;">
+              <h3>路线汇总</h3>
+              <table class="route-table">
+                <thead>
+                  <tr>
+                    <th>路线</th>
+                    <th>可用性</th>
+                    <th>|Af-95 误差|</th>
+                    <th>主导 gate</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for route in family['route_rollups'] %}
+                  <tr>
+                    <td>
+                      <strong>{{ route['display_label'] }}</strong>
+                      <div class="muted">{{ route['metric_key'] }}</div>
+                    </td>
+                    <td>
+                      {{ route['available_count'] }}/{{ route['benchmark_count'] }}
+                      <div class="muted">正式输出 {{ route['selected_as_formal_count'] }} · 主推荐 {{ route['selected_as_primary_count'] }}</div>
+                    </td>
+                    <td>
+                      {{ fmt_num(route['mean_abs_af95_error_c']) }} C
+                      <div class="muted">Af-tan {{ fmt_num(route['mean_abs_aftan_error_c']) }} C</div>
+                    </td>
+                    <td>{{ route['dominant_gate_reason'] or '-' }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <h3>具体基准案例</h3>
+              {% if family['benchmarks'] %}
+              <div class="benchmark-list">
+                {% for benchmark in family['benchmarks'] %}
+                <section class="benchmark-card">
+                  <h3>{{ benchmark['benchmark_name'] }}</h3>
+                  <div class="muted">{{ benchmark['description'] or '暂无描述' }}</div>
+                  <div class="meta-grid">
+                    <div>来源</div><div>{{ benchmark['source_label'] }}</div>
+                    <div>输出目录</div><div>{{ benchmark['output_dir_name'] }}</div>
+                    <div>对象级状态</div><div>{{ benchmark['object_reportability_status'] or '-' }}</div>
+                    <div>对象正式路线</div>
+                    <div>
+                      {% if benchmark['object_formal_route_alias'] %}
+                        路线 {{ benchmark['object_formal_route_alias'] }} · {{ benchmark['object_formal_metric_key'] }}
+                      {% else %}
+                        -
+                      {% endif %}
+                    </div>
+                    <div>对象推荐路线</div>
+                    <div>
+                      {% if benchmark['object_recommended_route_alias'] %}
+                        路线 {{ benchmark['object_recommended_route_alias'] }} · {{ benchmark['object_recommended_metric_key'] }}
+                      {% else %}
+                        -
+                      {% endif %}
+                    </div>
+                    <div>formal gate 原因</div><div>{{ benchmark['object_formal_gate_reason'] or '-' }}</div>
+                  </div>
+
+                  <div class="qc-strip">
+                    {% for qc in benchmark['qc_highlights'] %}
+                    <span class="qc-chip">{{ qc['label'] }}：{{ fmt_num(qc['value'], 3, ' ' ~ qc['suffix'] if qc.get('suffix') else '') }}</span>
+                    {% endfor %}
+                  </div>
+
+                  <table class="route-table">
+                    <thead>
+                      <tr>
+                        <th>路线</th>
+                        <th>状态</th>
+                        <th>Af 误差</th>
+                        <th>测量值 / 真值</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for route in benchmark['routes'] %}
+                      <tr>
+                        <td>
+                          <strong>{{ route['display_label'] }}</strong>
+                          <div class="muted">{{ route['metric_key'] }}</div>
+                        </td>
+                        <td>
+                          <span class="pill status-{{ (route['reportability_status'] or 'unrecorded')|replace('_', '-') }}">{{ route['reportability_label'] }}</span>
+                          <div class="muted">{{ route['gate_reason'] or '-' }}</div>
+                        </td>
+                        <td>
+                          Af-95 {{ fmt_num(route['af95_error_c']) }} C
+                          <div class="muted">Af-tan {{ fmt_num(route['aftan_error_c']) }} C</div>
+                        </td>
+                        <td>
+                          {{ fmt_num(route['measured_af95_c']) }} / {{ fmt_num(route['truth_af95_c']) }}
+                          <div class="muted">{{ fmt_num(route['measured_aftan_c']) }} / {{ fmt_num(route['truth_aftan_c']) }}</div>
+                        </td>
+                      </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </section>
+                {% endfor %}
+              </div>
+              {% else %}
+              <div class="empty">
+                <p class="muted">当前工作区还没有 {{ family['label'] }} 基准产物。生成汇总文件或至少放入一个 `analysis_metrics.json` 后，这里会自动出现。</p>
+              </div>
+              {% endif %}
+            </div>
+          </article>
+          {% endfor %}
+        </section>
+      </div>
+    </div>
+  </body>
+</html>

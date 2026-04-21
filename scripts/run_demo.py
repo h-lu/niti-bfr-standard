@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from niti_bfr.export_contract import canonical_object_result_fields
 from niti_bfr.extract import ExtractionConfig
 from niti_bfr.pipeline import analyze_video
 from niti_bfr.metrics import recovery_ratio_directional
@@ -243,6 +244,19 @@ def main() -> None:
         "metric_truth_comparison": metric_truth_comparison,
         "metric_reports": metric_reports,
     }
+    summary.update(
+        canonical_object_result_fields(
+            preset="wire_like",
+            reportability_status=result.reportability_status,
+            formal_metric_key=result.formal_metric_label,
+            formal_gate_reason=result.formal_gate_reason,
+            provisional_metric_key=result.provisional_metric_label,
+            af95_c=result.af95_c,
+            aftan_c=result.aftan_c,
+            provisional_af95_c=result.provisional_af95_c,
+            provisional_aftan_c=result.provisional_aftan_c,
+        )
+    )
     (out_dir / "analysis_metrics.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",

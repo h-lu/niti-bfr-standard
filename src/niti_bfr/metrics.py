@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Mapping
 
 import numpy as np
 from scipy.optimize import curve_fit
@@ -170,3 +171,51 @@ def af_tan(temp_c: np.ndarray, recovery: np.ndarray) -> float:
         return float("nan")
     upper = float(np.median(smooth[int(0.85 * n) :]))
     return float(t0 + (upper - r0) / m)
+
+
+def summarize_numeric_sweep(
+    sweep_results: Mapping[str, Mapping[str, float | int | None]],
+    *,
+    baseline_key: str | None = None,
+) -> dict[str, Any]:
+    numeric_fields: set[str] = set()
+    for metrics in sweep_results.values():
+        for field, value in metrics.items():
+            try:
+                numeric = float(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(numeric):
+                numeric_fields.add(field)
+
+    spreads: dict[str, float] = {}
+    max_abs: dict[str, float] = {}
+    baseline_max_delta: dict[str, float] = {}
+
+    for field in sorted(numeric_fields):
+        values_by_key: dict[str, float] = {}
+        for sweep_key, metrics in sweep_results.items():
+            if field not in metrics:
+                continue
+            try:
+                numeric = float(metrics[field])  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if np.isfinite(numeric):
+                values_by_key[str(sweep_key)] = numeric
+        if not values_by_key:
+            continue
+        values = np.asarray(list(values_by_key.values()), dtype=float)
+        spreads[field] = float(np.max(values) - np.min(values))
+        max_abs[field] = float(np.max(np.abs(values)))
+        if baseline_key is not None and baseline_key in values_by_key:
+            baseline_max_delta[field] = float(np.max(np.abs(values - values_by_key[baseline_key])))
+
+    return {
+        "variant_count": int(len(sweep_results)),
+        "swept_keys": [str(key) for key in sweep_results.keys()],
+        "baseline_key": None if baseline_key is None else str(baseline_key),
+        "spreads": spreads,
+        "max_abs": max_abs,
+        "baseline_max_delta": baseline_max_delta,
+    }

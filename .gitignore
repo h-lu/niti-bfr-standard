@@ -7,3 +7,5 @@ build/
 dist/
 outputs/
 tmp/
+var/
+data/braided-synthetic-sample/

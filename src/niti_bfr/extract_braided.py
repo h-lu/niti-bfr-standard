@@ -80,6 +80,7 @@ class BraidedExtractionResult:
     branch_component_count_after_pruning: int
     branch_count_after_pruning: int
     centerline_disagreement: float
+    endpoint_gap_alt_centerline_px: float
     endpoint_jump_px: float
     axis_peak_position_stability: float
     quality: float
@@ -109,6 +110,21 @@ class BraidedZoneMetrics:
     transition_zone_right_px: float
     compaction_zone_length_px: float
     zone_symmetry: float
+
+
+def directional_unit_vector(angle_deg: float) -> np.ndarray:
+    angle_rad = math.radians(float(angle_deg))
+    return _unit_direction(np.array([math.cos(angle_rad), math.sin(angle_rad)], dtype=float))
+
+
+def compute_directional_span_from_mask(mask: np.ndarray, angle_deg: float) -> float:
+    rows, cols = np.where(np.asarray(mask) > 0)
+    if len(rows) == 0:
+        raise RuntimeError("braided body mask unavailable for directional span")
+    points_xy = np.column_stack([cols, rows]).astype(float)
+    direction = directional_unit_vector(angle_deg)
+    projections = points_xy @ direction
+    return float(np.max(projections) - np.min(projections))
 
 
 def _clip_roi(frame_bgr: np.ndarray, roi_xyxy: tuple[int, int, int, int]) -> tuple[np.ndarray, np.ndarray]:
@@ -897,6 +913,110 @@ def _path_tangents(points_xy: np.ndarray) -> np.ndarray:
     return delta / np.maximum(norms, 1e-9)
 
 
+def _path_length(points_xy: np.ndarray) -> float:
+    curve = cumulative_path_length(points_xy)
+    if len(curve) == 0:
+        return float("nan")
+    return float(curve[-1])
+
+
+def _path_support_fraction(mask: np.ndarray, points_xy: np.ndarray) -> float:
+    if len(points_xy) == 0:
+        return 0.0
+    supported = np.asarray([_sample_binary(mask, point_xy) for point_xy in points_xy], dtype=float)
+    if len(supported) == 0:
+        return 0.0
+    return float(np.mean(supported))
+
+
+def _path_axis_span(points_xy: np.ndarray, axis_xy: np.ndarray) -> float:
+    if len(points_xy) == 0:
+        return 0.0
+    axis = _unit_direction(np.asarray(axis_xy, dtype=float))
+    proj = np.asarray(points_xy, dtype=float) @ axis
+    return float(np.max(proj) - np.min(proj))
+
+
+def _endpoint_gap(primary_xy: np.ndarray, secondary_xy: np.ndarray) -> float:
+    if len(primary_xy) == 0 or len(secondary_xy) == 0:
+        return float("nan")
+    forward_gap = float(
+        0.5 * (
+            np.linalg.norm(primary_xy[0] - secondary_xy[0])
+            + np.linalg.norm(primary_xy[-1] - secondary_xy[-1])
+        )
+    )
+    reverse_gap = float(
+        0.5 * (
+            np.linalg.norm(primary_xy[0] - secondary_xy[-1])
+            + np.linalg.norm(primary_xy[-1] - secondary_xy[0])
+        )
+    )
+    return min(forward_gap, reverse_gap)
+
+
+def _select_centerline_paths(
+    body_mask: np.ndarray,
+    candidates: dict[str, np.ndarray],
+) -> tuple[str, np.ndarray, str, np.ndarray]:
+    rows, cols = np.where(body_mask > 0)
+    if len(rows) < 2:
+        raise RuntimeError("braided body pixels unavailable for centerline selection")
+    _, body_axis, _, _ = _principal_axis(np.column_stack([cols, rows]).astype(float))
+
+    lengths: dict[str, float] = {}
+    supports: dict[str, float] = {}
+    axis_spans: dict[str, float] = {}
+    for name, points_xy in candidates.items():
+        length_px = _path_length(points_xy)
+        if not np.isfinite(length_px) or length_px <= 1e-9:
+            continue
+        lengths[name] = length_px
+        supports[name] = _path_support_fraction(body_mask, points_xy)
+        axis_spans[name] = _path_axis_span(points_xy, body_axis)
+    if len(lengths) < 2:
+        raise RuntimeError("braided centerline candidates unavailable")
+
+    max_axis_span_px = max(axis_spans.values())
+    span_floor_px = 0.85 * max_axis_span_px
+    eligible_primary_names = [name for name, span_px in axis_spans.items() if span_px >= span_floor_px]
+    if not eligible_primary_names:
+        eligible_primary_names = list(lengths)
+
+    # Keep the global candidate-length consensus as the primary anchor even when
+    # low-span candidates are excluded from winning. This avoids frame-to-frame
+    # flips where `prior` and `body_bins` are equally eligible but a filtered
+    # candidate still carries the length consensus toward the body-only solution.
+    consensus_length_px = float(np.median(np.asarray(list(lengths.values()), dtype=float)))
+    primary_preference = {"body_bins": 0, "skeleton": 1, "prior": 2}
+    secondary_preference = {"skeleton": 0, "body_bins": 1, "prior": 2}
+
+    primary_name = min(
+        eligible_primary_names,
+        key=lambda name: (
+            primary_preference.get(name, 99),
+            abs(lengths[name] - consensus_length_px) / max(consensus_length_px, 1e-9),
+            1.0 - supports[name],
+        ),
+    )
+    primary_xy = candidates[primary_name]
+    primary_length_px = lengths[primary_name]
+
+    secondary_names = [name for name in eligible_primary_names if name != primary_name]
+    if not secondary_names:
+        secondary_names = [name for name in lengths if name != primary_name]
+    secondary_name = min(
+        secondary_names,
+        key=lambda name: (
+            abs(lengths[name] - primary_length_px) / max(primary_length_px, 1e-9),
+            1.0 - supports[name],
+            secondary_preference.get(name, 99),
+        ),
+    )
+    secondary_xy = _align_path_orientation(primary_xy, candidates[secondary_name])
+    return primary_name, primary_xy, secondary_name, secondary_xy
+
+
 def _orthogonal_extent(mask: np.ndarray, point_xy: np.ndarray, normal_xy: np.ndarray, sign: float) -> float:
     step = 0.5
     extent = 0.0
@@ -992,6 +1112,30 @@ def _attachment_metrics(
         "attachment_max_orientation_mismatch_deg": float(max_orientation_mismatch_deg),
         "attachment_max_distance_to_main_axis_px": float(max_distance_to_main_axis_px),
     }
+
+
+def _attachment_leak_area_px2(
+    attachment_mask: np.ndarray,
+    body_center_xy: np.ndarray,
+    body_axis: np.ndarray,
+    body_positions: np.ndarray,
+    diameter_max_px: float,
+) -> float:
+    rows, cols = np.where(attachment_mask > 0)
+    if len(rows) == 0 or len(body_positions) == 0:
+        return 0.0
+
+    points_xy = np.column_stack([cols, rows]).astype(float)
+    proj_axis, proj_normal = _project_points(points_xy, body_center_xy, body_axis)
+    body_span_px = float(body_positions[-1] - body_positions[0]) if len(body_positions) >= 2 else 0.0
+    axis_margin_px = max(4.0, 0.02 * max(body_span_px, diameter_max_px, 1.0))
+    normal_limit_px = max(6.0, 0.60 * max(diameter_max_px, 1.0))
+    in_body_span = (
+        (proj_axis >= float(body_positions[0]) - axis_margin_px)
+        & (proj_axis <= float(body_positions[-1]) + axis_margin_px)
+    )
+    near_body_axis = np.abs(proj_normal) <= normal_limit_px
+    return float(np.count_nonzero(in_body_span & near_body_axis))
 
 
 def _prune_attachment_candidates_from_component(
@@ -1214,11 +1358,18 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
     skeleton_centerline_local = _resample_polyline(skeleton_centerline_local, step_px=max(0.75 * step_px, 1.0))
     skeleton_centerline_local = _align_path_orientation(body_bin_centerline_local, skeleton_centerline_local)
     prior_centerline_local = _align_path_orientation(skeleton_centerline_local, prior_centerline_local)
-    centerline_local = skeleton_centerline_local
-    centerline_curve_px = cumulative_path_length(centerline_local)
+    _, centerline_local, _, alt_centerline_local = _select_centerline_paths(
+        body_tube_mask,
+        {
+            "skeleton": skeleton_centerline_local,
+            "body_bins": body_bin_centerline_local,
+            "prior": prior_centerline_local,
+        },
+    )
     body_bin_centerline_curve_px = cumulative_path_length(body_bin_centerline_local)
-    prior_centerline_curve_px = cumulative_path_length(prior_centerline_local)
     skeleton_curve_px = cumulative_path_length(skeleton_centerline_local)
+    centerline_curve_px = cumulative_path_length(centerline_local)
+    alt_centerline_curve_px = cumulative_path_length(alt_centerline_local)
     length_axis_skeleton_px = float(skeleton_curve_px[-1]) if len(skeleton_curve_px) else float("nan")
     length_axis_body_bins_px = float(body_bin_centerline_curve_px[-1]) if len(body_bin_centerline_curve_px) else float("nan")
 
@@ -1228,18 +1379,15 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
     body_axis_points_xy = _resample_polyline(body_axis_points_xy, step_px=max(0.75 * step_px, 1.0))
     body_axis_points_xy = _smooth_path(body_axis_points_xy, window=max(3, int(config.centerline_smooth_window)))
     body_axis_points_xy = _align_path_orientation(centerline_local, body_axis_points_xy)
-    length_axis_alt_px = float(prior_centerline_curve_px[-1]) if len(prior_centerline_curve_px) else float("nan")
-    length_axis_disagreement_px = float(abs(length_axis_skeleton_px - length_axis_alt_px))
-    centerline_disagreement = float(length_axis_disagreement_px / max(length_axis_skeleton_px, 1e-9))
+    length_axis_px = float(centerline_curve_px[-1]) if len(centerline_curve_px) else float("nan")
+    length_axis_alt_px = float(alt_centerline_curve_px[-1]) if len(alt_centerline_curve_px) else float("nan")
+    length_axis_disagreement_px = float(abs(length_axis_px - length_axis_alt_px))
+    centerline_disagreement = float(length_axis_disagreement_px / max(length_axis_px, 1e-9))
 
     anchor_local = centerline_local[0]
     tip_local = centerline_local[-1]
-    endpoint_jump_px = float(
-        max(
-            np.linalg.norm(anchor_local - prior_centerline_local[0]),
-            np.linalg.norm(tip_local - prior_centerline_local[-1]),
-        )
-    )
+    endpoint_gap_alt_centerline_px = _endpoint_gap(centerline_local, alt_centerline_local)
+    endpoint_jump_px = endpoint_gap_alt_centerline_px
 
     distance_map = cv2.distanceTransform(body_tube_mask, cv2.DIST_L2, 5)
     thickness_widths_px = np.asarray([2.0 * _nearest_distance(distance_map, point_xy) for point_xy in centerline_local], dtype=float)
@@ -1308,7 +1456,14 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
     component_area_px2 = float(np.count_nonzero(source_component > 0))
     excluded_attachment_mask = cv2.subtract(source_component, body_tube_mask)
     excluded_attachment_area_px2 = float(np.count_nonzero(excluded_attachment_mask > 0))
-    body_mask_attachment_leak_fraction = float(excluded_attachment_area_px2 / max(component_area_px2, 1.0))
+    attachment_leak_area_px2 = _attachment_leak_area_px2(
+        excluded_attachment_mask,
+        body_center_xy=body_center_xy,
+        body_axis=body_axis,
+        body_positions=body_positions,
+        diameter_max_px=diameter_max_orth_px,
+    )
+    body_mask_attachment_leak_fraction = float(attachment_leak_area_px2 / max(component_area_px2, 1.0))
     attachment_metrics = _attachment_metrics(
         excluded_attachment_mask,
         body_center_xy=body_center_xy,
@@ -1330,8 +1485,16 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
 
     quality = float(
         np.clip(
-            0.6 * np.count_nonzero(np.isfinite(width_profile_trimmed_px)) / max(len(width_profile_trimmed_px), 1)
-            + 0.4 * body_mask_area_px2 / max(component_area_px2, 1.0),
+            0.30 * np.count_nonzero(np.isfinite(width_profile_trimmed_px)) / max(len(width_profile_trimmed_px), 1)
+            + 0.25 * body_mask_area_px2 / max(component_area_px2, 1.0)
+            + 0.20 * np.clip(1.0 - centerline_disagreement / 0.20, 0.0, 1.0)
+            + 0.15
+            * np.clip(
+                1.0 - endpoint_gap_alt_centerline_px / max(18.0, 0.10 * max(length_axis_px, 1.0)),
+                0.0,
+                1.0,
+            )
+            + 0.10 * np.clip(1.0 - body_mask_attachment_leak_fraction / 0.12, 0.0, 1.0),
             0.0,
             1.0,
         )
@@ -1354,7 +1517,7 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
         anchor_xy=anchor_local + roi_offset_xy,
         tip_xy=tip_local + roi_offset_xy,
         length_env_px=float(length_env_px),
-        length_axis_px=float(length_axis_skeleton_px),
+        length_axis_px=float(length_axis_px),
         length_axis_skeleton_px=float(length_axis_skeleton_px),
         length_axis_body_bins_px=float(length_axis_body_bins_px),
         length_axis_alt_px=float(length_axis_alt_px),
@@ -1394,6 +1557,7 @@ def extract_braided_geometry(frame_bgr: np.ndarray, config: BraidedExtractionCon
         branch_component_count_after_pruning=int(branch_component_count_after_pruning),
         branch_count_after_pruning=int(branch_component_count_after_pruning),
         centerline_disagreement=float(centerline_disagreement),
+        endpoint_gap_alt_centerline_px=float(endpoint_gap_alt_centerline_px),
         endpoint_jump_px=float(endpoint_jump_px),
         axis_peak_position_stability=float(axis_peak_position_stability),
         quality=quality,
