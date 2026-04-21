@@ -836,7 +836,8 @@ def _refresh_plot_outputs_for_display(
     if not _postprocess_needed(run, prepared):
         return
     run_id = run.get("id") if isinstance(run, dict) else run["id"]
-    _schedule_postprocess(run_id, run=run, prepared=prepared)
+    force_inline = _should_inline_recover_postprocess(run_id, prepared)
+    _schedule_postprocess(run_id, run=run, prepared=prepared, force_inline=force_inline)
 
 
 def _outputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
@@ -965,6 +966,19 @@ def _asset_generation_active(summary: dict[str, Any] | None) -> bool:
     return str(summary.get("asset_generation_status") or "") in {"pending", "running"}
 
 
+def _postprocess_in_flight(run_id: str) -> bool:
+    with _POSTPROCESS_LOCK:
+        return run_id in _POSTPROCESS_IN_FLIGHT
+
+
+def _should_inline_recover_postprocess(run_id: str, prepared: dict[str, Any] | None) -> bool:
+    if not isinstance(prepared, dict):
+        return False
+    if str(prepared.get("asset_generation_status") or "") != "running":
+        return False
+    return not _postprocess_in_flight(run_id)
+
+
 def _postprocess_fallback_error(exc: Exception) -> str:
     return str(exc) or exc.__class__.__name__
 
@@ -984,13 +998,14 @@ def _schedule_postprocess(
     result: AnalysisResult | None = None,
     extraction_cfg: ExtractionConfig | BraidedExtractionConfig | None = None,
     video_path: Path | None = None,
+    force_inline: bool = False,
 ) -> bool:
     with _POSTPROCESS_LOCK:
         if run_id in _POSTPROCESS_IN_FLIGHT:
             return False
         _POSTPROCESS_IN_FLIGHT.add(run_id)
     try:
-        run_inline = result is not None or bool(prepared and prepared.get("_smoothed_backfilled"))
+        run_inline = force_inline or result is not None or bool(prepared and prepared.get("_smoothed_backfilled"))
         if run_inline:
             _run_postprocess_task(
                 run_id=run_id,
@@ -2187,7 +2202,7 @@ async def create_video_preview(
 
     preview_path = preview_dir / "preview.mp4"
     try:
-        _transcode_preview_video(source_path, preview_path)
+        preview_path = _transcode_preview_video(source_path, preview_path)
     except Exception as exc:  # noqa: BLE001
         shutil.rmtree(preview_dir, ignore_errors=True)
         raise HTTPException(status_code=422, detail=f"preview generation failed: {exc}") from exc
@@ -3286,7 +3301,7 @@ def _cleanup_preview_cache(*, max_age_hours: float = 24.0) -> None:
             continue
 
 
-def _transcode_preview_video(source_path: Path, output_path: Path) -> None:
+def _transcode_preview_video(source_path: Path, output_path: Path) -> Path:
     capture = cv2.VideoCapture(str(source_path))
     if not capture.isOpened():
         raise RuntimeError("failed to open source video")
@@ -3325,6 +3340,7 @@ def _transcode_preview_video(source_path: Path, output_path: Path) -> None:
     if writer is None:
         capture.release()
         raise RuntimeError("failed to open preview writer")
+    final_output_path = writer.output_path
 
     frame_idx = 0
     wrote_any = False
@@ -3347,6 +3363,7 @@ def _transcode_preview_video(source_path: Path, output_path: Path) -> None:
 
     if not wrote_any:
         raise RuntimeError("source video contains no frames for preview")
+    return final_output_path
 
 
 def _connect_db() -> sqlite3.Connection:

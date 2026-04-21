@@ -26,6 +26,15 @@ class BrowserCompatibleWriter:
     writer: cv2.VideoWriter
     output_path: Path
 
+    def write(self, frame: np.ndarray) -> None:
+        self.writer.write(frame)
+
+    def release(self) -> None:
+        self.writer.release()
+
+    def isOpened(self) -> bool:
+        return bool(self.writer.isOpened())
+
 SIDEBAR_WIDTH = 420
 PANEL_BG = (246, 246, 246)
 TEXT_COLOR = (35, 35, 35)

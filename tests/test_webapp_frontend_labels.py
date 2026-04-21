@@ -401,6 +401,41 @@ class WebappFrontendLabelTests(unittest.TestCase):
                     _refresh_plot_outputs_for_display(run, prepared)
 
                 schedule.assert_called_once()
+                self.assertFalse(schedule.call_args.kwargs["force_inline"])
+
+    def test_refresh_plot_outputs_for_display_inline_recovers_stale_running_postprocess(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "wire-run-refresh-stale-running"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "analysis.csv").write_text("frame,quality\n0,0.9\n", encoding="utf-8")
+
+                run = {
+                    "id": run_id,
+                    "preset": "demo",
+                    "requested_mode": "quicklook",
+                    "actual_mode": "quicklook",
+                    "temperature_filename": None,
+                    "run_dir": str(run_dir),
+                    "status": "completed",
+                }
+                prepared = {
+                    "preset": "demo",
+                    "actual_mode": "quicklook",
+                    "asset_generation_status": "running",
+                    "process_video_filename": None,
+                    "temperature_c_min": None,
+                    "temperature_c_max": None,
+                }
+
+                with mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule:
+                    _refresh_plot_outputs_for_display(run, prepared)
+
+                schedule.assert_called_once()
+                self.assertTrue(schedule.call_args.kwargs["force_inline"])
 
     def test_delete_run_blocks_pending_or_running_asset_generation(self) -> None:
         for asset_status in ("pending", "running"):

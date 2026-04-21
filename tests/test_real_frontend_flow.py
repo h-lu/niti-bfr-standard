@@ -254,8 +254,9 @@ class RealFrontendFlowTests(unittest.TestCase):
             with self._patched_storage(tmp), mock.patch.object(webapp, "_transcode_preview_video", autospec=True) as transcode_mock:
                 webapp._ensure_storage()
 
-                def _fake_transcode(source_path: Path, output_path: Path) -> None:
+                def _fake_transcode(source_path: Path, output_path: Path) -> Path:
                     output_path.write_bytes(source_path.read_bytes())
+                    return output_path
 
                 transcode_mock.side_effect = _fake_transcode
                 client = TestClient(webapp.app)
