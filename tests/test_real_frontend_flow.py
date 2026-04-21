@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -18,13 +19,16 @@ class RealFrontendFlowTests(unittest.TestCase):
         base = Path(tmpdir)
         data_root = base / "var" / "webapp"
         runs_root = data_root / "runs"
+        previews_root = data_root / "previews"
         db_path = data_root / "runs.db"
         data_root.mkdir(parents=True, exist_ok=True)
         runs_root.mkdir(parents=True, exist_ok=True)
+        previews_root.mkdir(parents=True, exist_ok=True)
         return mock.patch.multiple(
             webapp,
             DATA_ROOT=data_root,
             RUNS_ROOT=runs_root,
+            PREVIEWS_ROOT=previews_root,
             DB_PATH=db_path,
         )
 
@@ -42,6 +46,20 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertNotIn("直接运行这个示例", text)
         self.assertNotIn("分析模式", text)
         self.assertIn("开始分析", text)
+        self.assertIn("编织对象方向预览", text)
+
+    def test_home_page_references_editorial_asset_and_asset_route_serves_file(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp):
+                webapp._ensure_storage()
+                client = TestClient(webapp.app)
+                response = client.get("/")
+                asset_response = client.get("/assets/niti-editorial-hero.png")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/assets/niti-editorial-hero.png", response.text)
+        self.assertEqual(asset_response.status_code, 200)
+        self.assertTrue(asset_response.headers["content-type"].startswith("image/"))
 
     def test_home_page_recent_runs_hide_single_result_temperature_copy(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -136,6 +154,8 @@ class RealFrontendFlowTests(unittest.TestCase):
         row = dict(rows[0])
         self.assertEqual(row["requested_mode"], "quicklook")
         self.assertEqual(row["frame_stride"], 5)
+        self.assertIsNone(row["direction_angle_deg"])
+        self.assertEqual(row["direction_metric_enabled"], 0)
 
     def test_create_run_with_temperature_csv_derives_formal_request(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -144,7 +164,7 @@ class RealFrontendFlowTests(unittest.TestCase):
                 client = TestClient(webapp.app)
                 response = client.post(
                     "/runs",
-                    data={"preset": "braided_like", "frame_stride": "2"},
+                    data={"preset": "braided_like", "frame_stride": "2", "direction_angle_deg": "9"},
                     files={
                         "video_file": ("demo.mp4", b"not-a-real-video", "video/mp4"),
                         "temperature_file": ("temp.csv", b"frame,temperature_c\n0,20\n", "text/csv"),
@@ -155,6 +175,98 @@ class RealFrontendFlowTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 303)
         self.assertEqual(dict(rows[0])["requested_mode"], "formal_af")
+
+    def test_create_braided_run_persists_direction_angle(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
+                webapp._ensure_storage()
+                client = TestClient(webapp.app)
+                response = client.post(
+                    "/runs",
+                    data={"preset": "braided_like", "frame_stride": "2", "direction_angle_deg": "17"},
+                    files={"video_file": ("demo.mp4", b"not-a-real-video", "video/mp4")},
+                    follow_redirects=False,
+                )
+                rows = webapp._list_runs(limit=1)
+
+        self.assertEqual(response.status_code, 303)
+        row = dict(rows[0])
+        self.assertEqual(row["direction_angle_deg"], 17.0)
+        self.assertEqual(row["direction_metric_enabled"], 1)
+
+    def test_create_braided_run_requires_direction_angle(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
+                webapp._ensure_storage()
+                client = TestClient(webapp.app)
+                response = client.post(
+                    "/runs",
+                    data={"preset": "braided_like", "frame_stride": "1"},
+                    files={"video_file": ("demo.mp4", b"not-a-real-video", "video/mp4")},
+                )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("direction_angle_deg", response.text)
+
+    def test_ensure_storage_backfills_direction_columns(self) -> None:
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            data_root = base / "var" / "webapp"
+            runs_root = data_root / "runs"
+            previews_root = data_root / "previews"
+            db_path = data_root / "runs.db"
+            data_root.mkdir(parents=True, exist_ok=True)
+            runs_root.mkdir(parents=True, exist_ok=True)
+            previews_root.mkdir(parents=True, exist_ok=True)
+            with mock.patch.multiple(webapp, DATA_ROOT=data_root, RUNS_ROOT=runs_root, PREVIEWS_ROOT=previews_root, DB_PATH=db_path):
+                with sqlite3.connect(db_path) as conn:
+                    conn.execute(
+                        """
+                        CREATE TABLE runs (
+                            id TEXT PRIMARY KEY,
+                            created_at TEXT NOT NULL,
+                            status TEXT NOT NULL,
+                            run_name TEXT,
+                            preset TEXT NOT NULL,
+                            requested_mode TEXT NOT NULL,
+                            actual_mode TEXT,
+                            formal_metric_label TEXT,
+                            formal_gate_reason TEXT,
+                            af95_c REAL,
+                            aftan_c REAL,
+                            video_filename TEXT NOT NULL,
+                            temperature_filename TEXT,
+                            run_dir TEXT NOT NULL,
+                            error_text TEXT
+                        )
+                        """
+                    )
+                    conn.commit()
+                webapp._ensure_storage()
+                with webapp._connect_db() as conn:
+                    columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+
+        self.assertIn("direction_angle_deg", columns)
+        self.assertIn("direction_metric_enabled", columns)
+
+    def test_preview_video_endpoint_returns_file_url(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_transcode_preview_video", autospec=True) as transcode_mock:
+                webapp._ensure_storage()
+
+                def _fake_transcode(source_path: Path, output_path: Path) -> None:
+                    output_path.write_bytes(source_path.read_bytes())
+
+                transcode_mock.side_effect = _fake_transcode
+                client = TestClient(webapp.app)
+                response = client.post(
+                    "/preview-video",
+                    files={"video_file": ("demo.mp4", b"fake-video", "video/mp4")},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("/files/previews/", payload["preview_url"])
 
     def test_create_run_rejects_invalid_frame_stride(self) -> None:
         with TemporaryDirectory() as tmp:

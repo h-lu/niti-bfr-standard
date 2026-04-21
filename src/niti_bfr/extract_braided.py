@@ -112,6 +112,21 @@ class BraidedZoneMetrics:
     zone_symmetry: float
 
 
+def directional_unit_vector(angle_deg: float) -> np.ndarray:
+    angle_rad = math.radians(float(angle_deg))
+    return _unit_direction(np.array([math.cos(angle_rad), math.sin(angle_rad)], dtype=float))
+
+
+def compute_directional_span_from_mask(mask: np.ndarray, angle_deg: float) -> float:
+    rows, cols = np.where(np.asarray(mask) > 0)
+    if len(rows) == 0:
+        raise RuntimeError("braided body mask unavailable for directional span")
+    points_xy = np.column_stack([cols, rows]).astype(float)
+    direction = directional_unit_vector(angle_deg)
+    projections = points_xy @ direction
+    return float(np.max(projections) - np.min(projections))
+
+
 def _clip_roi(frame_bgr: np.ndarray, roi_xyxy: tuple[int, int, int, int]) -> tuple[np.ndarray, np.ndarray]:
     h, w = frame_bgr.shape[:2]
     x0, y0, x1, y1 = roi_xyxy

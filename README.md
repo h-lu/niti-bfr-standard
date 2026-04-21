@@ -216,6 +216,9 @@
 ├── configs/
 │   └── minimal.yaml
 ├── data/
+│   ├── braided-synthetic-sample/
+│   │   ├── synthetic.mp4
+│   │   └── truth.csv
 │   └── wire-like.mp4
 ├── docs/
 │   └── minimal-design.md
@@ -361,6 +364,17 @@ python3 scripts/analyze_braided_like.py /path/to/video.mp4
 ```bash
 python3 scripts/analyze_braided_like.py /path/to/video.mp4 --temperature-csv /path/to/temperature.csv
 ```
+
+仓库内也附带一份轻量的 braided synthetic 测试数据，可直接用于 smoke test:
+
+```bash
+python3 scripts/analyze_braided_like.py data/braided-synthetic-sample/synthetic.mp4
+python3 scripts/analyze_braided_like.py \
+  data/braided-synthetic-sample/synthetic.mp4 \
+  --temperature-csv data/braided-synthetic-sample/truth.csv
+```
+
+这份样例用于验证 braided `A / B / C` 三路线的提取、QC 与带温度输入的 route-level Af 估计入口；它是 synthetic smoke test 数据，不应被误读为真实实验 formal 结论样例。
 
 该脚本当前会固定产出 braided `A / B / C` 三条路线的结果:
 

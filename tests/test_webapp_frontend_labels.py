@@ -35,13 +35,16 @@ class WebappFrontendLabelTests(unittest.TestCase):
         base = Path(tmpdir)
         data_root = base / "var" / "webapp"
         runs_root = data_root / "runs"
+        previews_root = data_root / "previews"
         db_path = data_root / "runs.db"
         data_root.mkdir(parents=True, exist_ok=True)
         runs_root.mkdir(parents=True, exist_ok=True)
+        previews_root.mkdir(parents=True, exist_ok=True)
         return mock.patch.multiple(
             webapp,
             DATA_ROOT=data_root,
             RUNS_ROOT=runs_root,
+            PREVIEWS_ROOT=previews_root,
             DB_PATH=db_path,
         )
 
@@ -75,6 +78,8 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(_worker_output_label("route_a_metric_over_time.png", "braided_demo"), "主体长度变化图")
         self.assertEqual(_worker_output_label("route_b_recovery_vs_temperature.png", "braided_demo"), "主体宽度温度曲线")
         self.assertEqual(_worker_output_label("route_c_recovery_vs_temperature.png", "braided_demo"), "投影面积温度曲线")
+        self.assertEqual(_worker_output_label("direction_metric_over_time.png", "braided_demo"), "方向法变化图")
+        self.assertEqual(_worker_output_label("direction_recovery_vs_temperature.png", "braided_demo"), "方向法温度曲线")
 
     def test_plot_route_titles_follow_series_family(self) -> None:
         wire_titles = _plot_route_titles_for_series(pd.DataFrame({"x_route_a_px": [1.0], "kappa_fit_px_inv": [0.1]}))
@@ -173,6 +178,32 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertFalse(route_c["formal_candidate"])
         self.assertFalse(route_c["accepted_as_formal_candidate"])
         self.assertEqual(route_c["reportability_status"], "formal_blocked")
+
+    def test_prepare_summary_keeps_direction_result(self) -> None:
+        run = {
+            "id": "braided-run-direction",
+            "preset": "braided_like",
+            "requested_mode": "formal_af",
+            "actual_mode": "formal_af",
+            "temperature_filename": "braided.csv",
+        }
+        summary = {
+            "preset": "braided_like",
+            "requested_mode": "formal_af",
+            "actual_mode": "formal_af",
+            "direction_result": {
+                "enabled": True,
+                "angle_deg": 12.0,
+                "metric_key": "direction_span",
+                "reportability_status": "formal_passed",
+            },
+        }
+
+        prepared = _prepare_summary_for_display(run, summary)
+        self.assertIsNotNone(prepared)
+        assert prepared is not None
+        self.assertEqual(prepared["direction_result"]["angle_deg"], 12.0)
+        self.assertTrue(prepared["direction_result"]["enabled"])
 
     def test_prepare_summary_backfills_smoothed_values_from_analysis_csv(self) -> None:
         with TemporaryDirectory() as tmp:

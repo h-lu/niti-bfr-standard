@@ -14,264 +14,281 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ worker_object_label(run['preset']) }}测量结果</title>
     {% if refresh %}<meta http-equiv="refresh" content="3">{% endif %}
+    {% include "_theme.html" %}
     <style>
-      :root {
-        --bg: #f5f1ea;
-        --card: #fffdfa;
-        --line: #e8dfd4;
-        --text: #1f2933;
-        --muted: #66707a;
-        --accent: #b2612f;
-        --accent-soft: #f8eee7;
-        --ok: #1f7a4d;
-        --ok-bg: #e9f6ee;
-        --warn: #9a640d;
-        --warn-bg: #fbf1db;
-        --info: #25606e;
-        --info-bg: #e8f3f5;
-        --danger: #a33f32;
-        --danger-bg: #faece8;
-        --shadow: 0 12px 28px rgba(45, 35, 24, 0.06);
-        --radius: 24px;
-        --font-ui: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      .detail-stack {
+        display: grid;
+        gap: 16px;
       }
 
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        background: var(--bg);
-        color: var(--text);
-        font-family: var(--font-ui);
+      .hero-panel {
+        padding: 28px;
       }
-      a {
-        color: inherit;
-        text-decoration: none;
-      }
-      img, video {
-        width: 100%;
-        display: block;
-        border-radius: 20px;
-        background: #f7f5f1;
-      }
-      img.zoomable {
-        cursor: zoom-in;
-      }
-      .shell {
-        max-width: 1120px;
-        margin: 0 auto;
-        padding: 24px 16px 40px;
-      }
-      .topbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 16px;
-      }
-      .title {
-        font-size: 24px;
-        font-weight: 800;
-        letter-spacing: 0.02em;
-      }
-      .nav {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
-      }
-      .nav a {
-        min-height: 44px;
-        padding: 10px 16px;
-        border-radius: 999px;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.9);
-        color: var(--muted);
-        font-size: 14px;
-        font-weight: 700;
-      }
-      .card {
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: var(--radius);
-        box-shadow: var(--shadow);
-      }
-      .hero {
-        padding: 24px;
-        margin-bottom: 16px;
-      }
-      .hero h1 {
-        margin: 0;
-        font-size: clamp(30px, 5vw, 44px);
-        line-height: 1.15;
-      }
-      .summary-grid {
+
+      .hero-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        grid-template-columns: minmax(0, 1fr) minmax(280px, 0.46fr);
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .hero-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .hero-art {
+        min-height: 260px;
+      }
+
+      .hero-art img {
+        height: 100%;
+      }
+
+      .summary-grid,
+      .route-grid,
+      .curve-grid,
+      .file-list {
+        display: grid;
         gap: 12px;
-        margin-top: 20px;
       }
+
+      .summary-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-top: 22px;
+      }
+
       .summary-item {
-        padding: 16px;
-        border-radius: 18px;
-        background: #faf6f0;
-        border: 1px solid #f0e6d9;
+        padding: 18px;
+        border-radius: 24px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background: rgba(255, 255, 255, 0.5);
       }
+
       .summary-item strong {
         display: block;
         margin-bottom: 6px;
-        font-size: 24px;
-        line-height: 1.2;
+        font-size: clamp(26px, 3vw, 34px);
+        font-family: var(--font-serif);
       }
+
       .summary-item span {
-        color: var(--muted);
+        color: var(--ink-500);
         font-size: 13px;
-        line-height: 1.6;
+        line-height: 1.64;
       }
+
       .meta-row {
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
-        margin-top: 16px;
+        margin-top: 18px;
       }
+
       .meta-pill {
-        padding: 8px 12px;
+        display: inline-flex;
+        align-items: center;
+        min-height: 36px;
+        padding: 0 14px;
         border-radius: 999px;
-        background: #f6f1ea;
-        color: var(--muted);
-        font-size: 13px;
-      }
-      .section {
-        padding: 22px;
-        margin-bottom: 16px;
-      }
-      .section h2 {
-        margin: 0 0 14px;
-        font-size: 24px;
-      }
-      .section-note {
-        margin: -2px 0 14px;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.7;
-      }
-      .route-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
-      }
-      .route-card {
-        padding: 18px;
-        border-radius: 20px;
-        border: 1px solid #efe5d8;
-        background: #fffcf7;
-      }
-      .route-head {
-        margin-bottom: 14px;
-      }
-      .route-name {
-        margin-bottom: 6px;
-        color: var(--muted);
+        background: rgba(16, 23, 34, 0.06);
+        color: var(--ink-500);
         font-size: 13px;
         font-weight: 700;
       }
-      .route-card h3 {
-        margin: 0 0 16px;
-        font-size: 20px;
+
+      .section-card {
+        display: grid;
+        gap: 18px;
       }
+
+      .section-note {
+        margin: -4px 0 0;
+        color: var(--ink-500);
+        font-size: 13px;
+        line-height: 1.72;
+      }
+
+      .route-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .route-card,
+      .curve-card {
+        padding: 18px;
+        border-radius: 24px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.7) 0%, rgba(249, 244, 237, 0.86) 100%);
+      }
+
+      .route-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 12px;
+        margin-bottom: 14px;
+      }
+
+      .route-name {
+        margin-bottom: 6px;
+        color: var(--ink-500);
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+      }
+
+      .route-copy {
+        margin: 8px 0 0;
+        color: var(--ink-500);
+        font-size: 13px;
+        line-height: 1.68;
+      }
+
+      .route-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
       .metric-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
-        margin-bottom: 14px;
       }
+
       .metric-box {
         padding: 14px;
         border-radius: 18px;
-        background: #ffffff;
-        border: 1px solid #efe5d8;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background: rgba(255, 255, 255, 0.7);
       }
+
       .metric-box strong {
         display: block;
         margin-bottom: 6px;
-        font-size: 22px;
+        font-size: 24px;
+        font-family: var(--font-serif);
       }
+
       .metric-box span {
-        color: var(--muted);
+        color: var(--ink-500);
         font-size: 13px;
+        line-height: 1.6;
       }
-      .media-card {
-        overflow: hidden;
-      }
-      figure {
-        margin: 0;
-      }
-      .curve-grid {
+
+      .primary-media {
         display: grid;
+        gap: 12px;
+      }
+
+      .media-caption {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .media-caption span {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 0 12px;
+        border-radius: 999px;
+        background: rgba(16, 23, 34, 0.06);
+        color: var(--ink-500);
+        font-size: 13px;
+        font-weight: 700;
+      }
+
+      .curve-grid {
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 14px;
       }
-      .curve-card {
-        padding: 14px;
-        border-radius: 20px;
-        border: 1px solid #efe5d8;
-        background: #fffcf7;
-      }
+
       .curve-card strong {
         display: block;
         margin-bottom: 10px;
         font-size: 16px;
       }
+
+      .curve-card img.zoomable {
+        cursor: zoom-in;
+        border-radius: 18px;
+      }
+
       .direction-layout {
         display: grid;
         grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
         gap: 14px;
         align-items: start;
       }
+
       .direction-curves {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-        gap: 14px;
-      }
-      .file-list {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
       }
+
+      .file-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
       .file-link {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 12px;
-        min-height: 56px;
+        min-height: 58px;
         padding: 14px 16px;
-        border-radius: 18px;
-        border: 1px solid #efe5d8;
-        background: #fffaf3;
+        border-radius: 20px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background: rgba(255, 255, 255, 0.62);
+        transition: transform 180ms ease, border-color 180ms ease;
       }
+
+      .file-link:hover {
+        transform: translateY(-1px);
+        border-color: rgba(42, 121, 132, 0.18);
+      }
+
       .file-link span:last-child {
-        color: var(--accent);
+        color: var(--teal-600);
         font-weight: 700;
         white-space: nowrap;
       }
+
       details.files {
-        border-radius: 18px;
-        background: #faf6f0;
-        border: 1px solid #efe5d8;
+        border-radius: 22px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background: rgba(255, 255, 255, 0.42);
         padding: 14px 16px 16px;
       }
+
       details.files summary {
         cursor: pointer;
         font-weight: 700;
       }
+
       details.files[open] summary {
         margin-bottom: 12px;
       }
-      .empty {
+
+      .error {
         padding: 18px;
-        border-radius: 18px;
-        background: #faf6f0;
-        color: var(--muted);
-        line-height: 1.75;
+        border-radius: 20px;
+        background: var(--danger-soft);
+        color: var(--danger);
+        overflow: auto;
       }
+
+      .error pre {
+        margin: 0;
+        font: inherit;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
       .lightbox {
         position: fixed;
         inset: 0;
@@ -280,65 +297,64 @@
         align-items: center;
         justify-content: center;
         padding: 28px;
-        background: rgba(24, 31, 40, 0.78);
+        background: rgba(16, 23, 34, 0.76);
+        backdrop-filter: blur(10px);
       }
+
       .lightbox.open {
         display: flex;
       }
+
       .lightbox-dialog {
-        max-width: min(1200px, 100%);
+        max-width: min(1220px, 100%);
         max-height: min(90vh, 100%);
         padding: 10px;
-        border-radius: 24px;
-        background: rgba(255, 253, 249, 0.98);
+        border-radius: 26px;
+        background: rgba(255, 252, 247, 0.98);
         box-shadow: 0 24px 60px rgba(0, 0, 0, 0.22);
       }
+
       .lightbox-image {
-        max-width: min(1120px, calc(100vw - 76px));
+        max-width: min(1140px, calc(100vw - 76px));
         max-height: calc(90vh - 20px);
         width: auto;
         height: auto;
         border-radius: 18px;
         background: #fff;
       }
-      .error {
-        padding: 18px;
-        border-radius: 18px;
-        background: var(--danger-bg);
-        color: var(--danger);
-        overflow: auto;
-      }
-      .error pre {
-        margin: 0;
-        font: inherit;
-        white-space: pre-wrap;
-        word-break: break-word;
-      }
-      @media (max-width: 920px) {
+
+      @media (max-width: 1120px) {
         .summary-grid,
         .route-grid,
         .curve-grid,
         .direction-layout,
-        .direction-curves,
         .file-list {
           grid-template-columns: 1fr;
         }
+
+        .hero-grid {
+          grid-template-columns: 1fr;
+        }
       }
+
       @media (max-width: 720px) {
-        .shell {
-          padding: 16px 12px 28px;
-        }
-        .topbar {
-          flex-direction: column;
-          align-items: stretch;
-        }
-        .hero,
-        .section {
+        .hero-panel,
+        .section-card {
           padding: 18px;
         }
+
+        .route-head {
+          flex-direction: column;
+        }
+
+        .metric-grid {
+          grid-template-columns: 1fr;
+        }
+
         .lightbox {
           padding: 14px;
         }
+
         .lightbox-image {
           max-width: calc(100vw - 48px);
           max-height: calc(100vh - 48px);
@@ -347,213 +363,289 @@
     </style>
   </head>
   <body>
-    <div class="shell">
+    <div class="page-shell">
       <header class="topbar">
-        <div class="title">测量结果</div>
+        <a class="brand" href="{{ request.url_for('home') }}">
+          <span class="brand-mark">NB</span>
+          <span class="brand-copy">
+            <strong>NiTi BFR</strong>
+          </span>
+        </a>
         <nav class="nav" aria-label="页面导航">
-          <a href="{{ request.url_for('home') }}">新建任务</a>
-          <a href="{{ request.url_for('history') }}">历史记录</a>
+          <a class="nav-link" href="{{ request.url_for('home') }}">新建任务</a>
+          <a class="nav-link" href="{{ request.url_for('history') }}">历史记录</a>
         </nav>
       </header>
 
-      <section class="card hero">
-        <h1>{{ worker_object_label(run['preset']) }}测量结果</h1>
-
-        <div class="summary-grid">
-          <div class="summary-item">
-            <strong>{{ route_results|length }}</strong>
-            <span>测量方式数</span>
-          </div>
-          <div class="summary-item">
-            <strong>
-              {% if summary and summary.get('analyzed_frame_count') is not none %}
-                {{ summary.get('analyzed_frame_count') }}
-              {% elif summary and summary.get('frames') is not none %}
-                {{ summary.get('frames') }}
-              {% else %}
-                --
-              {% endif %}
-            </strong>
-            <span>已分析画面数</span>
-          </div>
-          <div class="summary-item">
-            <strong>{{ run_status_label(run['status']) }}</strong>
-            <span>任务状态</span>
-          </div>
-        </div>
-
-        <div class="meta-row">
-          <div class="meta-pill">对象：{{ worker_object_label(run['preset']) }}</div>
-          <div class="meta-pill">
-            温度范围：
-            {% if summary and summary.get('temperature_c_min') is not none and summary.get('temperature_c_max') is not none %}
-              {{ fmt_temp(summary.get('temperature_c_min')) }} 到 {{ fmt_temp(summary.get('temperature_c_max')) }}
-            {% else %}
-              未提供
-            {% endif %}
-          </div>
-          <div class="meta-pill">提交时间：{{ display_time(run['created_at']) }}</div>
-        </div>
-      </section>
-
-      {% if refresh %}
-      <section class="card section">
-        <div class="empty">处理中，页面会自动刷新。</div>
-      </section>
-      {% endif %}
-
-      <section class="card section">
-        <h2>测量方式</h2>
-        <div class="section-note">页面同时展示当前测量结果和稳健参考结果。稳健参考仅用于对照抖动敏感性，不替代默认测量口径。</div>
-        {% if route_results %}
-        <div class="route-grid">
-          {% for route in route_results %}
-          <article class="route-card">
-            <div class="route-head">
-              <div>
-                <div class="route-name">{{ worker_route_name(run['preset'], route.get('alias')) }}</div>
-                <h3>{{ worker_route_title(run['preset'], route.get('alias')) }}</h3>
+      <div class="detail-stack">
+        <section class="hero-surface hero-panel">
+          <div class="hero-grid">
+            <div class="hero-copy">
+              <span class="eyebrow">结果</span>
+              <h1>{{ worker_object_label(run['preset']) }}测量结果</h1>
+              <div class="meta-row">
+                <div class="meta-pill">对象：{{ worker_object_label(run['preset']) }}</div>
+                <div class="meta-pill">
+                  温度范围：
+                  {% if summary and summary.get('temperature_c_min') is not none and summary.get('temperature_c_max') is not none %}
+                    {{ fmt_temp(summary.get('temperature_c_min')) }} 到 {{ fmt_temp(summary.get('temperature_c_max')) }}
+                  {% else %}
+                    未提供
+                  {% endif %}
+                </div>
+                <div class="meta-pill">提交时间：{{ display_time(run['created_at']) }}</div>
+                <div class="meta-pill">{{ run_status_label(run['status']) }}</div>
               </div>
             </div>
-            <div class="metric-grid">
-              <div class="metric-box">
-                <strong>{{ fmt_temp(route.get('af95_c')) }}</strong>
-                <span>当前测量 95%恢复温度</span>
-              </div>
-              <div class="metric-box">
-                <strong>{{ fmt_temp(route.get('aftan_c')) }}</strong>
-                <span>当前测量 切线法温度</span>
-              </div>
-              <div class="metric-box">
-                <strong>{{ fmt_temp(route.get('smoothed_af95_c')) }}</strong>
-                <span>稳健参考 95%恢复温度</span>
-              </div>
-              <div class="metric-box">
-                <strong>{{ fmt_temp(route.get('smoothed_aftan_c')) }}</strong>
-                <span>稳健参考 切线法温度</span>
-              </div>
-            </div>
-          </article>
-          {% endfor %}
-        </div>
-        {% else %}
-        <div class="empty">{% if refresh %}测量方式结果还在生成中。{% else %}当前还没有可展示的测量结果。{% endif %}</div>
-        {% endif %}
-      </section>
 
-      <section class="card section">
-        <h2>回看视频</h2>
-        {% if primary_video %}
-        <figure class="media-card">
-          <video controls preload="metadata" {% if primary_video.get('poster_url') %}poster="{{ primary_video.get('poster_url') }}"{% endif %}>
-            <source src="{{ primary_video['url'] }}">
-            当前浏览器不能直接播放视频，请改用打开文件。
-          </video>
-        </figure>
-        {% else %}
-        <div class="empty">当前还没有可回看的视频。</div>
-        {% endif %}
-      </section>
-
-      {% if route_curve_files %}
-      <section class="card section">
-        <h2>变化曲线</h2>
-        <div class="curve-grid">
-          {% for item in route_curve_files %}
-          <figure class="curve-card">
-            <strong>{{ item['label'] }}</strong>
-            <img class="zoomable" src="{{ item['url'] }}" alt="{{ item['label'] }}">
-          </figure>
-          {% endfor %}
-        </div>
-      </section>
-      {% elif primary_curve %}
-      <section class="card section">
-        <h2>变化曲线</h2>
-        <figure class="media-card">
-          <img class="zoomable" src="{{ primary_curve['url'] }}" alt="{{ primary_curve['label'] }}">
-        </figure>
-      </section>
-      {% endif %}
-
-      {% if direction_result and direction_result.get('enabled') %}
-      <section class="card section">
-        <h2>方向法</h2>
-        <div class="section-note">这是用户在上传后为编织对象手动确认的方向量结果，不替代现有 A / B / C 三种测量方式。</div>
-        <div class="direction-layout">
-          <article class="route-card">
-            <div class="route-head">
-              <div>
-                <div class="route-name">方向法</div>
-                <h3>方向投影跨度</h3>
-              </div>
-            </div>
-            <div class="metric-grid">
-              <div class="metric-box">
-                <strong>{% if direction_result.get('angle_deg') is not none %}{{ '%.1f'|format(direction_result.get('angle_deg')) }}°{% else %}--{% endif %}</strong>
-                <span>选定角度</span>
-              </div>
-              <div class="metric-box">
-                <strong>{{ fmt_temp(direction_result.get('af95_c')) }}</strong>
-                <span>当前测量 95%恢复温度</span>
-              </div>
-              <div class="metric-box">
-                <strong>{{ fmt_temp(direction_result.get('aftan_c')) }}</strong>
-                <span>当前测量 切线法温度</span>
-              </div>
-            </div>
-            {% if direction_result.get('gate_reason') %}
-            <div class="section-note">状态说明：{{ direction_result.get('gate_reason') }}</div>
-            {% endif %}
-          </article>
-
-          {% if direction_recovery_curve or direction_metric_curve %}
-          <div class="direction-curves">
-            {% if direction_recovery_curve %}
-            <figure class="curve-card">
-              <strong>{{ direction_recovery_curve['label'] }}</strong>
-              <img class="zoomable" src="{{ direction_recovery_curve['url'] }}" alt="{{ direction_recovery_curve['label'] }}">
+            <figure class="ambient-art hero-art" aria-hidden="true">
+              <img src="{{ request.url_for('assets', path='niti-editorial-detail.png') }}" alt="">
             </figure>
-            {% endif %}
-            {% if direction_metric_curve %}
-            <figure class="curve-card">
-              <strong>{{ direction_metric_curve['label'] }}</strong>
-              <img class="zoomable" src="{{ direction_metric_curve['url'] }}" alt="{{ direction_metric_curve['label'] }}">
-            </figure>
-            {% endif %}
           </div>
-          {% endif %}
-        </div>
-      </section>
-      {% endif %}
 
-      <section class="card section">
-        <h2>文件</h2>
-        {% if download_files %}
-        <details class="files">
-          <summary>查看文件</summary>
-          <div class="file-list">
-            {% for item in download_files %}
-            <a class="file-link" href="{{ item['url'] }}" target="_blank">
-              <span>{{ item['label'] }}</span>
-              <span>打开</span>
-            </a>
+          <div class="summary-grid">
+            <div class="summary-item">
+              <strong>{{ route_results|length }}</strong>
+              <span>测量方式数</span>
+            </div>
+            <div class="summary-item">
+              <strong>
+                {% if summary and summary.get('analyzed_frame_count') is not none %}
+                  {{ summary.get('analyzed_frame_count') }}
+                {% elif summary and summary.get('frames') is not none %}
+                  {{ summary.get('frames') }}
+                {% else %}
+                  --
+                {% endif %}
+              </strong>
+              <span>已分析画面数</span>
+            </div>
+            <div class="summary-item">
+              <strong>{{ run_status_label(run['status']) }}</strong>
+              <span>任务状态</span>
+            </div>
+            <div class="summary-item">
+              <strong>{% if run.get('temperature_filename') or (summary and summary.get('temperature_c_min') is not none) %}已附温度表{% else %}仅趋势分析{% endif %}</strong>
+              <span>输入条件</span>
+            </div>
+          </div>
+        </section>
+
+        {% if refresh %}
+        <section class="section-card">
+          <div class="empty">处理中，页面会自动刷新。</div>
+        </section>
+        {% endif %}
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>测量方式</h2>
+            </div>
+          </div>
+
+          {% if route_results %}
+          <div class="route-grid">
+            {% for route in route_results %}
+            <article class="route-card">
+              <div class="route-head">
+                <div>
+                  <div class="route-name">{{ worker_route_name(run['preset'], route.get('alias')) }}</div>
+                  <h3>{{ worker_route_title(run['preset'], route.get('alias')) }}</h3>
+                  <p class="route-copy">{{ worker_route_description(run['preset'], route.get('alias')) }}</p>
+                </div>
+                <span class="pill status-{{ (route.get('reportability_status') or 'queued')|replace('_', '-') }}">{{ worker_route_status_label(route.get('reportability_status')) }}</span>
+              </div>
+
+              <div class="metric-grid">
+                <div class="metric-box">
+                  <strong>{{ fmt_temp(route.get('af95_c')) }}</strong>
+                  <span>当前测量 95%恢复温度</span>
+                </div>
+                <div class="metric-box">
+                  <strong>{{ fmt_temp(route.get('aftan_c')) }}</strong>
+                  <span>当前测量 切线法温度</span>
+                </div>
+                <div class="metric-box">
+                  <strong>{{ fmt_temp(route.get('smoothed_af95_c')) }}</strong>
+                  <span>稳健参考 95%恢复温度</span>
+                </div>
+                <div class="metric-box">
+                  <strong>{{ fmt_temp(route.get('smoothed_aftan_c')) }}</strong>
+                  <span>稳健参考 切线法温度</span>
+                </div>
+              </div>
+
+              <div class="route-tags">
+                {% if route.get('formal_role') %}
+                <span class="token">{{ route_formal_role_label(route.get('formal_role')) }}</span>
+                {% endif %}
+                {% if route.get('gate_reason') %}
+                <span class="token">{{ route.get('gate_reason') }}</span>
+                {% endif %}
+              </div>
+            </article>
             {% endfor %}
           </div>
-        </details>
-        {% else %}
-        <div class="empty">暂无文件。</div>
-        {% endif %}
-      </section>
+          {% else %}
+          <div class="empty">{% if refresh %}测量方式结果还在生成中。{% else %}当前还没有可展示的测量结果。{% endif %}</div>
+          {% endif %}
+        </section>
 
-      {% if run['error_text'] %}
-      <section class="card section">
-        <h2>执行错误</h2>
-        <div class="error">
-          <pre>{{ run['error_text'] }}</pre>
-        </div>
-      </section>
-      {% endif %}
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>回看视频</h2>
+            </div>
+          </div>
+
+          {% if primary_video %}
+          <figure class="primary-media">
+            <div class="media-frame">
+              <video controls preload="metadata" {% if primary_video.get('poster_url') %}poster="{{ primary_video.get('poster_url') }}"{% endif %}>
+                <source src="{{ primary_video['url'] }}">
+                当前浏览器不能直接播放视频，请改用打开文件。
+              </video>
+            </div>
+            <figcaption class="media-caption">
+              <span>{{ primary_video['label'] }}</span>
+              {% if process_video %}
+              <span>分析过程视频</span>
+              {% endif %}
+            </figcaption>
+          </figure>
+          {% else %}
+          <div class="empty">当前还没有可回看的视频。</div>
+          {% endif %}
+        </section>
+
+        {% if route_curve_files %}
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>变化曲线</h2>
+            </div>
+          </div>
+
+          <div class="curve-grid">
+            {% for item in route_curve_files %}
+            <figure class="curve-card">
+              <strong>{{ item['label'] }}</strong>
+              <img class="zoomable" src="{{ item['url'] }}" alt="{{ item['label'] }}">
+            </figure>
+            {% endfor %}
+          </div>
+        </section>
+        {% elif primary_curve %}
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>变化曲线</h2>
+            </div>
+          </div>
+          <figure class="curve-card">
+            <strong>{{ primary_curve['label'] }}</strong>
+            <img class="zoomable" src="{{ primary_curve['url'] }}" alt="{{ primary_curve['label'] }}">
+          </figure>
+        </section>
+        {% endif %}
+
+        {% if direction_result and direction_result.get('enabled') %}
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>方向法</h2>
+              <p class="section-note">这是用户在上传后为编织对象手动确认的方向量结果，不替代现有 A / B / C 三种测量方式。</p>
+            </div>
+          </div>
+
+          <div class="direction-layout">
+            <article class="route-card">
+              <div class="route-head">
+                <div>
+                  <div class="route-name">方向法</div>
+                  <h3>方向投影跨度</h3>
+                </div>
+                <span class="pill status-{{ (direction_result.get('reportability_status') or 'queued')|replace('_', '-') }}">{{ worker_route_status_label(direction_result.get('reportability_status')) }}</span>
+              </div>
+              <div class="metric-grid">
+                <div class="metric-box">
+                  <strong>{% if direction_result.get('angle_deg') is not none %}{{ '%.1f'|format(direction_result.get('angle_deg')) }}°{% else %}--{% endif %}</strong>
+                  <span>选定角度</span>
+                </div>
+                <div class="metric-box">
+                  <strong>{{ fmt_temp(direction_result.get('af95_c')) }}</strong>
+                  <span>当前测量 95%恢复温度</span>
+                </div>
+                <div class="metric-box">
+                  <strong>{{ fmt_temp(direction_result.get('aftan_c')) }}</strong>
+                  <span>当前测量 切线法温度</span>
+                </div>
+              </div>
+              {% if direction_result.get('gate_reason') %}
+              <div class="route-tags">
+                <span class="token">状态说明：{{ direction_result.get('gate_reason') }}</span>
+              </div>
+              {% endif %}
+            </article>
+
+            {% if direction_recovery_curve or direction_metric_curve %}
+            <div class="direction-curves">
+              {% if direction_recovery_curve %}
+              <figure class="curve-card">
+                <strong>{{ direction_recovery_curve['label'] }}</strong>
+                <img class="zoomable" src="{{ direction_recovery_curve['url'] }}" alt="{{ direction_recovery_curve['label'] }}">
+              </figure>
+              {% endif %}
+              {% if direction_metric_curve %}
+              <figure class="curve-card">
+                <strong>{{ direction_metric_curve['label'] }}</strong>
+                <img class="zoomable" src="{{ direction_metric_curve['url'] }}" alt="{{ direction_metric_curve['label'] }}">
+              </figure>
+              {% endif %}
+            </div>
+            {% endif %}
+          </div>
+        </section>
+        {% endif %}
+
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>文件</h2>
+            </div>
+          </div>
+
+          {% if download_files %}
+          <details class="files">
+            <summary>查看文件</summary>
+            <div class="file-list">
+              {% for item in download_files %}
+              <a class="file-link" href="{{ item['url'] }}" target="_blank">
+                <span>{{ item['label'] }}</span>
+                <span>打开</span>
+              </a>
+              {% endfor %}
+            </div>
+          </details>
+          {% else %}
+          <div class="empty">暂无文件。</div>
+          {% endif %}
+        </section>
+
+        {% if run['error_text'] %}
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>执行错误</h2>
+            </div>
+          </div>
+          <div class="error">
+            <pre>{{ run['error_text'] }}</pre>
+          </div>
+        </section>
+        {% endif %}
+      </div>
     </div>
 
     <div class="lightbox" id="image_lightbox" aria-hidden="true">

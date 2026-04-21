@@ -9,7 +9,7 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
 from .extract import ExtractionConfig, extract_geometry
-from .extract_braided import BraidedExtractionConfig, extract_braided_geometry
+from .extract_braided import BraidedExtractionConfig, directional_unit_vector, extract_braided_geometry
 from .pipeline import AnalysisResult
 
 ObjectType = Literal["wire_like", "braided_like"]
@@ -328,6 +328,21 @@ def _render_braided_debug_frame(
     )
     cv2.circle(overlay, np.round(geom.anchor_xy).astype(int), 6, (0, 200, 0), -1)
     cv2.circle(overlay, np.round(geom.tip_xy).astype(int), 6, (0, 0, 255), -1)
+    direction_angle_deg = _row_value(row, "direction_angle_deg")
+    if direction_angle_deg is not None and np.isfinite(direction_angle_deg):
+        direction = directional_unit_vector(float(direction_angle_deg))
+        center = np.mean(geom.body_contour_xy, axis=0)
+        span = 0.6 * float(np.hypot(frame_bgr.shape[0], frame_bgr.shape[1]))
+        start = center - span * direction
+        end = center + span * direction
+        cv2.line(
+            overlay,
+            np.round(start).astype(int),
+            np.round(end).astype(int),
+            (20, 120, 240),
+            2,
+            cv2.LINE_AA,
+        )
 
     canvas = _make_canvas(overlay)
     panel_x = overlay.shape[1] + 18
@@ -340,6 +355,8 @@ def _render_braided_debug_frame(
         f"  rec={_fmt(_row_value(row, 'diameter_max_recovery'), precision=3)}",
         f"投影面积  数值={_fmt(_row_value(row, 'area_proj_px2'), suffix=' px2', precision=0)}"
         f"  rec={_fmt(_row_value(row, 'area_proj_recovery'), precision=3)}",
+        f"方向法 {(_fmt(direction_angle_deg, suffix='°', precision=1))}  数值={_fmt(_row_value(row, 'direction_span_px'), suffix=' px')}"
+        f"  rec={_fmt(_row_value(row, 'direction_recovery'), precision=3)}",
         f"端点跳动={_fmt(_row_value(row, 'endpoint_jump_px'), suffix=' px')}"
         f"  泄漏={_fmt(_row_value(row, 'body_mask_attachment_leak_fraction'), precision=3)}",
         f"中心线差异={_fmt(_row_value(row, 'centerline_disagreement'), precision=3)}"

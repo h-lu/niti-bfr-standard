@@ -8,7 +8,11 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from .extract_braided import BraidedExtractionConfig, extract_braided_geometry
+from .extract_braided import (
+    BraidedExtractionConfig,
+    compute_directional_span_from_mask,
+    extract_braided_geometry,
+)
 from .extract import ExtractionConfig, extract_geometry
 from .metrics import (
     MetricEvaluation,
@@ -102,6 +106,7 @@ class AnalysisResult:
     warning_codes: list[str] | None = None
     acceptance_profile: str | None = None
     route_results: list[dict[str, Any]] | None = None
+    direction_result: dict[str, Any] | None = None
     formal_candidate_gates: dict[str, dict[str, Any]] | None = None
     input_fps: float | None = None
     original_frame_count: int | None = None
@@ -768,10 +773,16 @@ def _select_wire_provisional_metric(
 def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
     axis_eval_col = "length_axis_formal_px" if "length_axis_formal_px" in series.columns else "length_axis_px"
     area_eval_col = "area_proj_formal_px2" if "area_proj_formal_px2" in series.columns else "area_proj_px2"
+    direction_eval_col = "direction_span_px"
     length_env_valid = series.dropna(subset=["temperature_c", "length_env_px"])
     length_axis_valid = series.dropna(subset=["temperature_c", axis_eval_col])
     diameter_valid = series.dropna(subset=["temperature_c", "diameter_max_px"])
     area_valid = series.dropna(subset=["temperature_c", area_eval_col])
+    direction_valid = (
+        series.dropna(subset=["temperature_c", direction_eval_col])
+        if direction_eval_col in series.columns
+        else pd.DataFrame()
+    )
 
     reports: dict[str, MetricEvaluation] = {}
     if len(length_env_valid) >= 4:
@@ -803,11 +814,23 @@ def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, Met
             label="area_proj",
             increasing=area_increasing,
         )
+    if len(direction_valid) >= 4:
+        direction_increasing = infer_metric_direction(
+            direction_valid[direction_eval_col].to_numpy(),
+            default_increasing=True,
+        )
+        reports["direction_span"] = evaluate_metric(
+            direction_valid["temperature_c"].to_numpy(),
+            direction_valid[direction_eval_col].to_numpy(),
+            label="direction_span",
+            increasing=direction_increasing,
+        )
 
     series["length_env_recovery"] = np.nan
     series["length_axis_recovery"] = np.nan
     series["diameter_max_recovery"] = np.nan
     series["area_proj_recovery"] = np.nan
+    series["direction_recovery"] = np.nan
 
     length_env_eval = reports.get("length_env")
     if length_env_eval is not None:
@@ -827,21 +850,80 @@ def _evaluate_braided_temperature_metrics(series: pd.DataFrame) -> dict[str, Met
         )
     diameter_eval = reports.get("diameter_max")
     if diameter_eval is not None:
-        series["diameter_max_recovery"] = recovery_ratio_directional(
+        series["diameter_max_recovery"] = _directional_recovery_from_report(
             series["diameter_max_px"].to_numpy(),
-            diameter_eval.fit.x_m,
-            diameter_eval.fit.x_a,
-            increasing=True,
+            diameter_eval,
         )
     area_eval = reports.get("area_proj")
     if area_eval is not None:
-        series["area_proj_recovery"] = recovery_ratio_directional(
+        series["area_proj_recovery"] = _directional_recovery_from_report(
             series[area_eval_col].to_numpy(),
-            area_eval.fit.x_m,
-            area_eval.fit.x_a,
-            increasing=area_eval.increasing,
+            area_eval,
+        )
+    direction_eval = reports.get("direction_span")
+    if direction_eval is not None:
+        series["direction_recovery"] = _directional_recovery_from_report(
+            series[direction_eval_col].to_numpy(),
+            direction_eval,
         )
     return reports
+
+
+def _build_direction_result(
+    *,
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation] | None,
+    direction_angle_deg: float | None,
+    enabled: bool,
+    temperature_available: bool,
+) -> dict[str, Any]:
+    result = {
+        "enabled": bool(enabled and direction_angle_deg is not None),
+        "angle_deg": None if direction_angle_deg is None else float(direction_angle_deg),
+        "metric_key": "direction_span",
+        "value_series_col": "direction_span_px",
+        "recovery_series_col": "direction_recovery",
+        "af95_c": None,
+        "aftan_c": None,
+        "fit_rmse": None,
+        "monotonic_violation_fraction": None,
+        "dynamic_range": None,
+        "reportability_status": "quicklook_only",
+        "gate_reason": "direction_metric_disabled",
+    }
+    if not result["enabled"]:
+        return result
+    if not temperature_available:
+        result["gate_reason"] = "temperature_sync_missing"
+        return result
+    metric_report = (reports or {}).get("direction_span")
+    if metric_report is None:
+        result["reportability_status"] = "formal_blocked"
+        result["gate_reason"] = "direction_span_insufficient_points"
+        return result
+    result.update(
+        {
+            "af95_c": metric_report.af95_c,
+            "aftan_c": metric_report.aftan_c,
+            "fit_rmse": metric_report.fit_rmse,
+            "monotonic_violation_fraction": metric_report.monotonic_violation_fraction,
+            "dynamic_range": metric_report.dynamic_range,
+            "reportability_status": "formal_passed",
+            "gate_reason": None,
+        }
+    )
+    return result
+
+
+def _directional_recovery_from_report(values: np.ndarray, report: MetricEvaluation) -> np.ndarray:
+    low_temp_ref = report.fit.x_m if report.increasing else -report.fit.x_m
+    high_temp_ref = report.fit.x_a if report.increasing else -report.fit.x_a
+    return recovery_ratio_directional(
+        values,
+        low_temp_ref,
+        high_temp_ref,
+        increasing=report.increasing,
+    )
 
 
 def _build_braided_route_results(
@@ -1709,6 +1791,7 @@ def analyze_braided_video_quicklook(
     temperature_time_offset_sec: float = 0.0,
     acceptance_profile: str = "real_video",
     frame_stride: int = 1,
+    direction_angle_deg: float | None = None,
 ) -> AnalysisResult:
     frame_stride = max(int(frame_stride), 1)
     cap = cv2.VideoCapture(str(video_path))
@@ -1716,6 +1799,7 @@ def analyze_braided_video_quicklook(
         raise RuntimeError(f"failed to open video: {video_path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
+    direction_enabled = direction_angle_deg is not None
     rows: list[dict[str, float]] = []
     frame_idx = 0
     while True:
@@ -1780,6 +1864,12 @@ def analyze_braided_video_quicklook(
                 "endpoint_jump_px": geom.endpoint_jump_px,
                 "axis_peak_position_stability": geom.axis_peak_position_stability,
                 "centerline_points": len(geom.sampled_centerline_xy),
+                "direction_angle_deg": float(direction_angle_deg) if direction_enabled else np.nan,
+                "direction_span_px": (
+                    compute_directional_span_from_mask(geom.body_tube_mask, float(direction_angle_deg))
+                    if direction_enabled
+                    else np.nan
+                ),
             }
         except RuntimeError:
             row = {
@@ -1835,6 +1925,8 @@ def analyze_braided_video_quicklook(
                 "endpoint_jump_px": np.nan,
                 "axis_peak_position_stability": np.nan,
                 "centerline_points": 0,
+                "direction_angle_deg": float(direction_angle_deg) if direction_enabled else np.nan,
+                "direction_span_px": np.nan,
             }
         rows.append(row)
         frame_idx += 1
@@ -1855,6 +1947,11 @@ def analyze_braided_video_quicklook(
         series["foreshortening_env"] = 1.0 - series["length_env_px"] / env_ref
     else:
         series["foreshortening_env"] = np.nan
+    direction_values = series["direction_span_px"].to_numpy(dtype=float)
+    finite_direction = direction_values[np.isfinite(direction_values)]
+    direction_ref = float(np.max(finite_direction)) if len(finite_direction) else np.nan
+    series["direction_span_ref_px"] = direction_ref
+    series["direction_recovery"] = np.nan
 
     fit = None
     af95_c = None
@@ -1875,6 +1972,13 @@ def analyze_braided_video_quicklook(
         primary_metric_label=primary_metric_label,
         formal_metric_label=formal_metric_label,
         acceptance_profile=acceptance_profile,
+        temperature_available=False,
+    )
+    direction_result = _build_direction_result(
+        series=series,
+        reports=metric_reports,
+        direction_angle_deg=direction_angle_deg,
+        enabled=direction_enabled,
         temperature_available=False,
     )
     formal_candidate_gates = None
@@ -1943,6 +2047,13 @@ def analyze_braided_video_quicklook(
             acceptance_profile=acceptance_profile,
             temperature_available=True,
         )
+        direction_result = _build_direction_result(
+            series=series,
+            reports=metric_reports,
+            direction_angle_deg=direction_angle_deg,
+            enabled=direction_enabled,
+            temperature_available=True,
+        )
 
     return AnalysisResult(
         series=series,
@@ -1961,6 +2072,7 @@ def analyze_braided_video_quicklook(
         warning_codes=warning_codes,
         acceptance_profile=acceptance_profile if temperature_csv is not None else None,
         route_results=route_results,
+        direction_result=direction_result,
         formal_candidate_gates=formal_candidate_gates,
         input_fps=float(fps),
         original_frame_count=frame_idx,

@@ -38,7 +38,7 @@ from .pipeline import (
     analyze_video,
     compute_braided_acceptance,
 )
-from .process_debug_video import render_process_debug_video
+from .process_debug_video import _open_browser_compatible_writer, render_process_debug_video
 from .synth_braided import (
     BraidedSyntheticModel,
     BraidedSyntheticModelConfig,
@@ -51,8 +51,10 @@ from .temporal import RouteCConfig
 ROOT = Path(__file__).resolve().parents[2]
 WEB_ROOT = ROOT / "web"
 TEMPLATES_DIR = WEB_ROOT / "templates"
+ASSETS_ROOT = WEB_ROOT / "assets"
 DATA_ROOT = ROOT / "var" / "webapp"
 RUNS_ROOT = DATA_ROOT / "runs"
+PREVIEWS_ROOT = DATA_ROOT / "previews"
 DB_PATH = DATA_ROOT / "runs.db"
 CONFIG_PATH = ROOT / "configs" / "minimal.yaml"
 PROJECT_OUTPUTS_ROOT = ROOT / "outputs"
@@ -61,8 +63,11 @@ PROCESS_VIDEO_FILENAME = "analysis_process.mp4"
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+PREVIEWS_ROOT.mkdir(parents=True, exist_ok=True)
+ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="NiTi BFR 分析台")
+app.mount("/assets", StaticFiles(directory=str(ASSETS_ROOT)), name="assets")
 app.mount("/files", StaticFiles(directory=str(DATA_ROOT)), name="files")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
@@ -272,6 +277,7 @@ async def forwarded_prefix_middleware(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     _ensure_storage()
+    _cleanup_preview_cache()
 
 
 def _preset_label(preset: str | None) -> str:
@@ -463,6 +469,8 @@ def _worker_output_label(filename: str, preset: str | None = None) -> str:
         "route_a_recovery_vs_temperature.png": _worker_route_curve_label(preset, "A", "temperature"),
         "route_b_recovery_vs_temperature.png": _worker_route_curve_label(preset, "B", "temperature"),
         "route_c_recovery_vs_temperature.png": _worker_route_curve_label(preset, "C", "temperature"),
+        "direction_metric_over_time.png": "方向法变化图",
+        "direction_recovery_vs_temperature.png": "方向法温度曲线",
     }
     mapping = {
         "analysis_process.mp4": "分析过程视频",
@@ -501,6 +509,8 @@ def _curve_priority(filename: str, temperature_available: bool) -> tuple[int, st
             "route_b_metric_over_time.png": 3,
             "route_a_metric_over_time.png": 4,
             "route_c_metric_over_time.png": 5,
+            "direction_recovery_vs_temperature.png": 6,
+            "direction_metric_over_time.png": 7,
         }
     else:
         order = {
@@ -509,6 +519,7 @@ def _curve_priority(filename: str, temperature_available: bool) -> tuple[int, st
             "route_c_metric_over_time.png": 2,
             "quicklook_x_vs_time.png": 3,
             "quicklook_kappa_vs_time.png": 4,
+            "direction_metric_over_time.png": 5,
         }
     return order.get(filename, 99), filename
 
@@ -769,6 +780,7 @@ def _result_for_display_plots(
         warning_codes=list(prepared.get("warning_codes") or []),
         acceptance_profile=prepared.get("acceptance_profile"),
         route_results=list(prepared.get("route_results") or []),
+        direction_result=prepared.get("direction_result"),
         formal_candidate_gates=prepared.get("formal_candidate_gates"),
         input_fps=_coerce_float(prepared.get("input_fps")),
         original_frame_count=prepared.get("original_frame_count"),
@@ -1080,6 +1092,9 @@ def _prepare_summary_for_display(run: sqlite3.Row | dict[str, Any], summary: dic
             provisional_aftan_c=prepared.get("provisional_aftan_c"),
         )
     )
+    direction_result = prepared.get("direction_result")
+    if isinstance(direction_result, dict):
+        prepared["direction_result"] = dict(direction_result)
     return _backfill_smoothed_summary_fields(run, prepared)
 
 
@@ -1647,6 +1662,7 @@ async def create_run(
     preset: str = Form("wire_like"),
     frame_stride: str = Form("1"),
     run_name: str = Form(""),
+    direction_angle_deg: str = Form(""),
 ) -> RedirectResponse:
     _ensure_storage()
     if preset not in {"wire_like", "braided_like"}:
@@ -1659,6 +1675,16 @@ async def create_run(
         raise HTTPException(status_code=400, detail="frame_stride must be an integer") from exc
     if parsed_frame_stride < 1:
         raise HTTPException(status_code=400, detail="frame_stride must be >= 1")
+    parsed_direction_angle: float | None = None
+    if direction_angle_deg.strip():
+        try:
+            parsed_direction_angle = float(direction_angle_deg)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="direction_angle_deg must be numeric") from exc
+        if not np.isfinite(parsed_direction_angle):
+            raise HTTPException(status_code=400, detail="direction_angle_deg must be finite")
+    if preset == "braided_like" and parsed_direction_angle is None:
+        raise HTTPException(status_code=400, detail="direction_angle_deg is required for braided uploads")
 
     run_id = _new_run_id()
     run_dir = RUNS_ROOT / run_id
@@ -1685,6 +1711,8 @@ async def create_run(
             "preset": preset,
             "requested_mode": requested_mode,
             "frame_stride": parsed_frame_stride,
+            "direction_angle_deg": parsed_direction_angle,
+            "direction_metric_enabled": bool(preset.startswith("braided") and parsed_direction_angle is not None),
             "actual_mode": None,
             "formal_metric_label": None,
             "formal_gate_reason": None,
@@ -1747,6 +1775,41 @@ async def create_sample_run(
     )
     background_tasks.add_task(_execute_run, run_id)
     return RedirectResponse(url=str(request.url_for("run_detail", run_id=run_id)), status_code=303)
+
+
+@app.post("/preview-video")
+async def create_video_preview(
+    request: Request,
+    video_file: UploadFile = File(...),
+) -> dict[str, Any]:
+    _ensure_storage()
+    if not video_file.filename:
+        raise HTTPException(status_code=400, detail="video file is required")
+
+    preview_id = _new_run_id()
+    preview_dir = PREVIEWS_ROOT / preview_id
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    source_path = preview_dir / _safe_filename(video_file.filename)
+    await _save_upload(video_file, source_path)
+
+    preview_path = preview_dir / "preview.mp4"
+    try:
+        _transcode_preview_video(source_path, preview_path)
+    except Exception as exc:  # noqa: BLE001
+        shutil.rmtree(preview_dir, ignore_errors=True)
+        raise HTTPException(status_code=422, detail=f"preview generation failed: {exc}") from exc
+
+    poster_url = None
+    poster_path = _ensure_video_poster(preview_path)
+    if poster_path is not None:
+        poster_rel = poster_path.relative_to(DATA_ROOT).as_posix()
+        poster_url = str(request.url_for("files", path=poster_rel))
+    preview_rel = preview_path.relative_to(DATA_ROOT).as_posix()
+    return {
+        "preview_id": preview_id,
+        "preview_url": str(request.url_for("files", path=preview_rel)),
+        "poster_url": poster_url,
+    }
 
 
 @app.post("/runs/{run_id}/delete")
@@ -1853,6 +1916,8 @@ def run_detail(request: Request, run_id: str) -> Any:
         matched = next((item for item in curve_files if item["name"] == filename), None)
         if matched is not None:
             route_curve_files.append(matched)
+    direction_metric_curve = next((item for item in curve_files if item["name"] == "direction_metric_over_time.png"), None)
+    direction_recovery_curve = next((item for item in curve_files if item["name"] == "direction_recovery_vs_temperature.png"), None)
 
     return templates.TemplateResponse(
         "run_detail.html",
@@ -1870,6 +1935,9 @@ def run_detail(request: Request, run_id: str) -> Any:
             "primary_video": primary_video,
             "primary_curve": primary_curve,
             "route_curve_files": route_curve_files,
+            "direction_result": summary.get("direction_result") if summary else None,
+            "direction_metric_curve": direction_metric_curve,
+            "direction_recovery_curve": direction_recovery_curve,
             "download_files": download_files,
             "refresh": run["status"] in {"queued", "running"},
             "preset_label": _preset_label,
@@ -1933,6 +2001,11 @@ def _execute_run(run_id: str) -> None:
                 temperature_csv=temperature_path,
                 acceptance_profile="synthetic" if run["preset"] == "braided_demo" else "real_video",
                 frame_stride=frame_stride,
+                direction_angle_deg=(
+                    float(run["direction_angle_deg"])
+                    if "direction_angle_deg" in run.keys() and run["direction_angle_deg"] is not None
+                    else None
+                ),
             )
         else:
             raise RuntimeError(f"unsupported preset: {run['preset']}")
@@ -1943,6 +2016,7 @@ def _execute_run(run_id: str) -> None:
         summary = _build_summary(run, result)
         summary["annotated_video_filename"] = None
         process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
+        _remove_video_with_poster(process_video_path)
         try:
             render_process_debug_video(
                 video_path=video_path,
@@ -2009,6 +2083,8 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "quality_median": float(series["quality"].median()) if "quality" in series else None,
         "video_filename": run["video_filename"],
         "temperature_filename": run["temperature_filename"],
+        "direction_angle_deg": run["direction_angle_deg"] if "direction_angle_deg" in run.keys() else None,
+        "direction_metric_enabled": bool(run["direction_metric_enabled"]) if "direction_metric_enabled" in run.keys() else False,
         "primary_metric_label": result.primary_metric_label,
         "annotated_video_filename": run["annotated_video_filename"] if "annotated_video_filename" in run.keys() else None,
         "process_video_filename": None,
@@ -2077,6 +2153,8 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
             }
             for key, report in result.metric_reports.items()
         }
+    if result.direction_result is not None:
+        summary["direction_result"] = dict(result.direction_result)
     route_results, route_results_by_alias = _normalize_route_results(
         preset=run["preset"],
         route_results=result.route_results,
@@ -2226,6 +2304,19 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         plt.legend()
         plt.tight_layout()
         fig.savefig(out_dir / "route_c_metric_over_time.png", dpi=160)
+        plt.close(fig)
+
+    if {"time_sec", "direction_span_px"}.issubset(series.columns) and series["direction_span_px"].notna().any():
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["time_sec"], series["direction_span_px"], label="方向法", linewidth=2.0, color="#c2410c")
+        angle_deg = _coerce_float(series["direction_angle_deg"].dropna().iloc[0]) if "direction_angle_deg" in series.columns and series["direction_angle_deg"].notna().any() else None
+        title = "方向法变化曲线" if angle_deg is None else f"方向法变化曲线 ({angle_deg:.1f}°)"
+        plt.xlabel("时间（秒）")
+        plt.ylabel("投影跨度（像素）")
+        plt.title(title)
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "direction_metric_over_time.png", dpi=160)
         plt.close(fig)
 
     if {"time_sec", "x_route_a_px", "x_fit_px", "x_route_c_px"}.issubset(series.columns):
@@ -2468,6 +2559,24 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         fig.savefig(out_dir / "route_c_recovery_vs_temperature.png", dpi=160)
         plt.close(fig)
 
+    if {"temperature_c", "direction_recovery"}.issubset(series.columns) and series["direction_recovery"].notna().any():
+        fig = plt.figure(figsize=(8, 4.8))
+        plt.plot(series["temperature_c"], series["direction_recovery"], label="方向法", linewidth=2.0, color="#c2410c")
+        direction_result = result.direction_result or {}
+        if direction_result.get("af95_c") is not None:
+            plt.axvline(direction_result["af95_c"], color="tab:green", linestyle="--", label=f"95%恢复温度 {direction_result['af95_c']:.2f}℃")
+        if direction_result.get("aftan_c") is not None:
+            plt.axvline(direction_result["aftan_c"], color="tab:red", linestyle="--", label=f"切线法温度 {direction_result['aftan_c']:.2f}℃")
+        angle_deg = direction_result.get("angle_deg")
+        title = "方向法温度曲线" if angle_deg is None else f"方向法温度曲线 ({float(angle_deg):.1f}°)"
+        plt.xlabel("温度（℃）")
+        plt.ylabel("恢复比例")
+        plt.title(title)
+        plt.legend()
+        plt.tight_layout()
+        fig.savefig(out_dir / "direction_recovery_vs_temperature.png", dpi=160)
+        plt.close(fig)
+
     if {"temperature_c", "length_env_px", "length_axis_px", "diameter_max_px"}.issubset(series.columns):
         fig = plt.figure(figsize=(8, 4.8))
         plt.plot(series["temperature_c"], series["length_env_px"], label="env length", linewidth=1.8)
@@ -2659,6 +2768,7 @@ def _prepare_sample_inputs(sample_id: str, inputs_dir: Path) -> dict[str, str | 
 def _ensure_storage() -> None:
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
     RUNS_ROOT.mkdir(parents=True, exist_ok=True)
+    PREVIEWS_ROOT.mkdir(parents=True, exist_ok=True)
     with _connect_db() as conn:
         conn.execute(
             """
@@ -2670,6 +2780,8 @@ def _ensure_storage() -> None:
                 preset TEXT NOT NULL,
                 requested_mode TEXT NOT NULL,
                 frame_stride INTEGER NOT NULL DEFAULT 1,
+                direction_angle_deg REAL,
+                direction_metric_enabled INTEGER NOT NULL DEFAULT 0,
                 actual_mode TEXT,
                 formal_metric_label TEXT,
                 formal_gate_reason TEXT,
@@ -2691,6 +2803,10 @@ def _ensure_storage() -> None:
         }
         if "frame_stride" not in existing_columns:
             conn.execute("ALTER TABLE runs ADD COLUMN frame_stride INTEGER NOT NULL DEFAULT 1")
+        if "direction_angle_deg" not in existing_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN direction_angle_deg REAL")
+        if "direction_metric_enabled" not in existing_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN direction_metric_enabled INTEGER NOT NULL DEFAULT 0")
         if "original_frame_count" not in existing_columns:
             conn.execute("ALTER TABLE runs ADD COLUMN original_frame_count INTEGER")
         if "analyzed_frame_count" not in existing_columns:
@@ -2698,6 +2814,83 @@ def _ensure_storage() -> None:
         if "annotated_video_filename" not in existing_columns:
             conn.execute("ALTER TABLE runs ADD COLUMN annotated_video_filename TEXT")
         conn.commit()
+
+
+def _cleanup_preview_cache(*, max_age_hours: float = 24.0) -> None:
+    PREVIEWS_ROOT.mkdir(parents=True, exist_ok=True)
+    cutoff_ts = datetime.now(timezone.utc).timestamp() - max_age_hours * 3600.0
+    for path in PREVIEWS_ROOT.iterdir():
+        try:
+            if path.stat().st_mtime < cutoff_ts:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _transcode_preview_video(source_path: Path, output_path: Path) -> None:
+    capture = cv2.VideoCapture(str(source_path))
+    if not capture.isOpened():
+        raise RuntimeError("failed to open source video")
+
+    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+    if not np.isfinite(source_fps) or source_fps <= 0.0:
+        source_fps = 20.0
+    source_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    source_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+    if source_width <= 0 or source_height <= 0:
+        ok, frame = capture.read()
+        if not ok or frame is None:
+            capture.release()
+            raise RuntimeError("source video contains no readable frames")
+        source_height, source_width = frame.shape[:2]
+        capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+
+    max_width = 960
+    if source_width > max_width:
+        scale = max_width / float(source_width)
+        target_width = int(round(source_width * scale))
+        target_height = int(round(source_height * scale))
+    else:
+        target_width = source_width
+        target_height = source_height
+    target_width = max(2, target_width - (target_width % 2))
+    target_height = max(2, target_height - (target_height % 2))
+
+    target_fps = min(source_fps, 15.0)
+    frame_step = max(1, int(round(source_fps / target_fps)))
+    writer = _open_browser_compatible_writer(
+        output_path=output_path,
+        fps=max(target_fps, 1.0),
+        frame_size=(target_width, target_height),
+    )
+    if writer is None:
+        capture.release()
+        raise RuntimeError("failed to open preview writer")
+
+    frame_idx = 0
+    wrote_any = False
+    try:
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if frame_idx % frame_step != 0:
+                frame_idx += 1
+                continue
+            if frame.shape[1] != target_width or frame.shape[0] != target_height:
+                frame = cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
+            writer.write(frame)
+            wrote_any = True
+            frame_idx += 1
+    finally:
+        capture.release()
+        writer.release()
+
+    if not wrote_any:
+        raise RuntimeError("source video contains no frames for preview")
 
 
 def _connect_db() -> sqlite3.Connection:
