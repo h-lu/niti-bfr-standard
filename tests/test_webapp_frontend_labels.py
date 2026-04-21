@@ -16,7 +16,9 @@ from niti_bfr.webapp import (
     BENCHMARK_FAMILY_DISPLAY,
     SAMPLE_RUNS,
     _build_benchmark_page_data,
+    _expected_plot_outputs,
     _mode_label,
+    _postprocess_needed,
     _plot_route_titles_for_series,
     _prepare_summary_for_display,
     _preset_label,
@@ -293,11 +295,165 @@ class WebappFrontendLabelTests(unittest.TestCase):
                 }
 
                 prepared = _prepare_summary_for_display(run, summary)
-                _refresh_plot_outputs_for_display(run, prepared)
+                with mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule:
+                    _refresh_plot_outputs_for_display(run, prepared)
 
-                route_a_plot = outputs_dir / "route_a_recovery_vs_temperature.png"
-                self.assertTrue(route_a_plot.exists())
-                self.assertGreater(route_a_plot.stat().st_size, 0)
+                schedule.assert_called_once()
+
+    def test_postprocess_needed_when_only_partial_plot_set_exists(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "braided-run-partial-plots"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "route_a_metric_over_time.png").write_bytes(b"partial")
+
+                run = {
+                    "id": run_id,
+                    "preset": "braided_like",
+                    "requested_mode": "quicklook",
+                    "actual_mode": "quicklook",
+                    "temperature_filename": None,
+                    "run_dir": str(run_dir),
+                    "direction_metric_enabled": False,
+                    "status": "completed",
+                }
+                prepared = {
+                    "preset": "braided_like",
+                    "actual_mode": "quicklook",
+                    "asset_generation_status": "failed",
+                    "process_video_filename": webapp.PROCESS_VIDEO_FILENAME,
+                    "temperature_c_min": None,
+                    "temperature_c_max": None,
+                }
+
+                self.assertTrue(_postprocess_needed(run, prepared))
+
+    def test_postprocess_ignores_disabled_direction_metric_outputs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "braided-run-direction-disabled"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+
+                run = {
+                    "id": run_id,
+                    "preset": "braided_like",
+                    "requested_mode": "quicklook",
+                    "actual_mode": "quicklook",
+                    "temperature_filename": None,
+                    "run_dir": str(run_dir),
+                    "direction_metric_enabled": False,
+                    "status": "completed",
+                }
+                prepared = {
+                    "preset": "braided_like",
+                    "actual_mode": "quicklook",
+                    "asset_generation_status": "completed",
+                    "process_video_filename": webapp.PROCESS_VIDEO_FILENAME,
+                    "temperature_c_min": None,
+                    "temperature_c_max": None,
+                    "direction_result": {"enabled": False, "metric_key": "direction_span"},
+                }
+
+                expected = _expected_plot_outputs(run, prepared)
+                self.assertNotIn("direction_metric_over_time.png", expected)
+                for filename in expected:
+                    (outputs_dir / filename).write_bytes(b"plot")
+                (outputs_dir / webapp.PROCESS_VIDEO_FILENAME).write_bytes(b"video")
+
+                self.assertFalse(_postprocess_needed(run, prepared))
+
+    def test_refresh_plot_outputs_for_display_schedules_when_partial_plots_exist(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "wire-run-refresh-partial"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "route_a_metric_over_time.png").write_bytes(b"partial")
+                (outputs_dir / webapp.PROCESS_VIDEO_FILENAME).write_bytes(b"video")
+
+                run = {
+                    "id": run_id,
+                    "preset": "demo",
+                    "requested_mode": "quicklook",
+                    "actual_mode": "quicklook",
+                    "temperature_filename": None,
+                    "run_dir": str(run_dir),
+                    "status": "completed",
+                }
+                prepared = {
+                    "preset": "demo",
+                    "actual_mode": "quicklook",
+                    "asset_generation_status": "completed",
+                    "process_video_filename": webapp.PROCESS_VIDEO_FILENAME,
+                    "temperature_c_min": None,
+                    "temperature_c_max": None,
+                }
+
+                with mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule:
+                    _refresh_plot_outputs_for_display(run, prepared)
+
+                schedule.assert_called_once()
+
+    def test_delete_run_blocks_pending_or_running_asset_generation(self) -> None:
+        for asset_status in ("pending", "running"):
+            with self.subTest(asset_status=asset_status):
+                with TemporaryDirectory() as tmp:
+                    with self._storage_patch_context(tmp):
+                        webapp._ensure_storage()
+                        run_id = f"delete-blocked-{asset_status}"
+                        run_dir = webapp.RUNS_ROOT / run_id
+                        outputs_dir = run_dir / "outputs"
+                        outputs_dir.mkdir(parents=True, exist_ok=True)
+
+                        webapp._insert_run(
+                            {
+                                "id": run_id,
+                                "created_at": webapp._utc_now(),
+                                "status": "completed",
+                                "run_name": "blocked delete",
+                                "preset": "braided_like",
+                                "requested_mode": "quicklook",
+                                "frame_stride": 1,
+                                "actual_mode": "quicklook",
+                                "formal_metric_label": None,
+                                "formal_gate_reason": None,
+                                "af95_c": None,
+                                "aftan_c": None,
+                                "original_frame_count": 12,
+                                "analyzed_frame_count": 12,
+                                "annotated_video_filename": None,
+                                "video_filename": "demo.mp4",
+                                "temperature_filename": None,
+                                "run_dir": str(run_dir),
+                                "error_text": None,
+                                "direction_angle_deg": None,
+                                "direction_metric_enabled": 0,
+                            }
+                        )
+                        self._write_json(
+                            outputs_dir / "summary.json",
+                            {
+                                "preset": "braided_like",
+                                "requested_mode": "quicklook",
+                                "actual_mode": "quicklook",
+                                "asset_generation_status": asset_status,
+                            },
+                        )
+
+                        client = TestClient(webapp.app)
+                        response = client.post(f"/runs/{run_id}/delete")
+
+                        self.assertEqual(response.status_code, 409)
+                        self.assertTrue(run_dir.exists())
+                        self.assertIsNotNone(webapp._get_run(run_id))
 
     def test_benchmark_page_falls_back_to_analysis_metrics(self) -> None:
         with TemporaryDirectory() as tmp:

@@ -9,8 +9,13 @@ import pandas as pd
 from PIL import Image, ImageDraw, ImageFont
 
 from .extract import ExtractionConfig, extract_geometry
-from .extract_braided import BraidedExtractionConfig, directional_unit_vector, extract_braided_geometry
-from .pipeline import AnalysisResult
+from .extract_braided import (
+    BraidedExtractionConfig,
+    BraidedTrackingState,
+    directional_unit_vector,
+    extract_braided_geometry,
+)
+from .pipeline import AnalysisResult, _next_braided_tracking_state
 
 ObjectType = Literal["wire_like", "braided_like"]
 
@@ -70,6 +75,7 @@ def render_process_debug_video(
         raise RuntimeError(f"failed to open video writer: {output_path}")
 
     next_frame_pos: int | None = None
+    braided_tracking_state: BraidedTrackingState | None = None
     try:
         for frame_idx, row in enumerate(series.itertuples(index=False)):
             target_frame = int(row.frame)
@@ -77,7 +83,10 @@ def render_process_debug_video(
             try:
                 if object_kind == "braided_like":
                     assert isinstance(extraction, BraidedExtractionConfig)
-                    geom = extract_braided_geometry(frame_bgr, extraction)
+                    geom = extract_braided_geometry(frame_bgr, extraction, tracking_state=braided_tracking_state)
+                    braided_tracking_state = getattr(geom, "tracking_state", None)
+                    if braided_tracking_state is None:
+                        braided_tracking_state = _next_braided_tracking_state(frame_bgr.shape, extraction, geom)
                     canvas = _render_braided_debug_frame(
                         frame_bgr=frame_bgr,
                         geom=geom,
@@ -98,6 +107,8 @@ def render_process_debug_video(
                         extraction=extraction,
                     )
             except Exception as exc:  # noqa: BLE001
+                if object_kind == "braided_like":
+                    braided_tracking_state = None
                 canvas = _render_error_canvas(
                     frame_bgr=frame_bgr,
                     title=f"{object_kind.replace('_', '-')} analysis process",
