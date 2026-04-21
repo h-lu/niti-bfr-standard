@@ -585,6 +585,7 @@
       let previewCenterX = 50;
       let previewCenterY = 50;
       let previewDragPointerId = null;
+      let previewObjectUrl = null;
 
       function isBraidedPreset() {
         return presetSelect.value === "braided_like";
@@ -625,7 +626,15 @@
         submitButton.disabled = !allowSubmit;
       }
 
+      function revokePreviewObjectUrl() {
+        if (previewObjectUrl) {
+          URL.revokeObjectURL(previewObjectUrl);
+          previewObjectUrl = null;
+        }
+      }
+
       function clearPreviewSource() {
+        revokePreviewObjectUrl();
         previewVideo.removeAttribute("poster");
         previewVideo.removeAttribute("src");
         previewVideo.pause();
@@ -641,6 +650,93 @@
         updateSubmitState();
       }
 
+      function waitForPreviewReady(requestToken, timeoutMs = 4000) {
+        return new Promise((resolve, reject) => {
+          const readyStateThreshold = previewVideo.HAVE_CURRENT_DATA || 2;
+          if (previewVideo.readyState >= readyStateThreshold) {
+            resolve();
+            return;
+          }
+          let finished = false;
+          let timeoutId = null;
+
+          function cleanup() {
+            if (timeoutId) {
+              window.clearTimeout(timeoutId);
+            }
+            previewVideo.removeEventListener("loadeddata", handleReady);
+            previewVideo.removeEventListener("canplay", handleReady);
+            previewVideo.removeEventListener("error", handleError);
+          }
+
+          function finish(callback) {
+            if (finished) {
+              return;
+            }
+            finished = true;
+            cleanup();
+            callback();
+          }
+
+          function handleReady() {
+            finish(() => {
+              if (requestToken !== previewRequestToken) {
+                reject(new Error("stale_preview_request"));
+                return;
+              }
+              resolve();
+            });
+          }
+
+          function handleError() {
+            finish(() => reject(new Error("browser_cannot_preview_local_file")));
+          }
+
+          timeoutId = window.setTimeout(() => {
+            handleError();
+          }, timeoutMs);
+
+          previewVideo.addEventListener("loadeddata", handleReady);
+          previewVideo.addEventListener("canplay", handleReady);
+          previewVideo.addEventListener("error", handleError);
+        });
+      }
+
+      async function tryLoadLocalPreview(file, requestToken) {
+        if (!window.URL || typeof window.URL.createObjectURL !== "function") {
+          throw new Error("browser_missing_local_preview_api");
+        }
+        revokePreviewObjectUrl();
+        previewObjectUrl = window.URL.createObjectURL(file);
+        previewVideo.removeAttribute("poster");
+        previewVideo.src = previewObjectUrl;
+        previewVideo.load();
+        await waitForPreviewReady(requestToken);
+      }
+
+      async function loadServerPreview(file, requestToken) {
+        const payload = new FormData();
+        payload.append("video_file", file, file.name);
+        const response = await fetch("{{ request.url_for('create_video_preview') }}", {
+          method: "POST",
+          body: payload,
+        });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.detail || "preview_failed");
+        }
+        const result = await response.json();
+        if (requestToken !== previewRequestToken) {
+          return;
+        }
+        revokePreviewObjectUrl();
+        previewVideo.src = result.preview_url;
+        if (result.poster_url) {
+          previewVideo.poster = result.poster_url;
+        }
+        previewVideo.load();
+      }
+
       async function loadPreviewFromFile() {
         const file = videoInput.files && videoInput.files[0];
         if (!isBraidedPreset() || !file) {
@@ -651,35 +747,33 @@
         previewRequestToken = requestToken;
         clearPreviewSource();
         previewPanel.classList.add("visible");
-        previewHint.textContent = "正在生成可播放预览，请稍等…";
+        previewHint.textContent = "正在准备预览，请稍等…";
         submitButton.disabled = true;
-        const payload = new FormData();
-        payload.append("video_file", file, file.name);
         try {
-          const response = await fetch("{{ request.url_for('create_video_preview') }}", {
-            method: "POST",
-            body: payload,
-          });
-          if (!response.ok) {
-            const body = await response.json().catch(() => ({}));
-            throw new Error(body.detail || "preview_failed");
-          }
-          const result = await response.json();
+          await tryLoadLocalPreview(file, requestToken);
           if (requestToken !== previewRequestToken) {
             return;
           }
-          previewVideo.src = result.preview_url;
-          if (result.poster_url) {
-            previewVideo.poster = result.poster_url;
-          }
-          previewVideo.load();
           updatePreviewLine();
-        } catch (error) {
+        } catch (_localError) {
           if (requestToken !== previewRequestToken) {
             return;
           }
           clearPreviewSource();
-          previewHint.textContent = `预览生成失败：${error.message || "请重新选择视频"}`;
+          previewHint.textContent = "当前浏览器不能直接预览原视频，正在生成兼容预览…";
+          try {
+            await loadServerPreview(file, requestToken);
+            if (requestToken !== previewRequestToken) {
+              return;
+            }
+            updatePreviewLine();
+          } catch (error) {
+            if (requestToken !== previewRequestToken) {
+              return;
+            }
+            clearPreviewSource();
+            previewHint.textContent = `预览生成失败：${error.message || "请重新选择视频"}`;
+          }
         }
         previewStage.focus();
         updateSubmitState();

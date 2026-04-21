@@ -39,7 +39,7 @@ from .pipeline import (
     analyze_video,
     compute_braided_acceptance,
 )
-from .process_debug_video import _open_browser_compatible_writer, render_process_debug_video
+from .process_debug_video import render_process_debug_video, transcode_video_for_browser
 from .synth_braided import (
     BraidedSyntheticModel,
     BraidedSyntheticModelConfig,
@@ -1455,7 +1455,12 @@ def _normalize_route_results(
     return normalized_results, route_results_by_alias
 
 
-def _prepare_summary_for_display(run: sqlite3.Row | dict[str, Any], summary: dict[str, Any] | None) -> dict[str, Any] | None:
+def _prepare_summary_for_display(
+    run: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any] | None,
+    *,
+    backfill_smoothed: bool = True,
+) -> dict[str, Any] | None:
     if summary is None:
         return None
     prepared = dict(summary)
@@ -1504,7 +1509,8 @@ def _prepare_summary_for_display(run: sqlite3.Row | dict[str, Any], summary: dic
     direction_result = prepared.get("direction_result")
     if isinstance(direction_result, dict):
         prepared["direction_result"] = dict(direction_result)
-    prepared = _backfill_smoothed_summary_fields(run, prepared)
+    if backfill_smoothed:
+        prepared = _backfill_smoothed_summary_fields(run, prepared)
     return _augment_reported_result_fields(prepared)
 
 
@@ -2027,7 +2033,7 @@ def _build_benchmark_page_data() -> dict[str, Any]:
 
 def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
     payload = dict(run)
-    summary = _prepare_summary_for_display(payload, _load_summary(payload["id"]))
+    summary = _prepare_summary_for_display(payload, _load_summary(payload["id"]), backfill_smoothed=False)
     payload["summary"] = summary
     if summary is not None:
         payload["reportability_status"] = summary.get("reportability_status")
@@ -2038,6 +2044,29 @@ def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
     payload["status_label"] = _run_status_label(payload.get("status"))
     payload["can_delete"] = payload.get("status") not in {"queued", "running"}
     return payload
+
+
+def _run_detail_refresh_needed(run: sqlite3.Row | dict[str, Any], summary: dict[str, Any] | None) -> bool:
+    status = run.get("status") if isinstance(run, dict) else run["status"]
+    return status in {"queued", "running"} or bool(
+        summary and summary.get("asset_generation_status") in {"pending", "running"}
+    )
+
+
+def _run_status_payload(run: sqlite3.Row | dict[str, Any], summary: dict[str, Any] | None) -> dict[str, Any]:
+    run_payload = dict(run)
+    summary_payload = summary if isinstance(summary, dict) else {}
+    refresh = _run_detail_refresh_needed(run_payload, summary_payload)
+    return {
+        "id": run_payload["id"],
+        "status": run_payload["status"],
+        "status_label": _run_status_label(run_payload["status"]),
+        "asset_generation_status": summary_payload.get("asset_generation_status"),
+        "asset_generation_error": summary_payload.get("asset_generation_error"),
+        "error_text": run_payload.get("error_text"),
+        "refresh": refresh,
+        "active": refresh,
+    }
 
 
 templates.env.globals.update(
@@ -2280,6 +2309,14 @@ def delete_run(request: Request, run_id: str) -> RedirectResponse:
     return RedirectResponse(url=f"{request.url_for('history')}?deleted=1", status_code=303)
 
 
+@app.get("/runs/{run_id}/status")
+def run_status(run_id: str) -> dict[str, Any]:
+    run_row = _get_run(run_id)
+    if run_row is None:
+        raise HTTPException(status_code=404, detail="run not found")
+    return _run_status_payload(run_row, _load_summary(run_id))
+
+
 @app.get("/runs/{run_id}")
 def run_detail(request: Request, run_id: str) -> Any:
     run_row = _get_run(run_id)
@@ -2287,8 +2324,7 @@ def run_detail(request: Request, run_id: str) -> Any:
         raise HTTPException(status_code=404, detail="run not found")
     run = dict(run_row)
 
-    summary = _prepare_summary_for_display(run, _load_summary(run_id))
-    _refresh_plot_outputs_for_display(run, summary)
+    summary = _prepare_summary_for_display(run, _load_summary(run_id), backfill_smoothed=False)
     temperature_available = bool(
         run.get("temperature_filename")
         or (summary and (summary.get("temperature_c_min") is not None or summary.get("temperature_c_max") is not None))
@@ -2304,8 +2340,8 @@ def run_detail(request: Request, run_id: str) -> Any:
             rel = path.relative_to(DATA_ROOT).as_posix()
             if path.suffix.lower() in {".mp4", ".webm"}:
                 poster_url = None
-                poster_path = _ensure_video_poster(path)
-                if poster_path is not None:
+                poster_path = path.with_name(f"{path.stem}_poster.jpg")
+                if poster_path.exists():
                     poster_rel = poster_path.relative_to(DATA_ROOT).as_posix()
                     poster_url = str(request.url_for("files", path=poster_rel))
                 payload = {
@@ -2395,8 +2431,7 @@ def run_detail(request: Request, run_id: str) -> Any:
             "direction_metric_curve": direction_metric_curve,
             "direction_recovery_curve": direction_recovery_curve,
             "download_files": download_files,
-            "refresh": run["status"] in {"queued", "running"}
-            or bool(summary and summary.get("asset_generation_status") in {"pending", "running"}),
+            "refresh": _run_detail_refresh_needed(run, summary),
             "preset_label": _preset_label,
             "preset_description": _preset_description,
             "mode_label": _mode_label,
@@ -2447,6 +2482,13 @@ for _prefix in PATH_PREFIX_ALIASES:
         methods=["POST"],
         include_in_schema=False,
         name=f"create_video_preview{_prefix}",
+    )
+    app.add_api_route(
+        f"{_prefix}/runs/{{run_id}}/status",
+        run_status,
+        methods=["GET"],
+        include_in_schema=False,
+        name=f"run_status{_prefix}",
     )
     app.add_api_route(
         f"{_prefix}/runs/{{run_id}}",
@@ -3355,68 +3397,7 @@ def _cleanup_preview_cache(*, max_age_hours: float = 24.0) -> None:
 
 
 def _transcode_preview_video(source_path: Path, output_path: Path) -> Path:
-    capture = cv2.VideoCapture(str(source_path))
-    if not capture.isOpened():
-        raise RuntimeError("failed to open source video")
-
-    source_fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-    if not np.isfinite(source_fps) or source_fps <= 0.0:
-        source_fps = 20.0
-    source_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
-    source_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-    if source_width <= 0 or source_height <= 0:
-        ok, frame = capture.read()
-        if not ok or frame is None:
-            capture.release()
-            raise RuntimeError("source video contains no readable frames")
-        source_height, source_width = frame.shape[:2]
-        capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
-    max_width = 960
-    if source_width > max_width:
-        scale = max_width / float(source_width)
-        target_width = int(round(source_width * scale))
-        target_height = int(round(source_height * scale))
-    else:
-        target_width = source_width
-        target_height = source_height
-    target_width = max(2, target_width - (target_width % 2))
-    target_height = max(2, target_height - (target_height % 2))
-
-    target_fps = min(source_fps, 15.0)
-    frame_step = max(1, int(round(source_fps / target_fps)))
-    writer = _open_browser_compatible_writer(
-        output_path=output_path,
-        fps=max(target_fps, 1.0),
-        frame_size=(target_width, target_height),
-    )
-    if writer is None:
-        capture.release()
-        raise RuntimeError("failed to open preview writer")
-    final_output_path = writer.output_path
-
-    frame_idx = 0
-    wrote_any = False
-    try:
-        while True:
-            ok, frame = capture.read()
-            if not ok:
-                break
-            if frame_idx % frame_step != 0:
-                frame_idx += 1
-                continue
-            if frame.shape[1] != target_width or frame.shape[0] != target_height:
-                frame = cv2.resize(frame, (target_width, target_height), interpolation=cv2.INTER_AREA)
-            writer.write(frame)
-            wrote_any = True
-            frame_idx += 1
-    finally:
-        capture.release()
-        writer.release()
-
-    if not wrote_any:
-        raise RuntimeError("source video contains no frames for preview")
-    return final_output_path
+    return transcode_video_for_browser(source_path, output_path, max_width=960, max_fps=15.0)
 
 
 def _connect_db() -> sqlite3.Connection:

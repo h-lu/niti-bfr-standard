@@ -17,7 +17,6 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ worker_object_label(run['preset']) }}测量结果</title>
-    {% if refresh %}<meta http-equiv="refresh" content="3">{% endif %}
     {% include "_theme.html" %}
     <style>
       .detail-stack {
@@ -450,8 +449,8 @@
         </section>
 
         {% if refresh %}
-        <section class="section-card">
-          <div class="empty">处理中，页面会自动刷新。</div>
+        <section class="section-card" id="run_status_panel" aria-live="polite">
+          <div class="empty" id="run_status_text">处理中，页面会自动更新状态。</div>
         </section>
         {% endif %}
 
@@ -704,6 +703,54 @@
           closeLightbox();
         }
       });
+
+      const runStatusUrl = "{{ request.url_for('run_status', run_id=run['id']) }}";
+      const shouldPollRunStatus = {{ "true" if refresh else "false" }};
+      const runStatusText = document.getElementById("run_status_text");
+      let runStatusTimer = null;
+
+      function renderRunStatus(payload) {
+        const parts = [];
+        if (payload.status_label || payload.status) {
+          parts.push(payload.status_label || payload.status);
+        }
+        if (payload.asset_generation_status === "pending" || payload.asset_generation_status === "running") {
+          parts.push("输出文件生成中");
+        }
+        if (payload.asset_generation_error) {
+          parts.push("输出文件生成失败");
+        }
+        return parts.length ? parts.join(" · ") : "处理中";
+      }
+
+      async function pollRunStatus() {
+        try {
+          const response = await fetch(runStatusUrl, {
+            headers: { "Accept": "application/json" },
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            return;
+          }
+          const payload = await response.json();
+          if (runStatusText) {
+            runStatusText.textContent = renderRunStatus(payload);
+          }
+          if (!payload.refresh) {
+            if (runStatusTimer) {
+              window.clearInterval(runStatusTimer);
+            }
+            window.location.reload();
+          }
+        } catch (error) {
+          // Keep the existing page usable if a transient polling request fails.
+        }
+      }
+
+      if (shouldPollRunStatus) {
+        window.setTimeout(pollRunStatus, 1000);
+        runStatusTimer = window.setInterval(pollRunStatus, 3000);
+      }
     </script>
   </body>
 </html>

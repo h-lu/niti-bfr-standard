@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 import cv2
 import numpy as np
@@ -25,12 +30,19 @@ ObjectType = Literal["wire_like", "braided_like"]
 class BrowserCompatibleWriter:
     writer: cv2.VideoWriter
     output_path: Path
+    finalizer: Callable[[], Path] | None = None
+    _released: bool = field(default=False, init=False, repr=False)
 
     def write(self, frame: np.ndarray) -> None:
         self.writer.write(frame)
 
     def release(self) -> None:
+        if self._released:
+            return
         self.writer.release()
+        self._released = True
+        if self.finalizer is not None:
+            self.output_path = self.finalizer()
 
     def isOpened(self) -> bool:
         return bool(self.writer.isOpened())
@@ -87,20 +99,14 @@ def render_process_debug_video(
         cap.release()
         raise ValueError("output_fps must be positive")
 
-    writer_spec = _open_browser_compatible_writer(
+    writer = _open_browser_compatible_writer(
         output_path=output_path,
         fps=rendered_fps,
         frame_size=(source_width + SIDEBAR_WIDTH, source_height),
     )
-    if writer_spec is None:
+    if writer is None:
         cap.release()
         raise RuntimeError(f"failed to open video writer: {output_path}")
-    if isinstance(writer_spec, BrowserCompatibleWriter):
-        writer = writer_spec.writer
-        final_output_path = writer_spec.output_path
-    else:
-        writer = writer_spec
-        final_output_path = output_path
 
     next_frame_pos: int | None = None
     braided_tracking_state: BraidedTrackingState | None = None
@@ -151,7 +157,9 @@ def render_process_debug_video(
         cap.release()
         writer.release()
 
-    return final_output_path
+    if isinstance(writer, BrowserCompatibleWriter):
+        return writer.output_path
+    return output_path
 
 
 def _open_browser_compatible_writer(
@@ -160,8 +168,24 @@ def _open_browser_compatible_writer(
     fps: float,
     frame_size: tuple[int, int],
 ) -> BrowserCompatibleWriter | None:
-    # Prefer H.264 MP4. If this host cannot encode H.264, fall back to WebM,
-    # because mp4v often downloads fine but fails inside browser <video>.
+    if _ffmpeg_available():
+        intermediate_path, writer = _open_ffmpeg_intermediate_writer(output_path=output_path, fps=fps, frame_size=frame_size)
+        if writer is not None:
+            target_path, codec_args = _preferred_browser_output(output_path)
+
+            def _finalize() -> Path:
+                try:
+                    return _ffmpeg_transcode(
+                        source_path=intermediate_path,
+                        output_path=target_path,
+                        codec_args=codec_args,
+                    )
+                finally:
+                    intermediate_path.unlink(missing_ok=True)
+
+            return BrowserCompatibleWriter(writer=writer, output_path=target_path, finalizer=_finalize)
+
+    # Fallback when ffmpeg is unavailable: try direct browser codecs via OpenCV.
     for codec in ("avc1", "H264"):
         writer = cv2.VideoWriter(
             str(output_path),
@@ -185,6 +209,160 @@ def _open_browser_compatible_writer(
             return BrowserCompatibleWriter(writer=writer, output_path=webm_output_path)
         writer.release()
     return None
+
+
+def transcode_video_for_browser(
+    source_path: str | Path,
+    output_path: str | Path,
+    *,
+    max_width: int | None = None,
+    max_fps: float | None = None,
+) -> Path:
+    source_path = Path(source_path).resolve()
+    output_path = Path(output_path).resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if not _ffmpeg_available():
+        raise RuntimeError("ffmpeg is not installed")
+
+    target_path, codec_args = _preferred_browser_output(output_path)
+    vf_parts: list[str] = []
+    if max_fps is not None and max_fps > 0:
+        vf_parts.append(f"fps={float(max_fps):g}")
+    if max_width is not None and max_width > 0:
+        vf_parts.append(f"scale=min({int(max_width)}\\,iw):-2:force_original_aspect_ratio=decrease")
+
+    return _ffmpeg_transcode(
+        source_path=source_path,
+        output_path=target_path,
+        codec_args=codec_args,
+        vf=",".join(vf_parts) if vf_parts else None,
+    )
+
+
+def _open_ffmpeg_intermediate_writer(
+    *,
+    output_path: Path,
+    fps: float,
+    frame_size: tuple[int, int],
+) -> tuple[Path, cv2.VideoWriter | None]:
+    avi_path = _reserve_temp_video_path(output_path, suffix=".avi")
+    for codec in ("MJPG",):
+        writer = cv2.VideoWriter(
+            str(avi_path),
+            cv2.VideoWriter_fourcc(*codec),
+            fps,
+            frame_size,
+        )
+        if writer.isOpened():
+            return avi_path, writer
+        writer.release()
+    avi_path.unlink(missing_ok=True)
+
+    mp4_path = _reserve_temp_video_path(output_path, suffix=".mp4")
+    for codec in ("mp4v",):
+        writer = cv2.VideoWriter(
+            str(mp4_path),
+            cv2.VideoWriter_fourcc(*codec),
+            fps,
+            frame_size,
+        )
+        if writer.isOpened():
+            return mp4_path, writer
+        writer.release()
+    mp4_path.unlink(missing_ok=True)
+    return mp4_path, None
+
+
+def _reserve_temp_video_path(output_path: Path, *, suffix: str) -> Path:
+    fd, raw_path = tempfile.mkstemp(prefix=f"{output_path.stem}-", suffix=suffix, dir=str(output_path.parent))
+    os.close(fd)
+    temp_path = Path(raw_path)
+    temp_path.unlink(missing_ok=True)
+    return temp_path
+
+
+@lru_cache(maxsize=1)
+def _ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None
+
+
+@lru_cache(maxsize=None)
+def _ffmpeg_supports_encoder(encoder: str) -> bool:
+    if not _ffmpeg_available():
+        return False
+    result = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-encoders"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0 and encoder in result.stdout
+
+
+def _preferred_browser_output(output_path: Path) -> tuple[Path, list[str]]:
+    if _ffmpeg_supports_encoder("libx264"):
+        return output_path, ["-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"]
+    webm_output_path = output_path.with_suffix(".webm")
+    if _ffmpeg_supports_encoder("libvpx-vp9"):
+        return webm_output_path, [
+            "-c:v",
+            "libvpx-vp9",
+            "-pix_fmt",
+            "yuv420p",
+            "-row-mt",
+            "1",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-b:v",
+            "0",
+            "-crf",
+            "40",
+        ]
+    if _ffmpeg_supports_encoder("libvpx"):
+        return webm_output_path, [
+            "-c:v",
+            "libvpx",
+            "-pix_fmt",
+            "yuv420p",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            "-b:v",
+            "1M",
+        ]
+    raise RuntimeError("ffmpeg has no supported browser video encoder")
+
+
+def _ffmpeg_transcode(
+    *,
+    source_path: Path,
+    output_path: Path,
+    codec_args: list[str],
+    vf: str | None = None,
+) -> Path:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.unlink(missing_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(source_path),
+    ]
+    if vf:
+        cmd.extend(["-vf", vf])
+    cmd.extend(["-an", *codec_args, str(output_path)])
+    result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+    if result.returncode != 0 or not output_path.exists() or output_path.stat().st_size <= 0:
+        detail = (result.stderr or result.stdout or "ffmpeg transcode failed").strip()
+        raise RuntimeError(detail)
+    return output_path
 
 
 def _normalize_object_type(

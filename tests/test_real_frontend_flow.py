@@ -14,6 +14,30 @@ from niti_bfr import webapp
 from niti_bfr.pipeline import AnalysisResult, analyze_video
 
 
+class _FakeRequest:
+    query_params: dict[str, str]
+
+    def __init__(self, query_params: dict[str, str] | None = None) -> None:
+        self.query_params = dict(query_params or {})
+
+    def url_for(self, name: str, **path_params: object) -> str:
+        if name == "home":
+            return "/"
+        if name == "history":
+            return "/history"
+        if name == "run_detail":
+            return f"/runs/{path_params['run_id']}"
+        if name == "delete_run":
+            return f"/runs/{path_params['run_id']}/delete"
+        if name == "create_run":
+            return "/runs"
+        if name == "create_video_preview":
+            return "/preview-video"
+        if name == "files":
+            return f"/files/{path_params['path']}"
+        return f"/{name}"
+
+
 class RealFrontendFlowTests(unittest.TestCase):
     def _patched_storage(self, tmpdir: str):
         base = Path(tmpdir)
@@ -103,6 +127,60 @@ class RealFrontendFlowTests(unittest.TestCase):
         text = response.text
         self.assertNotIn("正式结果温度", text)
         self.assertNotIn("参考结果温度", text)
+
+    def test_home_and_history_do_not_backfill_summaries_from_analysis_csv(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp):
+                webapp._ensure_storage()
+                run_id = "list-page-no-backfill"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "completed",
+                        "run_name": "list no backfill",
+                        "preset": "demo",
+                        "requested_mode": "formal_af",
+                        "frame_stride": 1,
+                        "actual_mode": "formal_af",
+                        "formal_metric_label": "kappa_fit",
+                        "formal_gate_reason": None,
+                        "af95_c": 52.8,
+                        "aftan_c": 50.8,
+                        "original_frame_count": 3,
+                        "analyzed_frame_count": 3,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": "temp.csv",
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+                (outputs_dir / "summary.json").write_text(
+                    '{"preset":"demo","requested_mode":"formal_af","actual_mode":"formal_af",'
+                    '"formal_metric_label":"kappa_fit","route_results":[{"alias":"B","metric_key":"kappa_fit"}]}',
+                    encoding="utf-8",
+                )
+                (outputs_dir / "analysis.csv").write_text(
+                    "temperature_c,kappa_fit_recovery\n20,0\n60,1\n",
+                    encoding="utf-8",
+                )
+                with (
+                    mock.patch.object(webapp.pd, "read_csv", autospec=True) as read_csv,
+                    mock.patch.object(webapp, "_write_summary", autospec=True) as write_summary,
+                ):
+                    home_response = webapp.home(_FakeRequest())
+                    history_response = webapp.history(_FakeRequest())
+                    home_response.body
+                    history_response.body
+
+        self.assertEqual(home_response.status_code, 200)
+        self.assertEqual(history_response.status_code, 200)
+        read_csv.assert_not_called()
+        write_summary.assert_not_called()
 
     def test_history_page_supports_deleting_completed_runs(self) -> None:
         with TemporaryDirectory() as tmp:
