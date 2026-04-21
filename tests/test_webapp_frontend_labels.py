@@ -98,8 +98,8 @@ class WebappFrontendLabelTests(unittest.TestCase):
             "reportability_status": "reportable_with_warning",
         }
         hint = _run_result_hint(run)
-        self.assertIn("formal Af 未放行", hint)
-        self.assertIn("临时结果", hint)
+        self.assertIn("已汇报计算结果", hint)
+        self.assertIn("调试提示", hint)
 
     def test_result_hint_shows_formal_success(self) -> None:
         run = {
@@ -143,6 +143,9 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(prepared["route_results_schema_version"], ROUTE_RESULTS_SCHEMA_VERSION)
         self.assertEqual([entry["alias"] for entry in prepared["route_results"]], ["A", "B", "C"])
         self.assertEqual(prepared["recommended_route_alias"], "C")
+        self.assertEqual(prepared["object_reported_route_alias"], "C")
+        self.assertEqual(prepared["object_reported_af95_c"], 60.5)
+        self.assertEqual(prepared["object_reported_aftan_c"], 57.5)
         self.assertEqual(prepared["route_results_by_alias"]["A"]["reportability_status"], "formal_blocked")
         self.assertEqual(prepared["route_results_by_alias"]["B"]["gate_reason"], "insufficient_kappa_points")
         self.assertEqual(prepared["route_results_by_alias"]["C"]["reportability_status"], "provisional")

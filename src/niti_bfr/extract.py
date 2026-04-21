@@ -15,6 +15,7 @@ class ExtractionConfig:
     threshold_dark: int = 100
     open_kernel: int = 3
     close_kernel: int = 5
+    component_bridge_kernel: int = 11
     min_component_area: int = 80
     anchor_top_band_px: int = 24
     fit_bin_px: float = 3.0
@@ -60,6 +61,124 @@ def _largest_component(mask: np.ndarray) -> np.ndarray:
             best_label = label
             best_area = area
     return (labels == best_label).astype(np.uint8) * 255
+
+
+def _component_anchor_seed_local(
+    mask: np.ndarray,
+    config: ExtractionConfig,
+    roi_offset_xy: np.ndarray | None,
+) -> np.ndarray:
+    rows, cols = np.where(mask > 0)
+    if len(rows) == 0:
+        raise RuntimeError("needle component not found")
+    points = np.column_stack([cols, rows]).astype(float)
+    top_band = points[:, 1] <= points[:, 1].min() + config.anchor_top_band_px
+    top_points = points[top_band] if np.any(top_band) else points
+    seed = top_points.mean(axis=0)
+    if config.anchor_prior_xy is not None and roi_offset_xy is not None and config.anchor_prior_weight > 0.0:
+        local_prior = np.asarray(config.anchor_prior_xy, dtype=float) - roi_offset_xy
+        weight = float(np.clip(config.anchor_prior_weight, 0.0, 1.0))
+        seed = (1.0 - weight) * seed + weight * local_prior
+    return seed
+
+
+def _merge_distal_fragments(
+    mask: np.ndarray,
+    config: ExtractionConfig,
+    roi_offset_xy: np.ndarray | None,
+) -> np.ndarray:
+    num, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
+    if num <= 2:
+        return _largest_component(mask)
+
+    seed = _component_anchor_seed_local(mask, config, roi_offset_xy)
+    component_points: dict[int, np.ndarray] = {}
+    component_centroids: dict[int, np.ndarray] = {}
+    component_distances: dict[int, np.ndarray] = {}
+    best_label = 0
+    best_distance = float("inf")
+    for label in range(1, num):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < max(1, int(config.min_component_area)):
+            continue
+        rows, cols = np.where(labels == label)
+        if len(rows) == 0:
+            continue
+        points = np.column_stack([cols, rows]).astype(float)
+        component_points[label] = points
+        component_centroids[label] = points.mean(axis=0)
+        distances = np.linalg.norm(points - seed[None, :], axis=1)
+        component_distances[label] = distances
+        label_distance = float(np.min(distances))
+        if label_distance < best_distance:
+            best_distance = label_distance
+            best_label = label
+
+    if best_label == 0:
+        return _largest_component(mask)
+
+    main_points = component_points[best_label]
+    farthest_point = main_points[int(np.argmax(component_distances[best_label]))]
+    distal_direction = farthest_point - seed
+    distal_norm = float(np.linalg.norm(distal_direction))
+    if distal_norm < 1e-6:
+        return (labels == best_label).astype(np.uint8) * 255
+    distal_direction /= distal_norm
+    normal = np.array([-distal_direction[1], distal_direction[0]], dtype=float)
+    main_along = (main_points - seed[None, :]) @ distal_direction
+    main_along_max = float(np.max(main_along))
+
+    combined = np.zeros_like(mask)
+    combined[labels == best_label] = 255
+    join_distance_px = max(24.0, 2.0 * float(max(config.close_kernel, config.component_bridge_kernel)))
+    lateral_limit_px = max(24.0, 0.08 * max(main_along_max, 1.0))
+    distal_area_floor = max(24, int(config.min_component_area * 0.2))
+    bridge_thickness = max(1, int(np.ceil(max(config.close_kernel, 1) / 2.0)))
+
+    for label, points in component_points.items():
+        if label == best_label:
+            continue
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < distal_area_floor:
+            continue
+        centroid = component_centroids[label]
+        rel_centroid = centroid - seed
+        along = float(rel_centroid @ distal_direction)
+        lateral = float(abs(rel_centroid @ normal))
+        if along <= main_along_max:
+            continue
+        if lateral > lateral_limit_px:
+            continue
+        deltas = main_points[:, None, :] - points[None, :, :]
+        distances = np.linalg.norm(deltas, axis=2)
+        best_pair = np.unravel_index(int(np.argmin(distances)), distances.shape)
+        min_distance = float(distances[best_pair])
+        if min_distance > join_distance_px:
+            continue
+        combined[labels == label] = 255
+        main_bridge_point = tuple(np.round(main_points[best_pair[0]]).astype(int))
+        fragment_bridge_point = tuple(np.round(points[best_pair[1]]).astype(int))
+        cv2.line(combined, main_bridge_point, fragment_bridge_point, 255, thickness=bridge_thickness, lineType=cv2.LINE_8)
+
+    return combined if int(np.count_nonzero(combined)) else _largest_component(mask)
+
+
+def _component_mask(
+    mask: np.ndarray,
+    config: ExtractionConfig,
+    roi_offset_xy: np.ndarray | None = None,
+) -> np.ndarray:
+    component_mask = mask
+    # A wire can split into two islands for a frame or two when the distal straight segment
+    # drops slightly below the dark-threshold response. Use a stronger close only for component
+    # selection so we reconnect small gaps without changing the downstream contour definition.
+    component_bridge_kernel = max(int(config.close_kernel), int(config.component_bridge_kernel), 1)
+    if component_bridge_kernel % 2 == 0:
+        component_bridge_kernel += 1
+    if component_bridge_kernel > max(int(config.close_kernel), 1):
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (component_bridge_kernel, component_bridge_kernel))
+        component_mask = cv2.morphologyEx(component_mask, cv2.MORPH_CLOSE, kernel)
+    return _merge_distal_fragments(component_mask, config, roi_offset_xy)
 
 
 def _component_contour(component: np.ndarray) -> np.ndarray:
@@ -459,19 +578,19 @@ def extract_geometry(frame_bgr: np.ndarray, config: ExtractionConfig) -> Extract
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
     x0, y0, x1, y1 = config.roi_xyxy
     crop = gray[y0:y1, x0:x1]
+    roi_offset_xy = np.array([x0, y0], dtype=float)
     blur = cv2.GaussianBlur(crop, (config.blur_ksize, config.blur_ksize), 0)
     mask = (blur < config.threshold_dark).astype(np.uint8) * 255
     open_kernel = np.ones((config.open_kernel, config.open_kernel), np.uint8)
     close_kernel = np.ones((config.close_kernel, config.close_kernel), np.uint8)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, close_kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, open_kernel)
-    component = _largest_component(mask)
+    component = _component_mask(mask, config, roi_offset_xy)
     if int(np.count_nonzero(component)) < config.min_component_area:
         raise RuntimeError("needle component not found")
 
     contour_local = _component_contour(component)
     contour_global = contour_local + np.array([x0, y0], dtype=float)
-    roi_offset_xy = np.array([x0, y0], dtype=float)
     anchor_reference_local = _anchor_reference(contour_local, config, roi_offset_xy)
     skeleton_path_local = _extract_skeleton_path_local(component, anchor_reference_local)
     tangent = _estimate_path_tangent(skeleton_path_local)
