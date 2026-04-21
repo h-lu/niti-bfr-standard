@@ -4,292 +4,171 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>测量分析台</title>
+    {% include "_theme.html" %}
     <style>
-      :root {
-        --bg: #f4efe7;
-        --card: #fffaf4;
-        --card-soft: #f8f1e7;
-        --line: #e7ddd0;
-        --text: #1f2b36;
-        --muted: #67727c;
-        --accent: #b56233;
-        --accent-soft: #f4e6d9;
-        --ok: #2f7a4f;
-        --ok-soft: #e9f5ed;
-        --warn: #a76c14;
-        --warn-soft: #fbf0db;
-        --info: #2d6270;
-        --info-soft: #e8f2f4;
-        --danger: #a34738;
-        --danger-soft: #f8e9e5;
-        --shadow: 0 18px 42px rgba(63, 45, 25, 0.08);
-        --font-ui: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-      }
-
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        background: linear-gradient(180deg, #f6f1e8 0%, #f1eadf 100%);
-        color: var(--text);
-        font-family: var(--font-ui);
-      }
-      a {
-        color: inherit;
-        text-decoration: none;
-      }
-      button, input, select {
-        font: inherit;
-      }
-      .shell {
-        max-width: 1160px;
-        margin: 0 auto;
-        padding: 24px 16px 40px;
-      }
-      .topbar {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 18px;
-      }
-      .brand {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-      }
-      .brand-mark {
-        width: 42px;
-        height: 42px;
-        border-radius: 14px;
+      .home-layout {
         display: grid;
-        place-items: center;
-        color: white;
-        font-size: 16px;
-        font-weight: 800;
-        background: linear-gradient(135deg, var(--accent) 0%, #d99c61 100%);
-      }
-      .brand-copy strong {
-        display: block;
-        font-size: 20px;
-        line-height: 1.2;
-      }
-      .brand-copy span {
-        display: none;
-      }
-      .nav {
-        display: flex;
-        gap: 10px;
-        flex-wrap: wrap;
-      }
-      .nav-link {
-        min-height: 42px;
-        padding: 9px 15px;
-        border-radius: 999px;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.72);
-        color: var(--muted);
-        font-size: 14px;
-        font-weight: 700;
-      }
-      .nav-link.active {
-        border-color: var(--text);
-        background: var(--text);
-        color: white;
-      }
-      .layout {
-        display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+        grid-template-columns: minmax(0, 1.18fr) minmax(320px, 0.82fr);
         gap: 18px;
         align-items: start;
       }
-      .card {
-        background: rgba(255, 250, 244, 0.92);
-        border: 1px solid rgba(255, 255, 255, 0.65);
-        border-radius: 26px;
-        box-shadow: var(--shadow);
-      }
-      .main-card {
+
+      .main-panel,
+      .side-panel {
         padding: 28px;
       }
-      .side-card {
-        padding: 24px;
+
+      .hero-head {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 0.52fr);
+        gap: 18px;
+        align-items: stretch;
       }
-      h1 {
-        margin: 0 0 10px;
-        font-size: clamp(32px, 5vw, 46px);
-        line-height: 1.12;
+
+      .hero-copy {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
       }
-      .section {
-        margin-top: 24px;
+
+      .hero-visual {
+        min-height: 248px;
       }
-      .section h2,
-      .side-card h2 {
-        margin: 0 0 8px;
-        font-size: 24px;
+
+      .hero-visual img {
+        height: 100%;
       }
+
+      .form-section {
+        margin-top: 26px;
+      }
+
+      .form-section h2,
+      .side-panel h2 {
+        margin-bottom: 12px;
+      }
+
       .choice-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 12px;
       }
+
       .choice {
         width: 100%;
-        padding: 16px;
+        padding: 18px;
+        border-radius: 24px;
+        border: 1px solid rgba(16, 23, 34, 0.09);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.88) 0%, rgba(248, 243, 236, 0.92) 100%);
         text-align: left;
-        border-radius: 20px;
-        border: 1px solid var(--line);
-        background: white;
+        color: var(--ink-900);
         cursor: pointer;
-        transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.46);
+        transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease;
       }
+
+      .choice:hover {
+        transform: translateY(-1px);
+        border-color: rgba(42, 121, 132, 0.2);
+      }
+
       .choice.active {
-        border-color: rgba(181, 98, 51, 0.45);
-        background: #fff6ee;
-        box-shadow: 0 0 0 3px rgba(181, 98, 51, 0.10);
+        border-color: rgba(42, 121, 132, 0.28);
+        background:
+          linear-gradient(180deg, rgba(245, 251, 252, 0.95) 0%, rgba(241, 236, 228, 0.92) 100%);
+        box-shadow: 0 0 0 4px rgba(42, 121, 132, 0.08), var(--shadow-md);
       }
+
       .choice strong {
         display: block;
-        font-size: 17px;
+        margin-bottom: 8px;
+        font-size: 19px;
+        font-family: var(--font-serif);
       }
-      .visually-hidden {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border: 0;
+
+      .choice span {
+        display: block;
+        color: var(--ink-500);
+        font-size: 13px;
+        line-height: 1.66;
       }
+
       .form-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 14px;
       }
+
       .field {
         display: flex;
         flex-direction: column;
         gap: 8px;
       }
-      .field.full {
-        grid-column: 1 / -1;
-      }
-      label {
+
+      .field label {
         font-size: 13px;
-        font-weight: 700;
-      }
-      input,
-      select {
-        width: 100%;
-        min-height: 48px;
-        padding: 12px 14px;
-        border: 1px solid var(--line);
-        border-radius: 16px;
-        background: white;
-        color: var(--text);
-      }
-      input[type="file"] {
-        padding: 10px 12px;
-      }
-      input:focus-visible,
-      select:focus-visible,
-      .choice:focus-visible,
-      .submit:focus-visible {
-        outline: none;
-        box-shadow: 0 0 0 4px rgba(45, 98, 112, 0.12);
-      }
-      .mode-box {
-        margin-top: 16px;
-        padding: 14px 16px;
-        border-radius: 20px;
-        background: var(--info-soft);
-        border: 1px solid rgba(45, 98, 112, 0.14);
-      }
-      .mode-box.formal {
-        background: var(--accent-soft);
-        border-color: rgba(181, 98, 51, 0.18);
-      }
-      .mode-title {
-        display: block;
-        font-size: 15px;
         font-weight: 800;
+        letter-spacing: 0.03em;
       }
-      .mode-copy {
-        margin: 4px 0 0;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.6;
-      }
-      .actions {
-        margin-top: 18px;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-      }
-      .submit {
-        min-width: 200px;
-        min-height: 50px;
-        padding: 0 22px;
-        border: none;
-        border-radius: 999px;
-        background: var(--text);
-        color: white;
-        font-weight: 800;
-        cursor: pointer;
-      }
-      .submit[disabled] {
-        cursor: not-allowed;
-        opacity: 0.58;
-      }
+
       .preview-panel {
         display: none;
         margin-top: 18px;
         padding: 18px;
-        border-radius: 22px;
-        border: 1px solid rgba(45, 98, 112, 0.18);
-        background: rgba(255, 255, 255, 0.72);
+        border-radius: 26px;
+        border: 1px solid rgba(42, 121, 132, 0.16);
+        background:
+          linear-gradient(180deg, rgba(244, 250, 250, 0.84) 0%, rgba(250, 246, 239, 0.92) 100%);
       }
+
       .preview-panel.visible {
         display: block;
       }
+
       .preview-head {
         display: flex;
         justify-content: space-between;
         align-items: center;
         gap: 12px;
         flex-wrap: wrap;
-        margin-bottom: 12px;
+        margin-bottom: 14px;
       }
+
       .preview-head strong {
-        font-size: 16px;
+        font-size: 18px;
+        font-family: var(--font-serif);
       }
+
       .preview-hint {
         margin: 0;
-        color: var(--muted);
+        color: var(--ink-500);
         font-size: 13px;
-        line-height: 1.6;
+        line-height: 1.7;
       }
+
       .preview-stage {
         position: relative;
         overflow: hidden;
-        border-radius: 22px;
-        border: 1px solid var(--line);
-        background: #171717;
+        border-radius: 24px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background:
+          linear-gradient(180deg, rgba(8, 13, 19, 0.94) 0%, rgba(14, 22, 32, 0.98) 100%);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
       }
+
       .preview-stage video {
         width: 100%;
         max-height: 420px;
-        display: block;
-        background: #111;
+        background: #0d1219;
       }
+
       .preview-overlay {
         position: absolute;
         inset: 0;
         pointer-events: none;
       }
+
       .preview-line {
         position: absolute;
         top: 50%;
@@ -297,11 +176,13 @@
         width: 78%;
         height: 3px;
         border-radius: 999px;
-        background: linear-gradient(90deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.95) 16%, rgba(181,98,51,0.95) 50%, rgba(255,255,255,0.95) 84%, rgba(255,255,255,0.18) 100%);
+        background:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.92) 18%, rgba(182, 104, 55, 0.9) 50%, rgba(42, 121, 132, 0.94) 82%, rgba(255, 255, 255, 0.08) 100%);
         transform: translate(-50%, -50%) rotate(0deg);
         transform-origin: center center;
-        box-shadow: 0 0 22px rgba(255, 255, 255, 0.18);
+        box-shadow: 0 0 28px rgba(255, 255, 255, 0.18);
       }
+
       .preview-center {
         position: absolute;
         top: 50%;
@@ -310,160 +191,212 @@
         height: 22px;
         border-radius: 999px;
         background: #fff;
-        border: 3px solid var(--accent);
+        border: 3px solid var(--copper-600);
         transform: translate(-50%, -50%);
         pointer-events: auto;
         cursor: grab;
         touch-action: none;
-        box-shadow: 0 0 0 6px rgba(181, 98, 51, 0.14);
+        box-shadow: 0 0 0 7px rgba(182, 104, 55, 0.16);
       }
+
       .preview-center.dragging {
         cursor: grabbing;
-        box-shadow: 0 0 0 10px rgba(181, 98, 51, 0.18);
+        box-shadow: 0 0 0 10px rgba(182, 104, 55, 0.2);
       }
+
       .preview-meta {
-        margin-top: 12px;
         display: flex;
         flex-wrap: wrap;
         gap: 10px;
+        margin-top: 12px;
       }
+
       .preview-token {
         display: inline-flex;
         align-items: center;
         min-height: 34px;
         padding: 0 12px;
         border-radius: 999px;
-        background: var(--card-soft);
-        color: var(--muted);
+        background: rgba(16, 23, 34, 0.07);
+        color: var(--ink-500);
         font-size: 13px;
         font-weight: 700;
       }
+
       .preview-token.ready {
         background: var(--ok-soft);
         color: var(--ok);
       }
+
+      .mode-box {
+        margin-top: 18px;
+        padding: 16px 18px;
+        border-radius: 24px;
+        border: 1px solid rgba(42, 121, 132, 0.16);
+        background:
+          linear-gradient(180deg, rgba(236, 248, 249, 0.92) 0%, rgba(247, 244, 238, 0.9) 100%);
+      }
+
+      .mode-box.formal {
+        border-color: rgba(182, 104, 55, 0.2);
+        background:
+          linear-gradient(180deg, rgba(253, 244, 237, 0.94) 0%, rgba(248, 243, 236, 0.9) 100%);
+      }
+
+      .mode-title {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 16px;
+      }
+
+      .mode-copy {
+        margin: 0;
+        color: var(--ink-500);
+        font-size: 13px;
+        line-height: 1.66;
+      }
+
+      .actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 18px;
+      }
+
+      .submit {
+        min-width: 220px;
+        border-color: rgba(16, 23, 34, 0.92);
+        background:
+          linear-gradient(135deg, rgba(16, 23, 34, 0.96) 0%, rgba(42, 121, 132, 0.92) 100%);
+        color: #fffdfa;
+        box-shadow: 0 16px 28px rgba(19, 30, 42, 0.16);
+      }
+
+      .submit[disabled] {
+        opacity: 0.54;
+        cursor: not-allowed;
+        transform: none;
+      }
+
+      .side-panel {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+
       .runs-head {
         display: flex;
         justify-content: space-between;
         align-items: end;
         gap: 12px;
-        margin-bottom: 14px;
+        margin-bottom: 16px;
       }
+
       .runs-head a {
-        color: var(--info);
+        color: var(--teal-600);
         font-weight: 700;
       }
+
       .run-list {
         display: grid;
         gap: 12px;
       }
+
       .run-item {
-        padding: 16px;
-        border-radius: 20px;
-        background: white;
-        border: 1px solid var(--line);
+        padding: 18px;
+        border-radius: 24px;
+        border: 1px solid rgba(16, 23, 34, 0.08);
+        background: rgba(255, 255, 255, 0.54);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.42);
       }
+
       .run-top {
         display: flex;
         justify-content: space-between;
         align-items: start;
         gap: 10px;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
       }
+
       .run-title {
         margin: 0;
-        font-size: 17px;
-        line-height: 1.45;
+        font-size: 20px;
       }
-      .run-link {
+
+      .run-title a {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
-        margin-top: 10px;
-        color: var(--info);
-        font-size: 14px;
-        font-weight: 700;
+        gap: 8px;
       }
+
       .run-meta {
         display: flex;
         flex-wrap: wrap;
         gap: 8px;
-        margin-top: 8px;
+        margin-top: 10px;
       }
-      .token {
-        display: inline-flex;
-        align-items: center;
-        min-height: 28px;
-        padding: 0 10px;
-        border-radius: 999px;
-        background: var(--card-soft);
-        color: var(--muted);
-        font-size: 12px;
-        font-weight: 700;
-      }
+
       .badge {
         display: inline-flex;
         align-items: center;
-        min-height: 30px;
-        padding: 0 10px;
+        min-height: 32px;
+        padding: 0 12px;
         border-radius: 999px;
         font-size: 12px;
         font-weight: 800;
       }
-      .status-completed {
-        background: var(--ok-soft);
-        color: var(--ok);
-      }
-      .status-running {
-        background: var(--warn-soft);
-        color: var(--warn);
-      }
-      .status-queued {
-        background: var(--info-soft);
-        color: var(--info);
-      }
-      .status-failed {
-        background: var(--danger-soft);
-        color: var(--danger);
-      }
+
       .run-note {
         margin: 0;
-        color: var(--muted);
+        color: var(--ink-500);
         font-size: 13px;
-        line-height: 1.6;
-      }
-      .empty {
-        padding: 18px;
-        border-radius: 18px;
-        border: 1px dashed var(--line);
-        color: var(--muted);
-        line-height: 1.75;
+        line-height: 1.68;
       }
 
-      @media (max-width: 960px) {
-        .layout {
+      .run-link {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 12px;
+        color: var(--teal-600);
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      @media (max-width: 1120px) {
+        .home-layout {
           grid-template-columns: 1fr;
         }
       }
-      @media (max-width: 720px) {
-        .shell {
-          padding: 18px 12px 30px;
-        }
-        .topbar,
-        .actions,
-        .runs-head,
-        .run-top {
-          flex-direction: column;
-          align-items: stretch;
-        }
-        .choice-grid,
+
+      @media (max-width: 860px) {
+        .hero-head,
         .form-grid {
           grid-template-columns: 1fr;
         }
-        .main-card,
-        .side-card {
+      }
+
+      @media (max-width: 720px) {
+        .main-panel,
+        .side-panel {
           padding: 20px;
         }
+
+        .topbar,
+        .actions,
+        .runs-head,
+        .run-top,
+        .preview-head {
+          flex-direction: column;
+          align-items: stretch;
+        }
+
+        .choice-grid {
+          grid-template-columns: 1fr;
+        }
+
         .submit {
           width: 100%;
         }
@@ -471,36 +404,47 @@
     </style>
   </head>
   <body>
-    <div class="shell">
+    <div class="page-shell">
       <header class="topbar">
-        <div class="brand">
-          <div class="brand-mark">测</div>
-          <div class="brand-copy">
-            <strong>测量分析台</strong>
-          </div>
-        </div>
+        <a class="brand" href="{{ request.url_for('home') }}">
+          <span class="brand-mark">NB</span>
+          <span class="brand-copy">
+            <strong>NiTi BFR</strong>
+          </span>
+        </a>
         <nav class="nav" aria-label="主导航">
           <a class="nav-link active" href="{{ request.url_for('home') }}">新建任务</a>
           <a class="nav-link" href="{{ request.url_for('history') }}">历史记录</a>
         </nav>
       </header>
 
-      <div class="layout">
-        <main class="card main-card">
-          <h1>上传视频开始分析</h1>
+      <div class="home-layout">
+        <main class="hero-surface main-panel">
+          <div class="hero-head">
+            <div class="hero-copy">
+              <span class="eyebrow">分析台</span>
+              <h1 class="display-title">上传视频开始分析</h1>
+            </div>
+
+            <figure class="ambient-art hero-visual" aria-hidden="true">
+              <img src="{{ request.url_for('assets', path='niti-editorial-hero.png') }}" alt="">
+            </figure>
+          </div>
 
           <form action="{{ request.url_for('create_run') }}" method="post" enctype="multipart/form-data">
             <input id="requested_mode" name="requested_mode" type="hidden" value="quicklook">
             <input id="direction_angle_deg" name="direction_angle_deg" type="hidden" value="">
 
-            <section class="section">
+            <section class="form-section">
               <h2>对象类型</h2>
               <div class="choice-grid">
                 <button class="choice active" data-preset="wire_like" type="button">
                   <strong>细丝对象</strong>
+                  <span>适合单根、主轴清晰、由弯曲到更直的细丝类视频。</span>
                 </button>
                 <button class="choice" data-preset="braided_like" type="button">
                   <strong>编织对象</strong>
+                  <span>适合编织类主体，支持方向预览与手动确认。</span>
                 </button>
               </div>
 
@@ -513,7 +457,7 @@
               </div>
             </section>
 
-            <section class="section">
+            <section class="form-section">
               <h2>上传内容</h2>
               <div class="form-grid">
                 <div class="field">
@@ -567,48 +511,51 @@
           </form>
         </main>
 
-        <aside class="card side-card">
-          <div class="runs-head">
-            <h2>最近任务</h2>
-            <a href="{{ request.url_for('history') }}">查看全部</a>
-          </div>
+        <aside class="surface side-panel">
+          <div>
+            <div class="runs-head">
+              <h2>最近任务</h2>
+              <a href="{{ request.url_for('history') }}">查看全部</a>
+            </div>
 
-          {% if runs %}
-          <div class="run-list">
-            {% for run in runs %}
-            <article class="run-item">
-              <div class="run-top">
-                <div>
-                  <h3 class="run-title">
-                    <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">任务 {{ loop.index }}</a>
-                  </h3>
-                  <div class="run-meta">
-                    <span class="token">{{ "细丝对象" if run["preset"] in ("wire_like", "demo") else "编织对象" }}</span>
-                    <span class="token">{{ "已带温度表" if run["temperature_filename"] else "未带温度表" }}</span>
-                    <span class="token">{{ run["created_at"][:19].replace("T", " ") }}</span>
+            {% if runs %}
+            <div class="run-list">
+              {% for run in runs %}
+              <article class="run-item">
+                <div class="run-top">
+                  <div>
+                    <h3 class="run-title">
+                      <a href="{{ request.url_for('run_detail', run_id=run['id']) }}">任务 {{ loop.index }}</a>
+                    </h3>
+                    <div class="run-meta">
+                      <span class="token">{{ "细丝对象" if run["preset"] in ("wire_like", "demo") else "编织对象" }}</span>
+                      <span class="token">{{ "已带温度表" if run["temperature_filename"] else "未带温度表" }}</span>
+                      <span class="token">{{ run["created_at"][:19].replace("T", " ") }}</span>
+                    </div>
                   </div>
+                  <span class="badge status-{{ run['status'] }}">{{ run["status_label"] }}</span>
                 </div>
-                <span class="badge status-{{ run['status'] }}">{{ run["status_label"] }}</span>
-              </div>
 
-              <p class="run-note">
-                {% if run["status"] == "completed" %}
-                已完成
-                {% elif run["status"] == "running" %}
-                处理中
-                {% elif run["status"] == "queued" %}
-                等待处理
-                {% else %}
-                处理失败
-                {% endif %}
-              </p>
-              <a class="run-link" href="{{ request.url_for('run_detail', run_id=run['id']) }}">查看结果</a>
-            </article>
-            {% endfor %}
+                <p class="run-note">
+                  {% if run["status"] == "completed" %}
+                  已完成
+                  {% elif run["status"] == "running" %}
+                  处理中
+                  {% elif run["status"] == "queued" %}
+                  等待处理
+                  {% else %}
+                  处理失败
+                  {% endif %}
+                </p>
+
+                <a class="run-link" href="{{ request.url_for('run_detail', run_id=run['id']) }}">查看结果</a>
+              </article>
+              {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty">还没有任务。上传第一条视频后，这里会显示最近结果。</div>
+            {% endif %}
           </div>
-          {% else %}
-          <div class="empty">还没有任务。上传第一条视频后，这里会显示最近结果。</div>
-          {% endif %}
         </aside>
       </div>
     </div>
