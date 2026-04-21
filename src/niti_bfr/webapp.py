@@ -61,15 +61,21 @@ CONFIG_PATH = ROOT / "configs" / "minimal.yaml"
 PROJECT_OUTPUTS_ROOT = ROOT / "outputs"
 ANNOTATED_VIDEO_FILENAME = "annotated_overview.mp4"
 PROCESS_VIDEO_FILENAME = "analysis_process.mp4"
+PROCESS_VIDEO_WEBM_FILENAME = "analysis_process.webm"
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 RUNS_ROOT.mkdir(parents=True, exist_ok=True)
 PREVIEWS_ROOT.mkdir(parents=True, exist_ok=True)
 ASSETS_ROOT.mkdir(parents=True, exist_ok=True)
 
+PATH_PREFIX_ALIASES = ("/niti",)
+
 app = FastAPI(title="NiTi BFR 分析台")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_ROOT)), name="assets")
 app.mount("/files", StaticFiles(directory=str(DATA_ROOT)), name="files")
+for _prefix in PATH_PREFIX_ALIASES:
+    app.mount(f"{_prefix}/assets", StaticFiles(directory=str(ASSETS_ROOT)), name=f"assets{_prefix}")
+    app.mount(f"{_prefix}/files", StaticFiles(directory=str(DATA_ROOT)), name=f"files{_prefix}")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _POSTPROCESS_LOCK = threading.Lock()
 _POSTPROCESS_IN_FLIGHT: set[str] = set()
@@ -273,6 +279,12 @@ BRAIDED_SUITE_ROUTE_FIELDS = {
 @app.middleware("http")
 async def forwarded_prefix_middleware(request: Request, call_next):
     prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+    if not prefix:
+        path = str(request.scope.get("path") or "")
+        for candidate in PATH_PREFIX_ALIASES:
+            if path == candidate or path.startswith(f"{candidate}/"):
+                prefix = candidate
+                break
     if prefix:
         request.scope["root_path"] = prefix
     return await call_next(request)
@@ -478,6 +490,7 @@ def _worker_output_label(filename: str, preset: str | None = None) -> str:
     }
     mapping = {
         "analysis_process.mp4": "分析过程视频",
+        "analysis_process.webm": "分析过程视频",
         "analysis.csv": "每帧数据表",
         "route_results.csv": "三种测量方式结果表",
         "summary.json": "详细结果数据",
@@ -757,6 +770,24 @@ def _backfill_smoothed_summary_fields(
             prepared["object_smoothed_route_alias"] = preferred_alias
             prepared["object_smoothed_af95_c"] = preferred_smoothed.get("smoothed_af95_c")
             prepared["object_smoothed_aftan_c"] = preferred_smoothed.get("smoothed_aftan_c")
+
+    summary_path = _summary_path_for_run(run)
+    existing_summary = _safe_read_json(summary_path)
+    if isinstance(existing_summary, dict):
+        existing_summary["route_results"] = updated_route_results
+        existing_summary["route_results_by_alias"] = prepared["route_results_by_alias"]
+        existing_summary["route_smoothing_method"] = prepared.get("route_smoothing_method")
+        existing_summary["route_smoothing_window"] = prepared.get("route_smoothing_window")
+        if prepared.get("object_smoothed_metric_key") is not None:
+            existing_summary["object_smoothed_metric_key"] = prepared.get("object_smoothed_metric_key")
+        if prepared.get("object_smoothed_route_alias") is not None:
+            existing_summary["object_smoothed_route_alias"] = prepared.get("object_smoothed_route_alias")
+        if prepared.get("object_smoothed_af95_c") is not None:
+            existing_summary["object_smoothed_af95_c"] = prepared.get("object_smoothed_af95_c")
+        if prepared.get("object_smoothed_aftan_c") is not None:
+            existing_summary["object_smoothed_aftan_c"] = prepared.get("object_smoothed_aftan_c")
+        _write_summary(summary_path, existing_summary)
+        prepared.pop("_smoothed_backfilled", None)
     return prepared
 
 
@@ -1113,14 +1144,17 @@ def _generate_process_video_asset(
 ) -> str | None:
     outputs_dir = _outputs_dir_for_run(run)
     process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
+    process_video_webm_path = outputs_dir / PROCESS_VIDEO_WEBM_FILENAME
     run_id = run.get("id") if isinstance(run, dict) else run["id"]
     summary = _load_summary(run_id) or {}
-    if process_video_path.exists() and summary.get("process_video_filename") == PROCESS_VIDEO_FILENAME:
+    existing_name = str(summary.get("process_video_filename") or "").strip()
+    if existing_name and (outputs_dir / existing_name).exists():
         return None
 
     _remove_video_with_poster(process_video_path)
+    _remove_video_with_poster(process_video_webm_path)
     try:
-        render_process_debug_video(
+        render_result = render_process_debug_video(
             video_path=video_path,
             output_path=process_video_path,
             extraction=extraction_cfg,
@@ -1128,9 +1162,18 @@ def _generate_process_video_asset(
             object_type=run.get("preset") if isinstance(run, dict) else run["preset"],
             output_fps=max((result.input_fps or 1.0) / max(result.frame_stride, 1), 1.0),
         )
+        actual_output_path: Path | None
+        if isinstance(render_result, Path):
+            actual_output_path = render_result
+        elif process_video_path.exists():
+            actual_output_path = process_video_path
+        elif process_video_webm_path.exists():
+            actual_output_path = process_video_webm_path
+        else:
+            actual_output_path = None
         _update_summary_fields(
             run,
-            process_video_filename=PROCESS_VIDEO_FILENAME,
+            process_video_filename=actual_output_path.name if actual_output_path is not None else None,
             process_video_error=None,
         )
         return None
@@ -2196,7 +2239,7 @@ def run_detail(request: Request, run_id: str) -> Any:
     if outputs_dir.exists():
         for path in sorted(outputs_dir.iterdir()):
             rel = path.relative_to(DATA_ROOT).as_posix()
-            if path.suffix.lower() == ".mp4":
+            if path.suffix.lower() in {".mp4", ".webm"}:
                 poster_url = None
                 poster_path = _ensure_video_poster(path)
                 if poster_path is not None:
@@ -2315,6 +2358,48 @@ def run_detail(request: Request, run_id: str) -> Any:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+for _prefix in PATH_PREFIX_ALIASES:
+    app.add_api_route(f"{_prefix}/", home, methods=["GET"], include_in_schema=False, name=f"home{_prefix}")
+    app.add_api_route(f"{_prefix}/history", history, methods=["GET"], include_in_schema=False, name=f"history{_prefix}")
+    app.add_api_route(
+        f"{_prefix}/benchmarks",
+        benchmark_summary,
+        methods=["GET"],
+        include_in_schema=False,
+        name=f"benchmark_summary{_prefix}",
+    )
+    app.add_api_route(f"{_prefix}/runs", create_run, methods=["POST"], include_in_schema=False, name=f"create_run{_prefix}")
+    app.add_api_route(
+        f"{_prefix}/sample-runs",
+        create_sample_run,
+        methods=["POST"],
+        include_in_schema=False,
+        name=f"create_sample_run{_prefix}",
+    )
+    app.add_api_route(
+        f"{_prefix}/preview-video",
+        create_video_preview,
+        methods=["POST"],
+        include_in_schema=False,
+        name=f"create_video_preview{_prefix}",
+    )
+    app.add_api_route(
+        f"{_prefix}/runs/{{run_id}}",
+        run_detail,
+        methods=["GET"],
+        include_in_schema=False,
+        name=f"run_detail{_prefix}",
+    )
+    app.add_api_route(
+        f"{_prefix}/runs/{{run_id}}/delete",
+        delete_run,
+        methods=["POST"],
+        include_in_schema=False,
+        name=f"delete_run{_prefix}",
+    )
+    app.add_api_route(f"{_prefix}/health", health, methods=["GET"], include_in_schema=False, name=f"health{_prefix}")
 
 
 def _execute_run(run_id: str) -> None:
@@ -2559,15 +2644,37 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
     # Runs are executed in FastAPI background threads, so force a non-GUI backend.
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
+    from matplotlib import font_manager
 
     series = result.series
     if series.empty:
         return
-    plt.rcParams["font.sans-serif"] = [
+
+    preferred_font_names: list[str] = []
+    for font_path in [
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Medium.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Bold.ttc",
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    ]:
+        candidate = Path(font_path)
+        if not candidate.exists():
+            continue
+        try:
+            font_manager.fontManager.addfont(str(candidate))
+            font_name = font_manager.FontProperties(fname=str(candidate)).get_name()
+        except Exception:  # noqa: BLE001
+            continue
+        if font_name and font_name not in preferred_font_names:
+            preferred_font_names.append(font_name)
+
+    plt.rcParams["font.family"] = preferred_font_names[:1] or ["sans-serif"]
+    plt.rcParams["font.sans-serif"] = preferred_font_names + [
         "PingFang SC",
         "Hiragino Sans GB",
         "Microsoft YaHei",
         "Noto Sans CJK SC",
+        "Noto Sans CJK JP",
         "SimHei",
         "Arial Unicode MS",
         "DejaVu Sans",
