@@ -831,6 +831,21 @@ def _process_video_ready(outputs_dir: Path, prepared: dict[str, Any]) -> bool:
     return (outputs_dir / filename).exists()
 
 
+def _direction_metric_enabled_for_outputs(
+    run: sqlite3.Row | dict[str, Any],
+    prepared: dict[str, Any],
+) -> bool:
+    run_direction_enabled = (
+        bool(run.get("direction_metric_enabled"))
+        if isinstance(run, dict)
+        else bool(run["direction_metric_enabled"]) if "direction_metric_enabled" in run.keys() else False
+    )
+    direction_result = prepared.get("direction_result")
+    if isinstance(direction_result, dict):
+        return bool(direction_result.get("enabled")) or run_direction_enabled
+    return bool(direction_result) or run_direction_enabled
+
+
 def _expected_plot_outputs(
     run: sqlite3.Row | dict[str, Any],
     prepared: dict[str, Any],
@@ -860,15 +875,7 @@ def _expected_plot_outputs(
     else:
         expected.update({"quicklook_x_vs_time.png", "quicklook_kappa_vs_time.png"})
 
-    run_direction_enabled = (
-        bool(run.get("direction_metric_enabled"))
-        if isinstance(run, dict)
-        else bool(run["direction_metric_enabled"]) if "direction_metric_enabled" in run.keys() else False
-    )
-    direction_enabled = bool(
-        prepared.get("direction_result")
-        or run_direction_enabled
-    )
+    direction_enabled = _direction_metric_enabled_for_outputs(run, prepared)
     if direction_enabled:
         expected.add("direction_metric_over_time.png")
 
@@ -919,6 +926,12 @@ def _postprocess_needed(
         or not _plot_outputs_complete(run, prepared)
         or not _process_video_ready(_outputs_dir_for_run(run), prepared)
     )
+
+
+def _asset_generation_active(summary: dict[str, Any] | None) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    return str(summary.get("asset_generation_status") or "") in {"pending", "running"}
 
 
 def _postprocess_fallback_error(exc: Exception) -> str:
@@ -2154,7 +2167,7 @@ def delete_run(request: Request, run_id: str) -> RedirectResponse:
     run = _get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    if run["status"] in {"queued", "running"}:
+    if run["status"] in {"queued", "running"} or _asset_generation_active(_load_summary(run_id)):
         raise HTTPException(status_code=409, detail="run is still active")
     _delete_run_assets(run_id, Path(run["run_dir"]))
     _delete_run_record(run_id)
