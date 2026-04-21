@@ -220,6 +220,17 @@
         margin-bottom: 10px;
         font-size: 16px;
       }
+      .direction-layout {
+        display: grid;
+        grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+      }
+      .direction-curves {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 14px;
+      }
       .file-list {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -307,6 +318,8 @@
         .summary-grid,
         .route-grid,
         .curve-grid,
+        .direction-layout,
+        .direction-curves,
         .file-list {
           grid-template-columns: 1fr;
         }
@@ -460,6 +473,57 @@
         <figure class="media-card">
           <img class="zoomable" src="{{ primary_curve['url'] }}" alt="{{ primary_curve['label'] }}">
         </figure>
+      </section>
+      {% endif %}
+
+      {% if direction_result and direction_result.get('enabled') %}
+      <section class="card section">
+        <h2>方向法</h2>
+        <div class="section-note">这是用户在上传后为编织对象手动确认的方向量结果，不替代现有 A / B / C 三种测量方式。</div>
+        <div class="direction-layout">
+          <article class="route-card">
+            <div class="route-head">
+              <div>
+                <div class="route-name">方向法</div>
+                <h3>方向投影跨度</h3>
+              </div>
+            </div>
+            <div class="metric-grid">
+              <div class="metric-box">
+                <strong>{% if direction_result.get('angle_deg') is not none %}{{ '%.1f'|format(direction_result.get('angle_deg')) }}°{% else %}--{% endif %}</strong>
+                <span>选定角度</span>
+              </div>
+              <div class="metric-box">
+                <strong>{{ fmt_temp(direction_result.get('af95_c')) }}</strong>
+                <span>当前测量 95%恢复温度</span>
+              </div>
+              <div class="metric-box">
+                <strong>{{ fmt_temp(direction_result.get('aftan_c')) }}</strong>
+                <span>当前测量 切线法温度</span>
+              </div>
+            </div>
+            {% if direction_result.get('gate_reason') %}
+            <div class="section-note">状态说明：{{ direction_result.get('gate_reason') }}</div>
+            {% endif %}
+          </article>
+
+          {% if direction_recovery_curve or direction_metric_curve %}
+          <div class="direction-curves">
+            {% if direction_recovery_curve %}
+            <figure class="curve-card">
+              <strong>{{ direction_recovery_curve['label'] }}</strong>
+              <img class="zoomable" src="{{ direction_recovery_curve['url'] }}" alt="{{ direction_recovery_curve['label'] }}">
+            </figure>
+            {% endif %}
+            {% if direction_metric_curve %}
+            <figure class="curve-card">
+              <strong>{{ direction_metric_curve['label'] }}</strong>
+              <img class="zoomable" src="{{ direction_metric_curve['url'] }}" alt="{{ direction_metric_curve['label'] }}">
+            </figure>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
       </section>
       {% endif %}
 

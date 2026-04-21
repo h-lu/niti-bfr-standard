@@ -240,6 +240,108 @@
         font-weight: 800;
         cursor: pointer;
       }
+      .submit[disabled] {
+        cursor: not-allowed;
+        opacity: 0.58;
+      }
+      .preview-panel {
+        display: none;
+        margin-top: 18px;
+        padding: 18px;
+        border-radius: 22px;
+        border: 1px solid rgba(45, 98, 112, 0.18);
+        background: rgba(255, 255, 255, 0.72);
+      }
+      .preview-panel.visible {
+        display: block;
+      }
+      .preview-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .preview-head strong {
+        font-size: 16px;
+      }
+      .preview-hint {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.6;
+      }
+      .preview-stage {
+        position: relative;
+        overflow: hidden;
+        border-radius: 22px;
+        border: 1px solid var(--line);
+        background: #171717;
+      }
+      .preview-stage video {
+        width: 100%;
+        max-height: 420px;
+        display: block;
+        background: #111;
+      }
+      .preview-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .preview-line {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 78%;
+        height: 3px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.95) 16%, rgba(181,98,51,0.95) 50%, rgba(255,255,255,0.95) 84%, rgba(255,255,255,0.18) 100%);
+        transform: translate(-50%, -50%) rotate(0deg);
+        transform-origin: center center;
+        box-shadow: 0 0 22px rgba(255, 255, 255, 0.18);
+      }
+      .preview-center {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        background: #fff;
+        border: 3px solid var(--accent);
+        transform: translate(-50%, -50%);
+        pointer-events: auto;
+        cursor: grab;
+        touch-action: none;
+        box-shadow: 0 0 0 6px rgba(181, 98, 51, 0.14);
+      }
+      .preview-center.dragging {
+        cursor: grabbing;
+        box-shadow: 0 0 0 10px rgba(181, 98, 51, 0.18);
+      }
+      .preview-meta {
+        margin-top: 12px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      .preview-token {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 0 12px;
+        border-radius: 999px;
+        background: var(--card-soft);
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .preview-token.ready {
+        background: var(--ok-soft);
+        color: var(--ok);
+      }
       .runs-head {
         display: flex;
         justify-content: space-between;
@@ -389,6 +491,7 @@
 
           <form action="{{ request.url_for('create_run') }}" method="post" enctype="multipart/form-data">
             <input id="requested_mode" name="requested_mode" type="hidden" value="quicklook">
+            <input id="direction_angle_deg" name="direction_angle_deg" type="hidden" value="">
 
             <section class="section">
               <h2>对象类型</h2>
@@ -434,13 +537,31 @@
                 </div>
               </div>
 
+              <div class="preview-panel" id="braided_preview_panel">
+                <div class="preview-head">
+                  <strong>编织对象方向预览</strong>
+                  <p class="preview-hint" id="preview_hint">选中视频后，拖动圆点对齐物体，再使用左右方向键每次旋转 1°，按回车确认方向。</p>
+                </div>
+                <div class="preview-stage" id="preview_stage" tabindex="0" aria-label="编织对象方向预览">
+                  <video id="preview_video" controls preload="metadata" muted playsinline></video>
+                  <div class="preview-overlay">
+                    <div class="preview-line" id="preview_line" aria-hidden="true"></div>
+                    <div class="preview-center" id="preview_center" title="拖动圆点对齐方向参考线"></div>
+                  </div>
+                </div>
+                <div class="preview-meta">
+                  <span class="preview-token" id="preview_angle_token">方向角度：0°</span>
+                  <span class="preview-token" id="preview_confirm_token">尚未确认方向</span>
+                </div>
+              </div>
+
               <div class="mode-box" id="mode_box" aria-live="polite">
                 <strong class="mode-title" id="mode_title">当前将只看变化趋势</strong>
                 <p class="mode-copy" id="mode_copy">因为还没有上传温度表，结果页会先显示趋势、三种测量方式和回看视频。</p>
               </div>
 
               <div class="actions">
-                <button class="submit" type="submit">开始分析</button>
+                <button class="submit" id="submit_button" type="submit">开始分析</button>
               </div>
             </section>
           </form>
@@ -496,10 +617,126 @@
       const presetSelect = document.getElementById("preset");
       const presetButtons = Array.from(document.querySelectorAll(".choice"));
       const temperatureInput = document.getElementById("temperature_file");
+      const videoInput = document.getElementById("video_file");
       const requestedModeInput = document.getElementById("requested_mode");
       const modeBox = document.getElementById("mode_box");
       const modeTitle = document.getElementById("mode_title");
       const modeCopy = document.getElementById("mode_copy");
+      const directionAngleInput = document.getElementById("direction_angle_deg");
+      const previewPanel = document.getElementById("braided_preview_panel");
+      const previewStage = document.getElementById("preview_stage");
+      const previewVideo = document.getElementById("preview_video");
+      const previewLine = document.getElementById("preview_line");
+      const previewCenter = document.getElementById("preview_center");
+      const previewHint = document.getElementById("preview_hint");
+      const previewAngleToken = document.getElementById("preview_angle_token");
+      const previewConfirmToken = document.getElementById("preview_confirm_token");
+      const submitButton = document.getElementById("submit_button");
+      let previewRequestToken = 0;
+      let directionAngle = 0;
+      let directionConfirmed = false;
+      let previewCenterX = 50;
+      let previewCenterY = 50;
+      let previewDragPointerId = null;
+
+      function isBraidedPreset() {
+        return presetSelect.value === "braided_like";
+      }
+
+      function resetDirectionConfirmation() {
+        directionConfirmed = false;
+        directionAngleInput.value = "";
+      }
+
+      function resetPreviewCenter() {
+        previewCenterX = 50;
+        previewCenterY = 50;
+      }
+
+      function updatePreviewHintText() {
+        previewHint.textContent = directionConfirmed
+          ? "方向已确认。若要调整，拖动圆点重新对齐，或继续使用左右方向键会自动取消确认。"
+          : "拖动圆点对齐物体，再使用左右方向键每次旋转 1°，按回车确认方向后再开始分析。";
+      }
+
+      function updatePreviewLine() {
+        previewLine.style.left = `${previewCenterX}%`;
+        previewLine.style.top = `${previewCenterY}%`;
+        previewLine.style.transform = `translate(-50%, -50%) rotate(${directionAngle}deg)`;
+        previewCenter.style.left = `${previewCenterX}%`;
+        previewCenter.style.top = `${previewCenterY}%`;
+        previewAngleToken.textContent = `方向角度：${directionAngle}°`;
+        previewConfirmToken.textContent = directionConfirmed ? "方向已确认，按开始分析继续" : "尚未确认方向";
+        previewConfirmToken.classList.toggle("ready", directionConfirmed);
+        updatePreviewHintText();
+      }
+
+      function updateSubmitState() {
+        const requiresDirection = isBraidedPreset();
+        const hasVideo = Boolean(videoInput.files && videoInput.files.length > 0);
+        const allowSubmit = !requiresDirection || !hasVideo || directionConfirmed;
+        submitButton.disabled = !allowSubmit;
+      }
+
+      function clearPreviewSource() {
+        previewVideo.removeAttribute("poster");
+        previewVideo.removeAttribute("src");
+        previewVideo.pause();
+        previewVideo.load();
+      }
+
+      function updatePreviewVisibility() {
+        const showPreview = isBraidedPreset() && Boolean(videoInput.files && videoInput.files.length > 0);
+        previewPanel.classList.toggle("visible", showPreview);
+        if (!showPreview) {
+          clearPreviewSource();
+        }
+        updateSubmitState();
+      }
+
+      async function loadPreviewFromFile() {
+        const file = videoInput.files && videoInput.files[0];
+        if (!isBraidedPreset() || !file) {
+          updatePreviewVisibility();
+          return;
+        }
+        const requestToken = previewRequestToken + 1;
+        previewRequestToken = requestToken;
+        clearPreviewSource();
+        previewPanel.classList.add("visible");
+        previewHint.textContent = "正在生成可播放预览，请稍等…";
+        submitButton.disabled = true;
+        const payload = new FormData();
+        payload.append("video_file", file, file.name);
+        try {
+          const response = await fetch("/preview-video", {
+            method: "POST",
+            body: payload,
+          });
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.detail || "preview_failed");
+          }
+          const result = await response.json();
+          if (requestToken !== previewRequestToken) {
+            return;
+          }
+          previewVideo.src = result.preview_url;
+          if (result.poster_url) {
+            previewVideo.poster = result.poster_url;
+          }
+          previewVideo.load();
+          updatePreviewLine();
+        } catch (error) {
+          if (requestToken !== previewRequestToken) {
+            return;
+          }
+          clearPreviewSource();
+          previewHint.textContent = `预览生成失败：${error.message || "请重新选择视频"}`;
+        }
+        previewStage.focus();
+        updateSubmitState();
+      }
 
       function syncPresetButtons() {
         presetButtons.forEach((button) => {
@@ -521,16 +758,117 @@
           : "因为还没有上传温度表，结果页会先显示趋势、三种测量方式和回看视频。";
       }
 
+      function syncBraidedPreviewState() {
+        if (!isBraidedPreset()) {
+          previewRequestToken += 1;
+          resetDirectionConfirmation();
+          resetPreviewCenter();
+          updatePreviewVisibility();
+          updatePreviewLine();
+          return;
+        }
+        if (!videoInput.files || !videoInput.files.length) {
+          previewRequestToken += 1;
+          resetDirectionConfirmation();
+          resetPreviewCenter();
+          updatePreviewVisibility();
+          updatePreviewLine();
+          return;
+        }
+        void loadPreviewFromFile();
+        updatePreviewLine();
+      }
+
+      function clamp(value, min, max) {
+        return Math.min(max, Math.max(min, value));
+      }
+
+      function updatePreviewCenterFromPointer(event) {
+        const rect = previewStage.getBoundingClientRect();
+        if (!rect.width || !rect.height) {
+          return;
+        }
+        previewCenterX = clamp(((event.clientX - rect.left) / rect.width) * 100, 3, 97);
+        previewCenterY = clamp(((event.clientY - rect.top) / rect.height) * 100, 3, 97);
+        updatePreviewLine();
+      }
+
       presetButtons.forEach((button) => {
         button.addEventListener("click", () => {
           presetSelect.value = button.dataset.preset;
           syncPresetButtons();
+          syncBraidedPreviewState();
+          updateSubmitState();
         });
       });
 
+      videoInput.addEventListener("change", () => {
+        directionAngle = 0;
+        resetDirectionConfirmation();
+        resetPreviewCenter();
+        void loadPreviewFromFile();
+        updatePreviewLine();
+      });
       temperatureInput.addEventListener("change", updateModeBox);
+      previewCenter.addEventListener("pointerdown", (event) => {
+        if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+          return;
+        }
+        previewDragPointerId = event.pointerId;
+        previewCenter.classList.add("dragging");
+        previewCenter.setPointerCapture(event.pointerId);
+        updatePreviewCenterFromPointer(event);
+        previewStage.focus();
+        event.preventDefault();
+        event.stopPropagation();
+      });
+      previewCenter.addEventListener("pointermove", (event) => {
+        if (previewDragPointerId !== event.pointerId) {
+          return;
+        }
+        updatePreviewCenterFromPointer(event);
+        event.preventDefault();
+      });
+      function finishPreviewDrag(event) {
+        if (previewDragPointerId !== event.pointerId) {
+          return;
+        }
+        if (previewCenter.hasPointerCapture(event.pointerId)) {
+          previewCenter.releasePointerCapture(event.pointerId);
+        }
+        previewDragPointerId = null;
+        previewCenter.classList.remove("dragging");
+      }
+      previewCenter.addEventListener("pointerup", finishPreviewDrag);
+      previewCenter.addEventListener("pointercancel", finishPreviewDrag);
+      window.addEventListener("keydown", (event) => {
+        if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+          return;
+        }
+        if (event.key === "ArrowLeft") {
+          directionAngle -= 1;
+          resetDirectionConfirmation();
+          updatePreviewLine();
+          updateSubmitState();
+          event.preventDefault();
+        } else if (event.key === "ArrowRight") {
+          directionAngle += 1;
+          resetDirectionConfirmation();
+          updatePreviewLine();
+          updateSubmitState();
+          event.preventDefault();
+        } else if (event.key === "Enter") {
+          directionConfirmed = true;
+          directionAngleInput.value = String(directionAngle);
+          updatePreviewLine();
+          updateSubmitState();
+          event.preventDefault();
+        }
+      });
       syncPresetButtons();
       updateModeBox();
+      updatePreviewLine();
+      updateSubmitState();
     </script>
   </body>
 </html>
