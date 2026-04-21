@@ -1,5 +1,5 @@
 {% macro fmt_temp(value) -%}
-  {%- if value is not none -%}
+  {%- if value is not none and value == value -%}
     {{ '%.2f'|format(value) }}℃
   {%- else -%}
     --
@@ -7,6 +7,10 @@
 {%- endmacro %}
 {% set object_summary = summary.get('object_summary') if summary and summary.get('object_summary') else summary %}
 {% set route_results = summary.get('route_results') if summary and summary.get('route_results') else [] %}
+{% set reported_route_alias = object_summary.get('object_reported_route_alias') if object_summary else none %}
+{% set reported_af95 = object_summary.get('object_reported_af95_c') if object_summary else none %}
+{% set reported_aftan = object_summary.get('object_reported_aftan_c') if object_summary else none %}
+{% set debug_gate_reason = object_summary.get('formal_gate_reason') if object_summary else none %}
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -405,8 +409,27 @@
 
           <div class="summary-grid">
             <div class="summary-item">
-              <strong>{{ route_results|length }}</strong>
-              <span>测量方式数</span>
+              <strong>
+                {% if reported_route_alias %}
+                  {{ worker_route_name(run['preset'], reported_route_alias) }}
+                {% else %}
+                  --
+                {% endif %}
+              </strong>
+              <span>
+                当前汇报路线
+                {% if reported_route_alias %}
+                  · {{ worker_route_title(run['preset'], reported_route_alias) }}
+                {% endif %}
+              </span>
+            </div>
+            <div class="summary-item">
+              <strong>{{ fmt_temp(reported_af95) }}</strong>
+              <span>当前汇报 95%恢复温度</span>
+            </div>
+            <div class="summary-item">
+              <strong>{{ fmt_temp(reported_aftan) }}</strong>
+              <span>当前汇报 切线法温度</span>
             </div>
             <div class="summary-item">
               <strong>
@@ -420,15 +443,10 @@
               </strong>
               <span>已分析画面数</span>
             </div>
-            <div class="summary-item">
-              <strong>{{ run_status_label(run['status']) }}</strong>
-              <span>任务状态</span>
-            </div>
-            <div class="summary-item">
-              <strong>{% if run.get('temperature_filename') or (summary and summary.get('temperature_c_min') is not none) %}已附温度表{% else %}仅趋势分析{% endif %}</strong>
-              <span>输入条件</span>
-            </div>
           </div>
+          {% if debug_gate_reason %}
+          <p class="section-note">formal gate / QC 仅用于算法调试，不阻塞前端结果汇报。当前调试提示：{{ debug_gate_reason }}。</p>
+          {% endif %}
         </section>
 
         {% if refresh %}

@@ -47,7 +47,7 @@ class RouteSelectionPolicyTests(unittest.TestCase):
             }
         )
 
-    def test_wire_selector_falls_back_to_route_c_when_formal_b_is_blocked(self) -> None:
+    def test_wire_selector_prefers_route_b_as_reported_metric_even_when_formal_b_is_blocked(self) -> None:
         series = self._wire_series()
         reports = {
             "x_route_a": _metric_eval("x_route_a", increasing=True, fit_rmse=0.6, dynamic_range=35.0),
@@ -56,7 +56,7 @@ class RouteSelectionPolicyTests(unittest.TestCase):
         }
 
         selected = _select_wire_provisional_metric(series, reports)
-        self.assertEqual(selected, "kappa_route_c")
+        self.assertEqual(selected, "kappa_fit")
 
     def test_wire_selector_prefers_route_b_when_all_routes_pass(self) -> None:
         series = self._wire_series()
@@ -72,23 +72,11 @@ class RouteSelectionPolicyTests(unittest.TestCase):
         selected = _select_wire_provisional_metric(series, reports)
         self.assertEqual(selected, "kappa_fit")
 
-    def test_wire_selector_falls_back_to_route_a_when_b_and_c_are_blocked(self) -> None:
+    def test_wire_selector_can_fall_back_to_route_a_when_b_and_c_are_unavailable(self) -> None:
         series = self._wire_series()
         reports = {
             "x_route_a": _metric_eval("x_route_a", increasing=True, fit_rmse=0.6, dynamic_range=35.0),
-            "kappa_fit": _metric_eval("kappa_fit", increasing=False, fit_rmse=0.01, dynamic_range=0.07),
-            "kappa_route_c": _metric_eval("kappa_route_c", increasing=False, fit_rmse=0.005, dynamic_range=0.001),
         }
-        reports["kappa_fit"] = MetricEvaluation(
-            label="kappa_fit",
-            increasing=False,
-            fit=reports["kappa_fit"].fit,
-            af95_c=reports["kappa_fit"].af95_c,
-            aftan_c=reports["kappa_fit"].aftan_c,
-            fit_rmse=reports["kappa_fit"].fit_rmse,
-            monotonic_violation_fraction=0.4,
-            dynamic_range=reports["kappa_fit"].dynamic_range,
-        )
 
         selected = _select_wire_provisional_metric(series, reports)
         self.assertEqual(selected, "x_route_a")

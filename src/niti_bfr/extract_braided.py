@@ -37,6 +37,7 @@ class BraidedExtractionConfig:
 
 @dataclass
 class BraidedExtractionResult:
+    source_roi_xyxy: tuple[int, int, int, int]
     anchor_xy: np.ndarray
     tip_xy: np.ndarray
     length_env_px: float
@@ -288,6 +289,26 @@ def _largest_component(mask: np.ndarray, min_area: int) -> np.ndarray:
     return (labels == best_label).astype(np.uint8) * 255
 
 
+def _largest_filled_external_contour(mask: np.ndarray, min_area: int) -> np.ndarray:
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        raise RuntimeError("braided contour not found")
+    best_contour = None
+    best_area = 0.0
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if area < float(min_area):
+            continue
+        if area > best_area:
+            best_area = area
+            best_contour = contour
+    if best_contour is None:
+        raise RuntimeError("braided contour not found")
+    filled = np.zeros_like(mask)
+    cv2.drawContours(filled, [best_contour], -1, 255, thickness=-1)
+    return filled
+
+
 def _component_mask(
     frame_bgr: np.ndarray,
     config: BraidedExtractionConfig,
@@ -307,8 +328,56 @@ def _component_mask(
     if config.close_kernel > 1:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (config.close_kernel, config.close_kernel))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    component = _largest_component(mask, min_area=int(config.min_component_area))
+    component_mask = mask
+    # Braided meshes can fragment into left/right halves under a simple dark threshold.
+    # Use a slightly stronger closing only for body-component selection so the downstream
+    # geometry starts from a contiguous silhouette instead of whichever half happens to
+    # be the largest connected island in this frame.
+    component_bridge_kernel = max(7, int(config.close_kernel))
+    if component_bridge_kernel % 2 == 0:
+        component_bridge_kernel += 1
+    if component_bridge_kernel > max(1, int(config.close_kernel)):
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (component_bridge_kernel, component_bridge_kernel))
+        component_mask = cv2.morphologyEx(component_mask, cv2.MORPH_CLOSE, kernel)
+    component = _largest_filled_external_contour(component_mask, min_area=int(config.min_component_area))
     return component, roi_offset_xy
+
+
+def _braided_result_score(
+    result: BraidedExtractionResult,
+    *,
+    max_length_px: float,
+    max_area_px2: float,
+) -> tuple[float, float, float]:
+    length_ratio = float(result.length_axis_px) / max(max_length_px, 1.0)
+    area_ratio = float(result.area_proj_px2) / max(max_area_px2, 1.0)
+    attachment_penalty = min(float(result.attachment_count), 3.0)
+    endpoint_jump_penalty = min(float(result.endpoint_jump_px) / max(float(result.length_axis_px), 1.0), 1.0)
+    disagreement_penalty = min(float(result.centerline_disagreement) / 0.20, 1.0)
+    score = (
+        float(result.quality)
+        + 0.22 * length_ratio
+        + 0.08 * area_ratio
+        - 0.05 * attachment_penalty
+        - 0.08 * endpoint_jump_penalty
+        - 0.05 * disagreement_penalty
+    )
+    return score, float(result.quality), float(result.length_axis_px)
+
+
+def _select_best_braided_result(candidates: list[BraidedExtractionResult]) -> BraidedExtractionResult:
+    if len(candidates) == 1:
+        return candidates[0]
+    max_length_px = max(float(candidate.length_axis_px) for candidate in candidates)
+    max_area_px2 = max(float(candidate.area_proj_px2) for candidate in candidates)
+    return max(
+        candidates,
+        key=lambda candidate: _braided_result_score(
+            candidate,
+            max_length_px=max_length_px,
+            max_area_px2=max_area_px2,
+        ),
+    )
 
 
 def _component_contour(component: np.ndarray) -> np.ndarray:
@@ -1946,6 +2015,7 @@ def _extract_braided_geometry_once(
     )
 
     return BraidedExtractionResult(
+        source_roi_xyxy=tuple(int(v) for v in roi_xyxy),
         anchor_xy=anchor_local + roi_offset_xy,
         tip_xy=tip_local + roi_offset_xy,
         length_env_px=float(length_env_px),
@@ -2024,11 +2094,14 @@ def extract_braided_geometry(
     roi_candidates.append(_normalize_roi_xyxy(config.roi_xyxy, frame_bgr.shape))
 
     last_error: RuntimeError | None = None
+    successes: list[BraidedExtractionResult] = []
     for roi_xyxy in roi_candidates:
         try:
-            return _extract_braided_geometry_once(frame_bgr, config, roi_xyxy=roi_xyxy)
+            successes.append(_extract_braided_geometry_once(frame_bgr, config, roi_xyxy=roi_xyxy))
         except RuntimeError as exc:
             last_error = exc
+    if successes:
+        return _select_best_braided_result(successes)
     if last_error is None:
         raise RuntimeError("braided extraction failed before running any ROI candidate")
     raise last_error

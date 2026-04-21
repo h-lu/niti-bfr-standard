@@ -204,12 +204,12 @@ WORKER_ROUTE_DETAILS = {
     },
 }
 WORKER_ROUTE_STATUS_LABELS = {
-    "formal_passed": "可直接使用",
-    "provisional": "可参考",
-    "formal_blocked": "暂不建议用",
-    "quicklook_only": "只看趋势",
-    "reportable": "可直接使用",
-    "reportable_with_warning": "可参考",
+    "formal_passed": "正式结果",
+    "provisional": "当前汇报",
+    "formal_blocked": "已计算",
+    "quicklook_only": "趋势预览",
+    "reportable": "正式结果",
+    "reportable_with_warning": "当前汇报",
     "missing": "暂无结果",
 }
 WIRE_ROUTE_SPECS: dict[str, dict[str, Any]] = {
@@ -391,14 +391,14 @@ def _worker_route_note(route: dict[str, Any] | None) -> str:
     if route.get("selected_as_formal"):
         return "本次正式结果采用这一种。"
     if route.get("selected_as_primary"):
-        return "本次优先参考这一种。"
+        return "前端当前汇报这一种，formal gate 仅作调试提示。"
     status = route.get("reportability_status")
     if status == "provisional":
-        return "本次可作为参考，但不作为正式主结果。"
+        return "前端当前汇报这一种，formal gate 仅作调试提示。"
     if status == "quicklook_only":
         return "当前没有温度结果，只看变化趋势。"
     if status == "formal_blocked":
-        return f"本次不建议作为主结果，原因是{_worker_gate_reason_label(route.get('gate_reason'))}。"
+        return f"已算出这一种的结果；{_worker_gate_reason_label(route.get('gate_reason'))}仅作算法调试提示。"
     if status == "formal_passed":
         return "这是一种可直接使用的结果。"
     return "当前暂无可展示说明。"
@@ -441,9 +441,9 @@ def _worker_result_summary(run: sqlite3.Row | dict[str, Any], summary: dict[str,
         }
     if temperature_filename:
         return {
-            "badge": "仅供参考",
-            "headline": "这次算出了参考结果，但暂不建议直接作为正式结果。",
-            "description": f"主要原因是{_worker_gate_reason_label(gate_reason)}。",
+            "badge": "已汇报结果",
+            "headline": "这次已经算出可汇报的结果。",
+            "description": f"formal gate 不阻塞前端显示；当前调试提示是{_worker_gate_reason_label(gate_reason)}。",
         }
     return {
         "badge": "只看趋势",
@@ -456,7 +456,8 @@ def _worker_primary_route_label(summary: dict[str, Any] | None, preset: str | No
     if not summary:
         return "-"
     alias = (
-        summary.get("object_formal_route_alias")
+        summary.get("object_reported_route_alias")
+        or summary.get("object_formal_route_alias")
         or summary.get("object_recommended_route_alias")
         or summary.get("recommended_route_alias")
         or summary.get("object_provisional_route_alias")
@@ -602,9 +603,9 @@ def _run_result_hint(run: sqlite3.Row | dict[str, Any]) -> str:
     if actual_mode == "formal_af":
         return "formal Af 已放行。"
     if requested_mode == "formal_af" and reportability_status == "reportable_with_warning":
-        return f"formal Af 未放行，但已给出带警告的临时结果（{gate_reason or 'gate_closed'}）。"
+        return f"已汇报计算结果；formal gate 仅作调试提示（{gate_reason or 'gate_closed'}）。"
     if requested_mode == "formal_af" and actual_mode == "quicklook":
-        return f"formal Af 未放行，当前按快速预览 quicklook 展示（{gate_reason or 'gate_closed'}）。"
+        return f"formal Af 未放行；当前以前端可见结果继续汇报（{gate_reason or 'gate_closed'}）。"
     if actual_mode == "quicklook":
         return "当前结果是快速预览 quicklook。"
     return gate_reason or "-"
@@ -836,7 +837,8 @@ def _refresh_plot_outputs_for_display(
     if not _postprocess_needed(run, prepared):
         return
     run_id = run.get("id") if isinstance(run, dict) else run["id"]
-    _schedule_postprocess(run_id, run=run, prepared=prepared)
+    force_inline = _should_inline_recover_postprocess(run_id, prepared)
+    _schedule_postprocess(run_id, run=run, prepared=prepared, force_inline=force_inline)
 
 
 def _outputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
@@ -965,6 +967,19 @@ def _asset_generation_active(summary: dict[str, Any] | None) -> bool:
     return str(summary.get("asset_generation_status") or "") in {"pending", "running"}
 
 
+def _postprocess_in_flight(run_id: str) -> bool:
+    with _POSTPROCESS_LOCK:
+        return run_id in _POSTPROCESS_IN_FLIGHT
+
+
+def _should_inline_recover_postprocess(run_id: str, prepared: dict[str, Any] | None) -> bool:
+    if not isinstance(prepared, dict):
+        return False
+    if str(prepared.get("asset_generation_status") or "") != "running":
+        return False
+    return not _postprocess_in_flight(run_id)
+
+
 def _postprocess_fallback_error(exc: Exception) -> str:
     return str(exc) or exc.__class__.__name__
 
@@ -984,13 +999,14 @@ def _schedule_postprocess(
     result: AnalysisResult | None = None,
     extraction_cfg: ExtractionConfig | BraidedExtractionConfig | None = None,
     video_path: Path | None = None,
+    force_inline: bool = False,
 ) -> bool:
     with _POSTPROCESS_LOCK:
         if run_id in _POSTPROCESS_IN_FLIGHT:
             return False
         _POSTPROCESS_IN_FLIGHT.add(run_id)
     try:
-        run_inline = result is not None or bool(prepared and prepared.get("_smoothed_backfilled"))
+        run_inline = force_inline or result is not None or bool(prepared and prepared.get("_smoothed_backfilled"))
         if run_inline:
             _run_postprocess_task(
                 run_id=run_id,
@@ -1488,7 +1504,54 @@ def _prepare_summary_for_display(run: sqlite3.Row | dict[str, Any], summary: dic
     direction_result = prepared.get("direction_result")
     if isinstance(direction_result, dict):
         prepared["direction_result"] = dict(direction_result)
-    return _backfill_smoothed_summary_fields(run, prepared)
+    prepared = _backfill_smoothed_summary_fields(run, prepared)
+    return _augment_reported_result_fields(prepared)
+
+
+def _first_finite_float(*values: Any) -> float | None:
+    for value in values:
+        numeric = _coerce_float(value)
+        if numeric is not None:
+            return numeric
+    return None
+
+
+def _augment_reported_result_fields(prepared: dict[str, Any]) -> dict[str, Any]:
+    route_results_by_alias = prepared.get("route_results_by_alias") or {}
+    reported_metric_key = (
+        prepared.get("object_formal_metric_key")
+        or prepared.get("object_provisional_metric_key")
+        or prepared.get("object_smoothed_metric_key")
+        or prepared.get("object_recommended_metric_key")
+    )
+    reported_route_alias = (
+        prepared.get("object_formal_route_alias")
+        or prepared.get("object_provisional_route_alias")
+        or prepared.get("object_smoothed_route_alias")
+        or prepared.get("object_recommended_route_alias")
+        or prepared.get("recommended_route_alias")
+    )
+    reported_route = route_results_by_alias.get(reported_route_alias or "", {})
+    if reported_metric_key is None:
+        reported_metric_key = reported_route.get("metric_key")
+
+    prepared["object_reported_metric_key"] = reported_metric_key
+    prepared["object_reported_route_alias"] = reported_route_alias
+    prepared["object_reported_af95_c"] = _first_finite_float(
+        prepared.get("object_formal_af95_c"),
+        prepared.get("object_provisional_af95_c"),
+        prepared.get("object_smoothed_af95_c"),
+        reported_route.get("af95_c"),
+        reported_route.get("smoothed_af95_c"),
+    )
+    prepared["object_reported_aftan_c"] = _first_finite_float(
+        prepared.get("object_formal_aftan_c"),
+        prepared.get("object_provisional_aftan_c"),
+        prepared.get("object_smoothed_aftan_c"),
+        reported_route.get("aftan_c"),
+        reported_route.get("smoothed_aftan_c"),
+    )
+    return prepared
 
 
 def _route_metric_key_for_alias(preset: str | None, alias: str) -> str | None:
@@ -2187,7 +2250,7 @@ async def create_video_preview(
 
     preview_path = preview_dir / "preview.mp4"
     try:
-        _transcode_preview_video(source_path, preview_path)
+        preview_path = _transcode_preview_video(source_path, preview_path)
     except Exception as exc:  # noqa: BLE001
         shutil.rmtree(preview_dir, ignore_errors=True)
         raise HTTPException(status_code=422, detail=f"preview generation failed: {exc}") from exc
@@ -3072,6 +3135,9 @@ def _build_wire_extraction_config(config: dict[str, Any], preset: str) -> Extrac
         threshold_dark=int(raw["threshold_dark"]),
         open_kernel=int(raw["open_kernel"]),
         close_kernel=int(raw["close_kernel"]),
+        component_bridge_kernel=int(raw.get("component_bridge_kernel", 11)),
+        min_component_area=int(raw.get("min_component_area", 80)),
+        anchor_top_band_px=int(raw.get("anchor_top_band_px", 24)),
         route_a_tip_cluster_radius_px=float(raw.get("route_a_tip_cluster_radius_px", 6.0)),
         route_b_endpoint_extension_scale=float(raw.get("route_b_endpoint_extension_scale", 0.0)),
         route_b_cap_inset_scale=float(raw.get("route_b_cap_inset_scale", 0.08)),
@@ -3080,6 +3146,8 @@ def _build_wire_extraction_config(config: dict[str, Any], preset: str) -> Extrac
         fit_path_fraction_min=float(raw.get("fit_path_fraction_min", 0.42)),
         fit_curvature_threshold_ratio=float(raw.get("fit_curvature_threshold_ratio", 0.28)),
         fit_margin_prefer_quadratic=float(raw.get("fit_margin_prefer_quadratic", 0.05)),
+        anchor_prior_xy=tuple(raw.get("anchor_prior_xy")) if raw.get("anchor_prior_xy") is not None else None,
+        anchor_prior_weight=float(raw.get("anchor_prior_weight", 0.0)),
     )
 
 
@@ -3286,7 +3354,7 @@ def _cleanup_preview_cache(*, max_age_hours: float = 24.0) -> None:
             continue
 
 
-def _transcode_preview_video(source_path: Path, output_path: Path) -> None:
+def _transcode_preview_video(source_path: Path, output_path: Path) -> Path:
     capture = cv2.VideoCapture(str(source_path))
     if not capture.isOpened():
         raise RuntimeError("failed to open source video")
@@ -3325,6 +3393,7 @@ def _transcode_preview_video(source_path: Path, output_path: Path) -> None:
     if writer is None:
         capture.release()
         raise RuntimeError("failed to open preview writer")
+    final_output_path = writer.output_path
 
     frame_idx = 0
     wrote_any = False
@@ -3347,6 +3416,7 @@ def _transcode_preview_video(source_path: Path, output_path: Path) -> None:
 
     if not wrote_any:
         raise RuntimeError("source video contains no frames for preview")
+    return final_output_path
 
 
 def _connect_db() -> sqlite3.Connection:

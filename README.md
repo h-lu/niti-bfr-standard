@@ -245,6 +245,16 @@
 python3 -m pip install -e .
 ```
 
+启动本地前端:
+
+```bash
+python3 -m uvicorn niti_bfr.webapp:app --host 0.0.0.0 --port 8000
+```
+
+启动后可在浏览器中打开:
+
+- <http://127.0.0.1:8000/>
+
 运行最小演示:
 
 ```bash

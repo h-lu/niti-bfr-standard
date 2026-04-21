@@ -761,8 +761,9 @@ def _select_wire_provisional_metric(
         metric_report = reports.get(metric_label)
         if metric_report is None:
             continue
-        allowed, _ = _formal_wire_metric_gate(series, reports, metric_label)
-        if not allowed:
+        eval_col, _ = _wire_metric_columns(metric_label)
+        valid = _wire_valid_subset(series, eval_col)
+        if len(valid) < 4:
             continue
         candidates.append((_wire_route_score(series, reports, metric_label), metric_label))
     if not candidates:
@@ -1076,7 +1077,15 @@ def _formal_af_gate(series: pd.DataFrame, reports: dict[str, MetricEvaluation]) 
         return False, "unstable_kappa_extraction"
 
     kappa_report = reports["kappa_fit"]
-    if kappa_report.monotonic_violation_fraction > 0.25:
+    smooth_violation = _wire_smoothed_monotonic_violation_fraction(
+        valid["temperature_c"],
+        valid["kappa_fit_px_inv"],
+        increasing=False,
+    )
+    monotonic_violation = (
+        smooth_violation if smooth_violation is not None else kappa_report.monotonic_violation_fraction
+    )
+    if monotonic_violation > 0.25:
         return False, "kappa_fit_not_monotonic_enough"
 
     tail_count = max(5, int(np.ceil(len(valid) * 0.1)))

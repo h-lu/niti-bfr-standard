@@ -26,6 +26,15 @@ class BrowserCompatibleWriter:
     writer: cv2.VideoWriter
     output_path: Path
 
+    def write(self, frame: np.ndarray) -> None:
+        self.writer.write(frame)
+
+    def release(self) -> None:
+        self.writer.release()
+
+    def isOpened(self) -> bool:
+        return bool(self.writer.isOpened())
+
 SIDEBAR_WIDTH = 420
 PANEL_BG = (246, 246, 246)
 TEXT_COLOR = (35, 35, 35)
@@ -333,8 +342,9 @@ def _render_braided_debug_frame(
     extraction: BraidedExtractionConfig,
     roi_xyxy: tuple[int, int, int, int],
 ) -> np.ndarray:
-    overlay = _blend_mask(frame_bgr, geom.body_tube_mask, roi_xyxy, color_bgr=(100, 220, 130), alpha=0.24)
-    x0, y0, x1, y1 = roi_xyxy
+    mask_roi_xyxy = getattr(geom, "source_roi_xyxy", roi_xyxy)
+    overlay = _blend_mask(frame_bgr, geom.body_tube_mask, mask_roi_xyxy, color_bgr=(100, 220, 130), alpha=0.24)
+    x0, y0, x1, y1 = mask_roi_xyxy
     cv2.rectangle(overlay, (x0, y0), (x1, y1), ROUTE_COLORS["A"], 2)
 
     contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)

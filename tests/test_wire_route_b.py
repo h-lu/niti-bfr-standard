@@ -47,13 +47,31 @@ class WireRouteBGateTests(unittest.TestCase):
         self.assertEqual(reason, "insufficient_kappa_points")
 
     def test_gate_rejects_non_monotonic_kappa(self) -> None:
+        series = self._base_series()
+        series["kappa_fit_px_inv"] = np.concatenate(
+            [np.linspace(0.08, 0.03, 10), np.linspace(0.031, 0.05, 10)]
+        )
         allowed, reason = _formal_wire_metric_gate(
-            self._base_series(),
+            series,
             {"kappa_fit": _route_b_report(monotonic_violation_fraction=0.4)},
             "kappa_fit",
         )
         self.assertFalse(allowed)
         self.assertEqual(reason, "kappa_fit_not_monotonic_enough")
+
+    def test_gate_accepts_small_raw_oscillation_when_smoothed_trend_is_monotonic(self) -> None:
+        series = self._base_series()
+        series["kappa_fit_px_inv"] = np.linspace(0.08, 0.01, len(series)) + 0.002 * np.where(
+            np.arange(len(series)) % 2 == 0, 1.0, -1.0
+        )
+
+        allowed, reason = _formal_wire_metric_gate(
+            series,
+            {"kappa_fit": _route_b_report(monotonic_violation_fraction=0.4)},
+            "kappa_fit",
+        )
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
 
 
 if __name__ == "__main__":
