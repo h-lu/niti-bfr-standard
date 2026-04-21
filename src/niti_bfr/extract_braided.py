@@ -12,6 +12,7 @@ from skimage.morphology import skeletonize
 @dataclass
 class BraidedExtractionConfig:
     roi_xyxy: tuple[int, int, int, int] = (180, 0, 760, 520)
+    initial_roi_xyxy: tuple[int, int, int, int] | None = None
     blur_ksize: int = 5
     threshold_dark: int = 145
     open_kernel: int = 1
@@ -2086,12 +2087,15 @@ def extract_braided_geometry(
     tracking_state: BraidedTrackingState | None = None,
 ) -> BraidedExtractionResult:
     roi_candidates: list[tuple[int, int, int, int]] = []
-    if tracking_state is not None:
+    if tracking_state is None and config.initial_roi_xyxy is not None:
+        roi_candidates.append(_normalize_roi_xyxy(config.initial_roi_xyxy, frame_bgr.shape))
+    elif tracking_state is not None:
         tracked_roi = _normalize_roi_xyxy(tracking_state.roi_xyxy, frame_bgr.shape)
         base_roi = _normalize_roi_xyxy(config.roi_xyxy, frame_bgr.shape)
         if tracked_roi != base_roi:
             roi_candidates.append(tracked_roi)
-    roi_candidates.append(_normalize_roi_xyxy(config.roi_xyxy, frame_bgr.shape))
+    if tracking_state is not None or config.initial_roi_xyxy is None:
+        roi_candidates.append(_normalize_roi_xyxy(config.roi_xyxy, frame_bgr.shape))
 
     last_error: RuntimeError | None = None
     successes: list[BraidedExtractionResult] = []

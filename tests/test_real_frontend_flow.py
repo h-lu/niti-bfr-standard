@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -8,6 +9,7 @@ from unittest import mock
 
 import numpy as np
 import pandas as pd
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 
 from niti_bfr import webapp
@@ -38,6 +40,22 @@ class _FakeRequest:
         return f"/{name}"
 
 
+class _FakeUpload:
+    def __init__(self, filename: str, data: bytes) -> None:
+        self.filename = filename
+        self._data = data
+        self._read = False
+
+    async def read(self, _size: int) -> bytes:
+        if self._read:
+            return b""
+        self._read = True
+        return self._data
+
+    async def close(self) -> None:
+        return None
+
+
 class RealFrontendFlowTests(unittest.TestCase):
     def _patched_storage(self, tmpdir: str):
         base = Path(tmpdir)
@@ -56,21 +74,52 @@ class RealFrontendFlowTests(unittest.TestCase):
             DB_PATH=db_path,
         )
 
+    def _create_run_direct(
+        self,
+        *,
+        preset: str,
+        frame_stride: str = "1",
+        direction_angle_deg: str = "",
+        initial_roi_xyxy: str = "",
+        temperature_data: bytes | None = None,
+    ):
+        return asyncio.run(
+            webapp.create_run(
+                _FakeRequest(),
+                BackgroundTasks(),
+                video_file=_FakeUpload("demo.mp4", b"not-a-real-video"),
+                temperature_file=(
+                    _FakeUpload("temp.csv", temperature_data)
+                    if temperature_data is not None
+                    else None
+                ),
+                preset=preset,
+                frame_stride=frame_stride,
+                run_name="",
+                direction_angle_deg=direction_angle_deg,
+                initial_roi_xyxy=initial_roi_xyxy,
+            )
+        )
+
     def test_home_page_removes_sample_and_benchmark_entrypoints(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp):
                 webapp._ensure_storage()
-                client = TestClient(webapp.app)
-                response = client.get("/")
+                response = webapp.home(_FakeRequest())
+                response.body
 
         self.assertEqual(response.status_code, 200)
-        text = response.text
+        text = response.body.decode("utf-8")
         self.assertIn("抽帧步长", text)
         self.assertNotIn("Benchmark 汇总", text)
         self.assertNotIn("直接运行这个示例", text)
         self.assertNotIn("分析模式", text)
         self.assertIn("开始分析", text)
-        self.assertIn("编织对象方向预览", text)
+        self.assertIn("编织对象 ROI 与方向确认", text)
+        self.assertIn("先选首帧 ROI，再确认方向", text)
+        self.assertLess(text.index("尚未选择初始 ROI"), text.index("方向角度：0°"))
+        self.assertIn('name="initial_roi_xyxy"', text)
+        self.assertIn("preview_roi", text)
 
     def test_home_page_references_editorial_asset_and_asset_route_serves_file(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -239,15 +288,12 @@ class RealFrontendFlowTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
                 webapp._ensure_storage()
-                client = TestClient(webapp.app)
-                response = client.post(
-                    "/runs",
-                    data={"preset": "braided_like", "frame_stride": "2", "direction_angle_deg": "9"},
-                    files={
-                        "video_file": ("demo.mp4", b"not-a-real-video", "video/mp4"),
-                        "temperature_file": ("temp.csv", b"frame,temperature_c\n0,20\n", "text/csv"),
-                    },
-                    follow_redirects=False,
+                response = self._create_run_direct(
+                    preset="braided_like",
+                    frame_stride="2",
+                    direction_angle_deg="9",
+                    initial_roi_xyxy="[10,20,210,220]",
+                    temperature_data=b"frame,temperature_c\n0,20\n",
                 )
                 rows = webapp._list_runs(limit=1)
 
@@ -258,12 +304,11 @@ class RealFrontendFlowTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
                 webapp._ensure_storage()
-                client = TestClient(webapp.app)
-                response = client.post(
-                    "/runs",
-                    data={"preset": "braided_like", "frame_stride": "2", "direction_angle_deg": "17"},
-                    files={"video_file": ("demo.mp4", b"not-a-real-video", "video/mp4")},
-                    follow_redirects=False,
+                response = self._create_run_direct(
+                    preset="braided_like",
+                    frame_stride="2",
+                    direction_angle_deg="17",
+                    initial_roi_xyxy="[12,24,220,260]",
                 )
                 rows = webapp._list_runs(limit=1)
 
@@ -271,20 +316,65 @@ class RealFrontendFlowTests(unittest.TestCase):
         row = dict(rows[0])
         self.assertEqual(row["direction_angle_deg"], 17.0)
         self.assertEqual(row["direction_metric_enabled"], 1)
+        self.assertEqual(row["initial_roi_xyxy"], "[12,24,220,260]")
 
     def test_create_braided_run_requires_direction_angle(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
                 webapp._ensure_storage()
-                client = TestClient(webapp.app)
-                response = client.post(
-                    "/runs",
-                    data={"preset": "braided_like", "frame_stride": "1"},
-                    files={"video_file": ("demo.mp4", b"not-a-real-video", "video/mp4")},
-                )
+                with self.assertRaises(webapp.HTTPException) as ctx:
+                    self._create_run_direct(
+                        preset="braided_like",
+                        frame_stride="1",
+                        initial_roi_xyxy="[12,24,220,260]",
+                    )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("direction_angle_deg", response.text)
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("direction_angle_deg", ctx.exception.detail)
+        self.assertIn("initial_roi_xyxy", ctx.exception.detail)
+
+    def test_create_braided_run_requires_initial_roi(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
+                webapp._ensure_storage()
+                with self.assertRaises(webapp.HTTPException) as ctx:
+                    self._create_run_direct(
+                        preset="braided_like",
+                        frame_stride="1",
+                        direction_angle_deg="4",
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("initial_roi_xyxy", ctx.exception.detail)
+
+    def test_create_braided_run_requires_initial_roi_before_direction_angle(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
+                webapp._ensure_storage()
+                with self.assertRaises(webapp.HTTPException) as ctx:
+                    self._create_run_direct(
+                        preset="braided_like",
+                        frame_stride="1",
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("initial_roi_xyxy", ctx.exception.detail)
+        self.assertNotIn("direction_angle_deg", ctx.exception.detail)
+
+    def test_create_braided_run_rejects_invalid_initial_roi(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
+                webapp._ensure_storage()
+                with self.assertRaises(webapp.HTTPException) as ctx:
+                    self._create_run_direct(
+                        preset="braided_like",
+                        frame_stride="1",
+                        direction_angle_deg="4",
+                        initial_roi_xyxy="[20,20,20,40]",
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("initial_roi_xyxy", ctx.exception.detail)
 
     def test_ensure_storage_backfills_direction_columns(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -326,6 +416,7 @@ class RealFrontendFlowTests(unittest.TestCase):
 
         self.assertIn("direction_angle_deg", columns)
         self.assertIn("direction_metric_enabled", columns)
+        self.assertIn("initial_roi_xyxy", columns)
 
     def test_preview_video_endpoint_returns_file_url(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -528,6 +619,77 @@ class RealFrontendFlowTests(unittest.TestCase):
                 row = dict(webapp._get_run(run_id))
                 self.assertEqual(row["status"], "completed")
                 self.assertIsNone(row["annotated_video_filename"])
+
+    def test_execute_braided_run_uses_persisted_initial_roi(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp):
+                webapp._ensure_storage()
+                run_id = "run-braided-initial-roi"
+                run_dir = webapp.RUNS_ROOT / run_id
+                inputs_dir = run_dir / "inputs"
+                outputs_dir = run_dir / "outputs"
+                inputs_dir.mkdir(parents=True, exist_ok=True)
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (inputs_dir / "braided.mp4").write_bytes(b"fake-video")
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "queued",
+                        "run_name": "braided roi",
+                        "preset": "braided_like",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 3,
+                        "direction_angle_deg": 12.0,
+                        "direction_metric_enabled": 1,
+                        "initial_roi_xyxy": "[12,24,220,260]",
+                        "actual_mode": None,
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": None,
+                        "analyzed_frame_count": None,
+                        "annotated_video_filename": None,
+                        "video_filename": "braided.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+
+                fake_result = AnalysisResult(
+                    series=pd.DataFrame({"frame": [0], "quality": [0.9], "length_axis_px": [20.0]}),
+                    fit=None,
+                    af95_c=None,
+                    aftan_c=None,
+                    reportability_status="quicklook_only",
+                    route_results=[],
+                    input_fps=20.0,
+                    original_frame_count=1,
+                    analyzed_frame_count=1,
+                    frame_stride=3,
+                )
+
+                with (
+                    mock.patch.object(webapp, "analyze_braided_video_quicklook", return_value=fake_result) as analyze_mock,
+                    mock.patch.object(webapp, "compute_braided_acceptance", return_value={}),
+                    mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule_mock,
+                    mock.patch.object(webapp, "route_results_dataframe", return_value=pd.DataFrame()),
+                ):
+                    webapp._execute_run(run_id)
+
+                extraction = analyze_mock.call_args.kwargs["extraction"]
+                summary = webapp._load_summary(run_id)
+                assert summary is not None
+
+        self.assertEqual(extraction.initial_roi_xyxy, (12, 24, 220, 260))
+        self.assertNotEqual(extraction.roi_xyxy, (12, 24, 220, 260))
+        self.assertEqual(summary["initial_roi_xyxy"], [12, 24, 220, 260])
+        self.assertEqual(analyze_mock.call_args.kwargs["frame_stride"], 3)
+        self.assertEqual(analyze_mock.call_args.kwargs["direction_angle_deg"], 12.0)
+        self.assertEqual(schedule_mock.call_args.kwargs["extraction_cfg"].initial_roi_xyxy, (12, 24, 220, 260))
 
 
 if __name__ == "__main__":

@@ -615,6 +615,55 @@ def _is_braided_preset(preset: str | None) -> bool:
     return str(preset or "").startswith("braided")
 
 
+def _parse_initial_roi_xyxy(raw_value: Any) -> tuple[int, int, int, int] | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, str):
+        raw_text = raw_value.strip()
+        if not raw_text:
+            return None
+        try:
+            raw_items = json.loads(raw_text)
+        except json.JSONDecodeError:
+            raw_items = [part.strip() for part in raw_text.split(",")]
+    else:
+        raw_items = raw_value
+    if not isinstance(raw_items, (list, tuple)) or len(raw_items) != 4:
+        raise ValueError("initial_roi_xyxy must contain four coordinates")
+    coords: list[int] = []
+    for item in raw_items:
+        try:
+            value = float(item)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("initial_roi_xyxy coordinates must be numeric") from exc
+        if not np.isfinite(value):
+            raise ValueError("initial_roi_xyxy coordinates must be finite")
+        rounded = int(round(value))
+        if rounded < 0:
+            raise ValueError("initial_roi_xyxy coordinates must be >= 0")
+        coords.append(rounded)
+    x0, y0, x1, y1 = coords
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError("initial_roi_xyxy must satisfy x0 < x1 and y0 < y1")
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        raise ValueError("initial_roi_xyxy must be at least 2 px wide and high")
+    return x0, y0, x1, y1
+
+
+def _encode_initial_roi_xyxy(roi_xyxy: tuple[int, int, int, int] | None) -> str | None:
+    if roi_xyxy is None:
+        return None
+    return json.dumps([int(value) for value in roi_xyxy], separators=(",", ":"))
+
+
+def _row_initial_roi_xyxy(run: sqlite3.Row | dict[str, Any]) -> tuple[int, int, int, int] | None:
+    if isinstance(run, dict):
+        raw_value = run.get("initial_roi_xyxy")
+    else:
+        raw_value = run["initial_roi_xyxy"] if "initial_roi_xyxy" in run.keys() else None
+    return _parse_initial_roi_xyxy(raw_value)
+
+
 def _route_specs_for_preset(preset: str | None) -> dict[str, dict[str, Any]]:
     return BRAIDED_ROUTE_SPECS if _is_braided_preset(preset) else WIRE_ROUTE_SPECS
 
@@ -1085,7 +1134,7 @@ def _run_postprocess_task(
             if preset in {"wire_like", "demo"}:
                 extraction_cfg = _build_wire_extraction_config(config, preset)
             elif preset in {"braided_like", "braided_demo"}:
-                extraction_cfg = _build_braided_extraction_config(config)
+                extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=_row_initial_roi_xyxy(run_payload))
             else:
                 return
 
@@ -2148,6 +2197,7 @@ async def create_run(
     frame_stride: str = Form("1"),
     run_name: str = Form(""),
     direction_angle_deg: str = Form(""),
+    initial_roi_xyxy: str = Form(""),
 ) -> RedirectResponse:
     _ensure_storage()
     if preset not in {"wire_like", "braided_like"}:
@@ -2160,6 +2210,14 @@ async def create_run(
         raise HTTPException(status_code=400, detail="frame_stride must be an integer") from exc
     if parsed_frame_stride < 1:
         raise HTTPException(status_code=400, detail="frame_stride must be >= 1")
+    parsed_initial_roi: tuple[int, int, int, int] | None = None
+    if preset == "braided_like":
+        try:
+            parsed_initial_roi = _parse_initial_roi_xyxy(initial_roi_xyxy)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if parsed_initial_roi is None:
+            raise HTTPException(status_code=400, detail="initial_roi_xyxy is required before direction confirmation for braided uploads")
     parsed_direction_angle: float | None = None
     if direction_angle_deg.strip():
         try:
@@ -2169,7 +2227,7 @@ async def create_run(
         if not np.isfinite(parsed_direction_angle):
             raise HTTPException(status_code=400, detail="direction_angle_deg must be finite")
     if preset == "braided_like" and parsed_direction_angle is None:
-        raise HTTPException(status_code=400, detail="direction_angle_deg is required for braided uploads")
+        raise HTTPException(status_code=400, detail="direction_angle_deg is required after initial_roi_xyxy for braided uploads")
 
     run_id = _new_run_id()
     run_dir = RUNS_ROOT / run_id
@@ -2198,6 +2256,7 @@ async def create_run(
             "frame_stride": parsed_frame_stride,
             "direction_angle_deg": parsed_direction_angle,
             "direction_metric_enabled": bool(preset.startswith("braided") and parsed_direction_angle is not None),
+            "initial_roi_xyxy": _encode_initial_roi_xyxy(parsed_initial_roi),
             "actual_mode": None,
             "formal_metric_label": None,
             "formal_gate_reason": None,
@@ -2276,6 +2335,7 @@ async def create_video_preview(
     preview_dir.mkdir(parents=True, exist_ok=True)
     source_path = preview_dir / _safe_filename(video_file.filename)
     await _save_upload(video_file, source_path)
+    source_size = _video_frame_size(source_path)
 
     preview_path = preview_dir / "preview.mp4"
     try:
@@ -2294,6 +2354,8 @@ async def create_video_preview(
         "preview_id": preview_id,
         "preview_url": str(request.url_for("files", path=preview_rel)),
         "poster_url": poster_url,
+        "source_width": source_size[0] if source_size is not None else None,
+        "source_height": source_size[1] if source_size is not None else None,
     }
 
 
@@ -2535,7 +2597,7 @@ def _execute_run(run_id: str) -> None:
                 frame_stride=frame_stride,
             )
         elif run["preset"] in {"braided_like", "braided_demo"}:
-            extraction_cfg = _build_braided_extraction_config(config)
+            extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=_row_initial_roi_xyxy(run))
             result = analyze_braided_video_quicklook(
                 video_path,
                 extraction=extraction_cfg,
@@ -2624,6 +2686,7 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         "temperature_filename": run["temperature_filename"],
         "direction_angle_deg": run["direction_angle_deg"] if "direction_angle_deg" in run.keys() else None,
         "direction_metric_enabled": bool(run["direction_metric_enabled"]) if "direction_metric_enabled" in run.keys() else False,
+        "initial_roi_xyxy": list(_row_initial_roi_xyxy(run) or []) or None,
         "primary_metric_label": result.primary_metric_label,
         "annotated_video_filename": run["annotated_video_filename"] if "annotated_video_filename" in run.keys() else None,
         "process_video_filename": None,
@@ -3193,12 +3256,17 @@ def _build_wire_extraction_config(config: dict[str, Any], preset: str) -> Extrac
     )
 
 
-def _build_braided_extraction_config(config: dict[str, Any]) -> BraidedExtractionConfig:
+def _build_braided_extraction_config(
+    config: dict[str, Any],
+    *,
+    roi_xyxy: tuple[int, int, int, int] | None = None,
+) -> BraidedExtractionConfig:
     raw = config["analysis"].get("braided_device_extraction")
     if raw is None:
         raise RuntimeError("missing braided extraction preset")
     return BraidedExtractionConfig(
-        roi_xyxy=tuple(raw["roi_xyxy"]),
+        roi_xyxy=tuple(int(value) for value in raw["roi_xyxy"]),
+        initial_roi_xyxy=tuple(int(value) for value in roi_xyxy) if roi_xyxy is not None else None,
         blur_ksize=int(raw["blur_ksize"]),
         threshold_dark=int(raw["threshold_dark"]),
         open_kernel=int(raw["open_kernel"]),
@@ -3348,6 +3416,7 @@ def _ensure_storage() -> None:
                 frame_stride INTEGER NOT NULL DEFAULT 1,
                 direction_angle_deg REAL,
                 direction_metric_enabled INTEGER NOT NULL DEFAULT 0,
+                initial_roi_xyxy TEXT,
                 actual_mode TEXT,
                 formal_metric_label TEXT,
                 formal_gate_reason TEXT,
@@ -3373,6 +3442,8 @@ def _ensure_storage() -> None:
             conn.execute("ALTER TABLE runs ADD COLUMN direction_angle_deg REAL")
         if "direction_metric_enabled" not in existing_columns:
             conn.execute("ALTER TABLE runs ADD COLUMN direction_metric_enabled INTEGER NOT NULL DEFAULT 0")
+        if "initial_roi_xyxy" not in existing_columns:
+            conn.execute("ALTER TABLE runs ADD COLUMN initial_roi_xyxy TEXT")
         if "original_frame_count" not in existing_columns:
             conn.execute("ALTER TABLE runs ADD COLUMN original_frame_count INTEGER")
         if "analyzed_frame_count" not in existing_columns:
@@ -3394,6 +3465,25 @@ def _cleanup_preview_cache(*, max_age_hours: float = 24.0) -> None:
                     path.unlink(missing_ok=True)
         except OSError:
             continue
+
+
+def _video_frame_size(video_path: Path) -> tuple[int, int] | None:
+    cap = cv2.VideoCapture(str(video_path))
+    try:
+        if not cap.isOpened():
+            return None
+        width = int(round(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0))
+        height = int(round(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0))
+        if width > 0 and height > 0:
+            return width, height
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            frame_height, frame_width = frame.shape[:2]
+            if frame_width > 0 and frame_height > 0:
+                return int(frame_width), int(frame_height)
+    finally:
+        cap.release()
+    return None
 
 
 def _transcode_preview_video(source_path: Path, output_path: Path) -> Path:

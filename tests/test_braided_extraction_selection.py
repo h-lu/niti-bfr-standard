@@ -102,6 +102,69 @@ class BraidedExtractionSelectionTests(unittest.TestCase):
 
         self.assertIs(result, tracked_result)
 
+    def test_extract_braided_geometry_uses_manual_roi_only_for_initial_frame(self) -> None:
+        frame = np.zeros((32, 64, 3), dtype=np.uint8)
+        initial_roi = (10, 2, 42, 30)
+        config = BraidedExtractionConfig(roi_xyxy=(0, 0, 64, 32), initial_roi_xyxy=initial_roi)
+        initial_result = SimpleNamespace(
+            length_axis_px=340.0,
+            area_proj_px2=5200.0,
+            attachment_count=1,
+            endpoint_jump_px=0.5,
+            centerline_disagreement=0.05,
+            quality=0.91,
+            tracking_state=BraidedTrackingState((8, 0, 48, 32)),
+        )
+        seen_rois: list[tuple[int, int, int, int]] = []
+
+        def fake_extract(_frame_bgr, _config, *, roi_xyxy):
+            seen_rois.append(roi_xyxy)
+            return initial_result
+
+        with mock.patch("niti_bfr.extract_braided._extract_braided_geometry_once", side_effect=fake_extract):
+            result = extract_braided_geometry(frame, config)
+
+        self.assertIs(result, initial_result)
+        self.assertEqual(seen_rois, [initial_roi])
+
+    def test_extract_braided_geometry_uses_tracking_after_manual_initial_frame(self) -> None:
+        frame = np.zeros((32, 64, 3), dtype=np.uint8)
+        initial_roi = (10, 2, 42, 30)
+        tracked_roi = (8, 0, 48, 32)
+        config = BraidedExtractionConfig(roi_xyxy=(0, 0, 64, 32), initial_roi_xyxy=initial_roi)
+        tracked_result = SimpleNamespace(
+            length_axis_px=360.0,
+            area_proj_px2=5400.0,
+            attachment_count=1,
+            endpoint_jump_px=0.5,
+            centerline_disagreement=0.04,
+            quality=0.93,
+            tracking_state=BraidedTrackingState(tracked_roi),
+        )
+        base_result = SimpleNamespace(
+            length_axis_px=342.0,
+            area_proj_px2=5200.0,
+            attachment_count=1,
+            endpoint_jump_px=3.0,
+            centerline_disagreement=0.08,
+            quality=0.87,
+            tracking_state=BraidedTrackingState(config.roi_xyxy),
+        )
+        seen_rois: list[tuple[int, int, int, int]] = []
+
+        def fake_extract(_frame_bgr, _config, *, roi_xyxy):
+            seen_rois.append(roi_xyxy)
+            if roi_xyxy == tracked_roi:
+                return tracked_result
+            return base_result
+
+        with mock.patch("niti_bfr.extract_braided._extract_braided_geometry_once", side_effect=fake_extract):
+            result = extract_braided_geometry(frame, config, tracking_state=BraidedTrackingState(tracked_roi))
+
+        self.assertIs(result, tracked_result)
+        self.assertEqual(seen_rois, [tracked_roi, config.roi_xyxy])
+        self.assertNotIn(initial_roi, seen_rois)
+
 
 if __name__ == "__main__":
     unittest.main()
