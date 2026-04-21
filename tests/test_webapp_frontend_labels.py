@@ -28,6 +28,32 @@ from niti_bfr.webapp import (
 )
 
 
+class _FakeRequest:
+    query_params: dict[str, str]
+
+    def __init__(self, query_params: dict[str, str] | None = None) -> None:
+        self.query_params = dict(query_params or {})
+
+    def url_for(self, name: str, **path_params: object) -> str:
+        if name == "home":
+            return "/"
+        if name == "history":
+            return "/history"
+        if name == "run_detail":
+            return f"/runs/{path_params['run_id']}"
+        if name == "run_status":
+            return f"/runs/{path_params['run_id']}/status"
+        if name == "delete_run":
+            return f"/runs/{path_params['run_id']}/delete"
+        if name == "files":
+            return f"/files/{path_params['path']}"
+        if name == "create_run":
+            return "/runs"
+        if name == "create_video_preview":
+            return "/preview-video"
+        return f"/{name}"
+
+
 class WebappFrontendLabelTests(unittest.TestCase):
     def _write_json(self, path: Path, payload: dict[str, object] | list[dict[str, object]]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -439,6 +465,134 @@ class WebappFrontendLabelTests(unittest.TestCase):
 
                 schedule.assert_called_once()
                 self.assertTrue(schedule.call_args.kwargs["force_inline"])
+
+    def test_run_detail_get_is_read_only_and_uses_status_polling(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "run-detail-read-only"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                pd.DataFrame(
+                    {
+                        "temperature_c": [20.0, 40.0, 60.0],
+                        "x_route_a_recovery": [0.0, 0.5, 1.0],
+                        "kappa_fit_recovery": [0.0, 0.5, 1.0],
+                        "kappa_route_c_recovery": [0.0, 0.5, 1.0],
+                    }
+                ).to_csv(outputs_dir / "analysis.csv", index=False)
+                (outputs_dir / webapp.PROCESS_VIDEO_FILENAME).write_bytes(b"video")
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "completed",
+                        "run_name": "read-only detail",
+                        "preset": "demo",
+                        "requested_mode": "formal_af",
+                        "frame_stride": 1,
+                        "actual_mode": "formal_af",
+                        "formal_metric_label": "kappa_fit",
+                        "formal_gate_reason": None,
+                        "af95_c": 52.8,
+                        "aftan_c": 50.8,
+                        "original_frame_count": 3,
+                        "analyzed_frame_count": 3,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": "temp.csv",
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+                summary_path = outputs_dir / "summary.json"
+                self._write_json(
+                    summary_path,
+                    {
+                        "preset": "demo",
+                        "requested_mode": "formal_af",
+                        "actual_mode": "formal_af",
+                        "reportability_status": "formal",
+                        "formal_metric_label": "kappa_fit",
+                        "provisional_metric_label": "kappa_fit",
+                        "temperature_c_min": 20.0,
+                        "temperature_c_max": 60.0,
+                        "asset_generation_status": "pending",
+                        "process_video_filename": webapp.PROCESS_VIDEO_FILENAME,
+                        "route_results": [
+                            {"alias": "A", "metric_key": "x_route_a", "af95_c": 50.0, "aftan_c": 48.0},
+                            {"alias": "B", "metric_key": "kappa_fit", "af95_c": 53.0, "aftan_c": 51.0},
+                            {"alias": "C", "metric_key": "kappa_route_c", "af95_c": 53.1, "aftan_c": 51.1},
+                        ],
+                    },
+                )
+                before_summary = summary_path.read_text(encoding="utf-8")
+                with (
+                    mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule,
+                    mock.patch.object(webapp, "_ensure_video_poster", autospec=True) as ensure_poster,
+                ):
+                    response = webapp.run_detail(_FakeRequest(), run_id)
+                    response_text = response.body.decode("utf-8")
+                after_summary = summary_path.read_text(encoding="utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        schedule.assert_not_called()
+        ensure_poster.assert_not_called()
+        self.assertEqual(after_summary, before_summary)
+        self.assertNotIn('http-equiv="refresh"', response_text)
+        self.assertIn(f"/runs/{run_id}/status", response_text)
+        self.assertIn("页面会自动更新状态", response_text)
+
+    def test_run_status_endpoint_is_read_only(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "run-status-read-only"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "analysis.csv").write_text("frame,quality\n0,0.9\n", encoding="utf-8")
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "running",
+                        "run_name": "status",
+                        "preset": "demo",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 1,
+                        "actual_mode": "quicklook",
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": None,
+                        "analyzed_frame_count": None,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+                summary_path = outputs_dir / "summary.json"
+                self._write_json(summary_path, {"asset_generation_status": "running"})
+                before_summary = summary_path.read_text(encoding="utf-8")
+                with (
+                    mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule,
+                    mock.patch.object(webapp.pd, "read_csv", autospec=True) as read_csv,
+                ):
+                    payload = webapp.run_status(run_id)
+                after_summary = summary_path.read_text(encoding="utf-8")
+
+        schedule.assert_not_called()
+        read_csv.assert_not_called()
+        self.assertEqual(after_summary, before_summary)
+        self.assertEqual(payload["status"], "running")
+        self.assertEqual(payload["asset_generation_status"], "running")
+        self.assertTrue(payload["refresh"])
 
     def test_delete_run_blocks_pending_or_running_asset_generation(self) -> None:
         for asset_status in ("pending", "running"):
