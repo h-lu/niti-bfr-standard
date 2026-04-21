@@ -1,9 +1,0 @@
-frames: 480
-length_env_median_px: 504.0
-length_axis_median_px: 504.0
-diameter_max_median_px: 132.097466494937
-x_peak_norm_median: 0.5503875968992248
-taper_left_median_px: 36.0
-taper_right_median_px: 32.0
-quality_median: 1.0
-quality_lt_0_5_fraction: 0.0

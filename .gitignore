@@ -7,7 +7,5 @@ build/
 dist/
 outputs/
 tmp/
-var/tmp_video_codec_probe/
-var/webapp/previews/
-var/webapp/runs/
-var/webapp/runs.db
+var/
+data/braided-synthetic-sample/
