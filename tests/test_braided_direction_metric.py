@@ -47,6 +47,7 @@ class BraidedDirectionMetricTests(unittest.TestCase):
         class DummyGeom:
             def __init__(self, frame_idx: int) -> None:
                 width = 4 + frame_idx
+                self.source_roi_xyxy = (0, 0, 20, 12)
                 self.anchor_xy = np.array([1.0, 1.0])
                 self.tip_xy = np.array([10.0, 1.0])
                 self.quality = 0.9
