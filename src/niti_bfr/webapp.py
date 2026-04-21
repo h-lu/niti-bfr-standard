@@ -4,6 +4,7 @@ from collections import Counter
 import json
 import sqlite3
 import shutil
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,6 +71,9 @@ app = FastAPI(title="NiTi BFR 分析台")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_ROOT)), name="assets")
 app.mount("/files", StaticFiles(directory=str(DATA_ROOT)), name="files")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+_POSTPROCESS_LOCK = threading.Lock()
+_POSTPROCESS_IN_FLIGHT: set[str] = set()
+_SUMMARY_UNSET = object()
 
 SAMPLE_RUNS: dict[str, dict[str, str]] = {
     "wire_like_quicklook": {
@@ -793,22 +797,355 @@ def _refresh_plot_outputs_for_display(
     run: sqlite3.Row | dict[str, Any],
     prepared: dict[str, Any] | None,
 ) -> None:
-    if prepared is None or not prepared.get("_smoothed_backfilled"):
+    if prepared is None:
         return
-    analysis_csv = _analysis_csv_path_for_run(run)
-    if not analysis_csv.exists():
+    status = (run.get("status") if isinstance(run, dict) else run["status"]) or "completed"
+    if status != "completed":
+        return
+    if not _postprocess_needed(run, prepared):
+        return
+    run_id = run.get("id") if isinstance(run, dict) else run["id"]
+    _schedule_postprocess(run_id, run=run, prepared=prepared)
+
+
+def _outputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
+    return _analysis_csv_path_for_run(run).parent
+
+
+def _inputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
+    run_dir = run.get("run_dir") if isinstance(run, dict) else run["run_dir"]
+    return Path(str(run_dir)) / "inputs"
+
+
+def _summary_path_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    if isinstance(run, str):
+        return RUNS_ROOT / run / "outputs" / "summary.json"
+    run_dir = run.get("run_dir") if isinstance(run, dict) else run["run_dir"]
+    return Path(str(run_dir)) / "outputs" / "summary.json"
+
+
+def _process_video_ready(outputs_dir: Path, prepared: dict[str, Any]) -> bool:
+    filename = str(prepared.get("process_video_filename") or "").strip()
+    if not filename:
+        return False
+    return (outputs_dir / filename).exists()
+
+
+def _expected_plot_outputs(
+    run: sqlite3.Row | dict[str, Any],
+    prepared: dict[str, Any],
+) -> set[str]:
+    preset = str(prepared.get("preset") or (run.get("preset") if isinstance(run, dict) else run["preset"]) or "")
+    temperature_available = bool(
+        run.get("temperature_filename") if isinstance(run, dict) else run["temperature_filename"]
+    ) or (
+        prepared.get("temperature_c_min") is not None
+        or prepared.get("temperature_c_max") is not None
+    )
+    expected = {
+        "route_a_metric_over_time.png",
+        "route_b_metric_over_time.png",
+        "route_c_metric_over_time.png",
+    }
+    if preset.startswith("braided"):
+        expected.update(
+            {
+                "quicklook_lengths_vs_time.png",
+                "quicklook_diameter_vs_time.png",
+                "quicklook_area_vs_time.png",
+                "quicklook_body_qc_vs_time.png",
+                "quicklook_foreshortening_vs_time.png",
+            }
+        )
+    else:
+        expected.update({"quicklook_x_vs_time.png", "quicklook_kappa_vs_time.png"})
+
+    run_direction_enabled = (
+        bool(run.get("direction_metric_enabled"))
+        if isinstance(run, dict)
+        else bool(run["direction_metric_enabled"]) if "direction_metric_enabled" in run.keys() else False
+    )
+    direction_enabled = bool(
+        prepared.get("direction_result")
+        or run_direction_enabled
+    )
+    if direction_enabled:
+        expected.add("direction_metric_over_time.png")
+
+    if temperature_available:
+        expected.update(
+            {
+                "route_a_recovery_vs_temperature.png",
+                "route_b_recovery_vs_temperature.png",
+                "route_c_recovery_vs_temperature.png",
+                "route_recovery_vs_temperature.png",
+            }
+        )
+        if preset.startswith("braided"):
+            expected.update(
+                {
+                    "braided_recovery_vs_temperature.png",
+                    "braided_geometry_vs_temperature.png",
+                    "braided_body_qc_vs_temperature.png",
+                }
+            )
+        else:
+            expected.update({"recovery_vs_temperature.png", "kappa_vs_temperature.png"})
+        if direction_enabled:
+            expected.add("direction_recovery_vs_temperature.png")
+    return expected
+
+
+def _plot_outputs_complete(
+    run: sqlite3.Row | dict[str, Any],
+    prepared: dict[str, Any],
+) -> bool:
+    outputs_dir = _outputs_dir_for_run(run)
+    if not outputs_dir.exists():
+        return False
+    expected = _expected_plot_outputs(run, prepared)
+    return all((outputs_dir / filename).exists() for filename in expected)
+
+
+def _postprocess_needed(
+    run: sqlite3.Row | dict[str, Any],
+    prepared: dict[str, Any] | None,
+) -> bool:
+    if prepared is None:
+        return False
+    return bool(
+        prepared.get("asset_generation_status") in {"pending", "running", "failed"}
+        or prepared.get("_smoothed_backfilled")
+        or not _plot_outputs_complete(run, prepared)
+        or not _process_video_ready(_outputs_dir_for_run(run), prepared)
+    )
+
+
+def _postprocess_fallback_error(exc: Exception) -> str:
+    return str(exc) or exc.__class__.__name__
+
+
+def _postprocess_final_status(process_video_error: str | None, plot_error: str | None) -> tuple[str, str | None]:
+    if process_video_error is None and plot_error is None:
+        return "completed", None
+    error_text = "; ".join(part for part in [process_video_error, plot_error] if part) or None
+    return "failed", error_text
+
+
+def _schedule_postprocess(
+    run_id: str,
+    *,
+    run: sqlite3.Row | dict[str, Any] | None = None,
+    prepared: dict[str, Any] | None = None,
+    result: AnalysisResult | None = None,
+    extraction_cfg: ExtractionConfig | BraidedExtractionConfig | None = None,
+    video_path: Path | None = None,
+) -> bool:
+    with _POSTPROCESS_LOCK:
+        if run_id in _POSTPROCESS_IN_FLIGHT:
+            return False
+        _POSTPROCESS_IN_FLIGHT.add(run_id)
+    try:
+        run_inline = result is not None or bool(prepared and prepared.get("_smoothed_backfilled"))
+        if run_inline:
+            _run_postprocess_task(
+                run_id=run_id,
+                run=dict(run) if run is not None else None,
+                prepared=dict(prepared) if prepared is not None else None,
+                result=result,
+                extraction_cfg=extraction_cfg,
+                video_path=Path(video_path) if video_path is not None else None,
+            )
+            return True
+        worker = threading.Thread(
+            target=_run_postprocess_task,
+            kwargs={
+                "run_id": run_id,
+                "run": dict(run) if run is not None else None,
+                "prepared": dict(prepared) if prepared is not None else None,
+                "result": result,
+                "extraction_cfg": extraction_cfg,
+                "video_path": Path(video_path) if video_path is not None else None,
+            },
+            daemon=True,
+            name=f"niti-bfr-postprocess-{run_id[:12]}",
+        )
+        worker.start()
+        return True
+    except Exception:  # noqa: BLE001
+        with _POSTPROCESS_LOCK:
+            _POSTPROCESS_IN_FLIGHT.discard(run_id)
+        return False
+
+
+def _run_postprocess_task(
+    *,
+    run_id: str,
+    run: dict[str, Any] | None,
+    prepared: dict[str, Any] | None,
+    result: AnalysisResult | None,
+    extraction_cfg: ExtractionConfig | BraidedExtractionConfig | None,
+    video_path: Path | None,
+) -> None:
+    try:
+        run_payload = dict(run) if run is not None else None
+        if run_payload is None:
+            run_row = _get_run(run_id)
+            if run_row is None:
+                return
+            run_payload = dict(run_row)
+
+        outputs_dir = _outputs_dir_for_run(run_payload)
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        analysis_csv = outputs_dir / "analysis.csv"
+        if not analysis_csv.exists():
+            return
+
+        prepared_summary = dict(prepared) if prepared is not None else _prepare_summary_for_display(run_payload, _load_summary(run_id))
+        if prepared_summary is None:
+            return
+
+        _update_summary_fields(
+            run_payload,
+            asset_generation_status="running",
+            asset_generation_error=None,
+        )
+
+        analysis_result = result
+        if analysis_result is None:
+            try:
+                series = pd.read_csv(analysis_csv)
+            except Exception:  # noqa: BLE001
+                return
+            analysis_result = _result_for_display_plots(run_payload, prepared_summary, series)
+
+        if extraction_cfg is None:
+            config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+            preset = run_payload["preset"]
+            if preset in {"wire_like", "demo"}:
+                extraction_cfg = _build_wire_extraction_config(config, preset)
+            elif preset in {"braided_like", "braided_demo"}:
+                extraction_cfg = _build_braided_extraction_config(config)
+            else:
+                return
+
+        resolved_video_path = Path(video_path) if video_path is not None else _inputs_dir_for_run(run_payload) / run_payload["video_filename"]
+        process_video_error = _generate_process_video_asset(
+            run_payload,
+            result=analysis_result,
+            extraction_cfg=extraction_cfg,
+            video_path=resolved_video_path,
+        )
+        plot_error = _generate_plot_assets(
+            run_payload,
+            result=analysis_result,
+            prepared=prepared_summary,
+            force=bool(prepared_summary.get("_smoothed_backfilled")),
+        )
+        asset_generation_status, asset_generation_error = _postprocess_final_status(process_video_error, plot_error)
+        _update_summary_fields(
+            run_payload,
+            asset_generation_status=asset_generation_status,
+            asset_generation_error=asset_generation_error,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _update_summary_fields(
+            run_id,
+            asset_generation_status="failed",
+            asset_generation_error=_postprocess_fallback_error(exc),
+        )
+    finally:
+        with _POSTPROCESS_LOCK:
+            _POSTPROCESS_IN_FLIGHT.discard(run_id)
+
+
+def _update_summary_fields(
+    run: sqlite3.Row | dict[str, Any] | str,
+    *,
+    process_video_filename: str | None | object = _SUMMARY_UNSET,
+    process_video_error: str | None | object = _SUMMARY_UNSET,
+    asset_generation_status: str | None | object = _SUMMARY_UNSET,
+    asset_generation_error: str | None | object = _SUMMARY_UNSET,
+) -> None:
+    path = _summary_path_for_run(run)
+    if not path.exists():
         return
     try:
-        series = pd.read_csv(analysis_csv)
+        summary = json.loads(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001
         return
+    if process_video_filename is not _SUMMARY_UNSET:
+        summary["process_video_filename"] = process_video_filename
+    if process_video_error is not _SUMMARY_UNSET:
+        if process_video_error in {None, ""}:
+            summary.pop("process_video_error", None)
+        else:
+            summary["process_video_error"] = process_video_error
+    if asset_generation_status is not _SUMMARY_UNSET:
+        summary["asset_generation_status"] = asset_generation_status
+    if asset_generation_error is not _SUMMARY_UNSET:
+        if asset_generation_error in {None, ""}:
+            summary.pop("asset_generation_error", None)
+        else:
+            summary["asset_generation_error"] = asset_generation_error
+    _write_summary(path, summary)
 
-    outputs_dir = analysis_csv.parent
-    result = _result_for_display_plots(run, prepared, series)
+
+def _generate_process_video_asset(
+    run: sqlite3.Row | dict[str, Any],
+    *,
+    result: AnalysisResult,
+    extraction_cfg: ExtractionConfig | BraidedExtractionConfig,
+    video_path: Path,
+) -> str | None:
+    outputs_dir = _outputs_dir_for_run(run)
+    process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
+    run_id = run.get("id") if isinstance(run, dict) else run["id"]
+    summary = _load_summary(run_id) or {}
+    if process_video_path.exists() and summary.get("process_video_filename") == PROCESS_VIDEO_FILENAME:
+        return None
+
+    _remove_video_with_poster(process_video_path)
+    try:
+        render_process_debug_video(
+            video_path=video_path,
+            output_path=process_video_path,
+            extraction=extraction_cfg,
+            result=result,
+            object_type=run.get("preset") if isinstance(run, dict) else run["preset"],
+            output_fps=max((result.input_fps or 1.0) / max(result.frame_stride, 1), 1.0),
+        )
+        _update_summary_fields(
+            run,
+            process_video_filename=PROCESS_VIDEO_FILENAME,
+            process_video_error=None,
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001
+        error_text = str(exc)
+        _update_summary_fields(
+            run,
+            process_video_filename=None,
+            process_video_error=error_text,
+        )
+        return error_text
+
+
+def _generate_plot_assets(
+    run: sqlite3.Row | dict[str, Any],
+    *,
+    result: AnalysisResult,
+    prepared: dict[str, Any] | None = None,
+    force: bool = False,
+) -> str | None:
+    outputs_dir = _outputs_dir_for_run(run)
+    if prepared is not None and not force and _plot_outputs_complete(run, prepared):
+        return None
     try:
         _write_plots(outputs_dir, result)
-    except Exception:  # noqa: BLE001
-        return
+    except Exception as exc:  # noqa: BLE001
+        return str(exc)
+    return None
 
 
 def _coerce_warning_codes(value: Any) -> list[str]:
@@ -1939,7 +2276,8 @@ def run_detail(request: Request, run_id: str) -> Any:
             "direction_metric_curve": direction_metric_curve,
             "direction_recovery_curve": direction_recovery_curve,
             "download_files": download_files,
-            "refresh": run["status"] in {"queued", "running"},
+            "refresh": run["status"] in {"queued", "running"}
+            or bool(summary and summary.get("asset_generation_status") in {"pending", "running"}),
             "preset_label": _preset_label,
             "preset_description": _preset_description,
             "mode_label": _mode_label,
@@ -2017,22 +2355,12 @@ def _execute_run(run_id: str) -> None:
         summary["annotated_video_filename"] = None
         process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
         _remove_video_with_poster(process_video_path)
-        try:
-            render_process_debug_video(
-                video_path=video_path,
-                output_path=process_video_path,
-                extraction=extraction_cfg,
-                result=result,
-                object_type=run["preset"],
-                output_fps=max((result.input_fps or 1.0) / max(result.frame_stride, 1), 1.0),
-            )
-            summary["process_video_filename"] = PROCESS_VIDEO_FILENAME
-        except Exception as process_exc:  # noqa: BLE001
-            summary["process_video_filename"] = None
-            summary["process_video_error"] = str(process_exc)
+        summary["process_video_filename"] = None
+        summary["process_video_error"] = None
+        summary["asset_generation_status"] = "pending"
+        summary["asset_generation_error"] = None
         _write_summary(outputs_dir / "summary.json", summary)
         route_results_dataframe(summary.get("route_results")).to_csv(outputs_dir / "route_results.csv", index=False)
-        _write_plots(outputs_dir, result)
 
         _update_run(
             run_id,
@@ -2048,6 +2376,14 @@ def _execute_run(run_id: str) -> None:
                 "annotated_video_filename": None,
                 "error_text": None,
             },
+        )
+        _schedule_postprocess(
+            run_id,
+            run=run,
+            prepared=summary,
+            result=result,
+            extraction_cfg=extraction_cfg,
+            video_path=video_path,
         )
     except Exception as exc:  # noqa: BLE001
         _update_run(run_id, {"status": "failed", "error_text": str(exc)})
@@ -2961,7 +3297,10 @@ async def _save_upload(upload: UploadFile, path: Path) -> None:
 
 
 def _write_summary(path: Path, summary: dict[str, Any]) -> None:
-    path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    tmp_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp_path.replace(path)
 
 
 def _load_summary(run_id: str) -> dict[str, Any] | None:

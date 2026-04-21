@@ -17,6 +17,7 @@ from niti_bfr.webapp import (
     SAMPLE_RUNS,
     _build_benchmark_page_data,
     _mode_label,
+    _postprocess_needed,
     _plot_route_titles_for_series,
     _prepare_summary_for_display,
     _preset_label,
@@ -293,11 +294,75 @@ class WebappFrontendLabelTests(unittest.TestCase):
                 }
 
                 prepared = _prepare_summary_for_display(run, summary)
-                _refresh_plot_outputs_for_display(run, prepared)
+                with mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule:
+                    _refresh_plot_outputs_for_display(run, prepared)
 
-                route_a_plot = outputs_dir / "route_a_recovery_vs_temperature.png"
-                self.assertTrue(route_a_plot.exists())
-                self.assertGreater(route_a_plot.stat().st_size, 0)
+                schedule.assert_called_once()
+
+    def test_postprocess_needed_when_only_partial_plot_set_exists(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "braided-run-partial-plots"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "route_a_metric_over_time.png").write_bytes(b"partial")
+
+                run = {
+                    "id": run_id,
+                    "preset": "braided_like",
+                    "requested_mode": "quicklook",
+                    "actual_mode": "quicklook",
+                    "temperature_filename": None,
+                    "run_dir": str(run_dir),
+                    "direction_metric_enabled": False,
+                    "status": "completed",
+                }
+                prepared = {
+                    "preset": "braided_like",
+                    "actual_mode": "quicklook",
+                    "asset_generation_status": "failed",
+                    "process_video_filename": webapp.PROCESS_VIDEO_FILENAME,
+                    "temperature_c_min": None,
+                    "temperature_c_max": None,
+                }
+
+                self.assertTrue(_postprocess_needed(run, prepared))
+
+    def test_refresh_plot_outputs_for_display_schedules_when_partial_plots_exist(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "wire-run-refresh-partial"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "route_a_metric_over_time.png").write_bytes(b"partial")
+                (outputs_dir / webapp.PROCESS_VIDEO_FILENAME).write_bytes(b"video")
+
+                run = {
+                    "id": run_id,
+                    "preset": "demo",
+                    "requested_mode": "quicklook",
+                    "actual_mode": "quicklook",
+                    "temperature_filename": None,
+                    "run_dir": str(run_dir),
+                    "status": "completed",
+                }
+                prepared = {
+                    "preset": "demo",
+                    "actual_mode": "quicklook",
+                    "asset_generation_status": "completed",
+                    "process_video_filename": webapp.PROCESS_VIDEO_FILENAME,
+                    "temperature_c_min": None,
+                    "temperature_c_max": None,
+                }
+
+                with mock.patch.object(webapp, "_schedule_postprocess", autospec=True) as schedule:
+                    _refresh_plot_outputs_for_display(run, prepared)
+
+                schedule.assert_called_once()
 
     def test_benchmark_page_falls_back_to_analysis_metrics(self) -> None:
         with TemporaryDirectory() as tmp:
