@@ -235,6 +235,10 @@
 
 ## 快速开始
 
+在线分析台:
+
+- 入口: <https://hblu.top/niti/>
+
 安装:
 
 ```bash
@@ -332,26 +336,26 @@ python3 scripts/analyze_wire_like.py
 
 温度同步格式说明见:
 
-- [temperature-sync.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/temperature-sync.md)
+- [temperature-sync.md](docs/temperature-sync.md)
 
 研究与路线记录见:
 
-- [research-notes.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/research-notes.md)
+- [research-notes.md](docs/research-notes.md)
   其中新增了“方法对照表”和“商业软件/开源工具参考表”，方便直接比较标准思路、论文方法和当前仓库路线。
 
 第二类对象的独立调研与方案草案见:
 
-- [braided-device-survey.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-device-survey.md)
+- [braided-device-survey.md](docs/braided-device-survey.md)
   该文档用于记录“编织网状器械 / braided device”这类新对象的资料整理、主量设计，以及预计采用的独立算法路线。
-- [braided-video-formal-method.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-video-formal-method.md)
+- [braided-video-formal-method.md](docs/braided-video-formal-method.md)
   该文档用于钉死“只有视频输入”条件下 braided device 的正式方法边界、术语口径，以及当前仓库应采用的主量与不能越界声称的内容。
 
 当前最小方案的封版结论见:
 
-- [v0.1-summary.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/v0.1-summary.md)
+- [v0.1-summary.md](docs/v0.1-summary.md)
   其中总结了当前针型对象是否算“已解决”、A/B/C 的推荐用法、demo 的理论值，以及真实实验还需要补哪些输入。
 - [v0.2-scope-guard.md](docs/v0.2-scope-guard.md)
-该文档记录的是 `wire-like v0.2` 阶段的 formal 收敛任务；当前项目级长期原则以 [AGENTS.md](/Users/wangxq/Documents/niti-bfr-standard-2/AGENTS.md) 为准。
+该文档记录的是 `wire-like v0.2` 阶段的 formal 收敛任务；当前项目级长期原则以 [AGENTS.md](AGENTS.md) 为准。
 
 第二类对象当前提供独立 quicklook 脚本:
 
@@ -414,7 +418,7 @@ python3 scripts/analyze_braided_like.py \
 - `length_env` 和分区量仍主要用于对照与解释层
 
 当前脚本仍是这条正式路线的最小实现 / quicklook 入口；正式口径与后续升级方向以
-[braided-video-formal-method.md](/Users/wangxq/Documents/niti-bfr-standard-2/docs/braided-video-formal-method.md)
+[braided-video-formal-method.md](docs/braided-video-formal-method.md)
 为准。
 
 ## 路线级 QC 与 Benchmark 读取

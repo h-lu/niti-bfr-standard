@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -19,6 +20,12 @@ from .pipeline import AnalysisResult, _next_braided_tracking_state
 
 ObjectType = Literal["wire_like", "braided_like"]
 
+
+@dataclass
+class BrowserCompatibleWriter:
+    writer: cv2.VideoWriter
+    output_path: Path
+
 SIDEBAR_WIDTH = 420
 PANEL_BG = (246, 246, 246)
 TEXT_COLOR = (35, 35, 35)
@@ -29,7 +36,13 @@ ROUTE_COLORS: dict[str, tuple[int, int, int]] = {
     "B": (220, 60, 220),
     "C": (60, 180, 80),
 }
-CHINESE_FONT_PATH = "/System/Library/Fonts/Hiragino Sans GB.ttc"
+FONT_CANDIDATE_PATHS = (
+    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Medium.ttc",
+    "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+)
 
 
 def render_process_debug_video(
@@ -65,14 +78,20 @@ def render_process_debug_video(
         cap.release()
         raise ValueError("output_fps must be positive")
 
-    writer = _open_browser_compatible_writer(
+    writer_spec = _open_browser_compatible_writer(
         output_path=output_path,
         fps=rendered_fps,
         frame_size=(source_width + SIDEBAR_WIDTH, source_height),
     )
-    if writer is None:
+    if writer_spec is None:
         cap.release()
         raise RuntimeError(f"failed to open video writer: {output_path}")
+    if isinstance(writer_spec, BrowserCompatibleWriter):
+        writer = writer_spec.writer
+        final_output_path = writer_spec.output_path
+    else:
+        writer = writer_spec
+        final_output_path = output_path
 
     next_frame_pos: int | None = None
     braided_tracking_state: BraidedTrackingState | None = None
@@ -83,6 +102,9 @@ def render_process_debug_video(
             try:
                 if object_kind == "braided_like":
                     assert isinstance(extraction, BraidedExtractionConfig)
+                    render_roi_xyxy = (
+                        braided_tracking_state.roi_xyxy if braided_tracking_state is not None else extraction.roi_xyxy
+                    )
                     geom = extract_braided_geometry(frame_bgr, extraction, tracking_state=braided_tracking_state)
                     braided_tracking_state = getattr(geom, "tracking_state", None)
                     if braided_tracking_state is None:
@@ -94,6 +116,7 @@ def render_process_debug_video(
                         series=series,
                         frame_idx=frame_idx,
                         extraction=extraction,
+                        roi_xyxy=render_roi_xyxy,
                     )
                 else:
                     assert isinstance(extraction, ExtractionConfig)
@@ -119,7 +142,7 @@ def render_process_debug_video(
         cap.release()
         writer.release()
 
-    return output_path
+    return final_output_path
 
 
 def _open_browser_compatible_writer(
@@ -127,9 +150,10 @@ def _open_browser_compatible_writer(
     output_path: Path,
     fps: float,
     frame_size: tuple[int, int],
-) -> cv2.VideoWriter | None:
-    # Prefer H.264/avc1 so the exported MP4 can play inside browser <video>.
-    for codec in ("avc1", "H264", "mp4v"):
+) -> BrowserCompatibleWriter | None:
+    # Prefer H.264 MP4. If this host cannot encode H.264, fall back to WebM,
+    # because mp4v often downloads fine but fails inside browser <video>.
+    for codec in ("avc1", "H264"):
         writer = cv2.VideoWriter(
             str(output_path),
             cv2.VideoWriter_fourcc(*codec),
@@ -137,7 +161,19 @@ def _open_browser_compatible_writer(
             frame_size,
         )
         if writer.isOpened():
-            return writer
+            return BrowserCompatibleWriter(writer=writer, output_path=output_path)
+        writer.release()
+
+    webm_output_path = output_path.with_suffix(".webm")
+    for codec in ("VP90", "VP80"):
+        writer = cv2.VideoWriter(
+            str(webm_output_path),
+            cv2.VideoWriter_fourcc(*codec),
+            fps,
+            frame_size,
+        )
+        if writer.isOpened():
+            return BrowserCompatibleWriter(writer=writer, output_path=webm_output_path)
         writer.release()
     return None
 
@@ -295,9 +331,10 @@ def _render_braided_debug_frame(
     series: pd.DataFrame,
     frame_idx: int,
     extraction: BraidedExtractionConfig,
+    roi_xyxy: tuple[int, int, int, int],
 ) -> np.ndarray:
-    overlay = _blend_mask(frame_bgr, geom.body_tube_mask, extraction.roi_xyxy, color_bgr=(100, 220, 130), alpha=0.24)
-    x0, y0, x1, y1 = extraction.roi_xyxy
+    overlay = _blend_mask(frame_bgr, geom.body_tube_mask, roi_xyxy, color_bgr=(100, 220, 130), alpha=0.24)
+    x0, y0, x1, y1 = roi_xyxy
     cv2.rectangle(overlay, (x0, y0), (x1, y1), ROUTE_COLORS["A"], 2)
 
     contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
@@ -557,14 +594,21 @@ def _draw_unicode_texts(
     canvas[:] = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
 
-_FONT_CACHE: dict[int, ImageFont.FreeTypeFont] = {}
+_FONT_CACHE: dict[int, ImageFont.ImageFont] = {}
 
 
-def _load_font(font_size: int) -> ImageFont.FreeTypeFont:
+def _load_font(font_size: int) -> ImageFont.ImageFont:
     cached = _FONT_CACHE.get(font_size)
     if cached is not None:
         return cached
-    font = ImageFont.truetype(CHINESE_FONT_PATH, font_size)
+    for path in FONT_CANDIDATE_PATHS:
+        try:
+            font = ImageFont.truetype(path, font_size)
+            _FONT_CACHE[font_size] = font
+            return font
+        except OSError:
+            continue
+    font = ImageFont.load_default()
     _FONT_CACHE[font_size] = font
     return font
 

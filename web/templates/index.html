@@ -656,7 +656,7 @@
         const payload = new FormData();
         payload.append("video_file", file, file.name);
         try {
-          const response = await fetch("/preview-video", {
+          const response = await fetch("{{ request.url_for('create_video_preview') }}", {
             method: "POST",
             body: payload,
           });
