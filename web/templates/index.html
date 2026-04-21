@@ -169,6 +169,21 @@
         pointer-events: none;
       }
 
+      .preview-roi {
+        position: absolute;
+        display: none;
+        border: 2px solid rgba(255, 255, 255, 0.94);
+        background: rgba(42, 121, 132, 0.16);
+        box-shadow:
+          0 0 0 1px rgba(42, 121, 132, 0.9),
+          0 0 22px rgba(255, 255, 255, 0.18);
+        pointer-events: none;
+      }
+
+      .preview-roi.visible {
+        display: block;
+      }
+
       .preview-line {
         position: absolute;
         top: 50%;
@@ -181,6 +196,10 @@
         transform: translate(-50%, -50%) rotate(0deg);
         transform-origin: center center;
         box-shadow: 0 0 28px rgba(255, 255, 255, 0.18);
+      }
+
+      .preview-line.disabled {
+        opacity: 0.45;
       }
 
       .preview-center {
@@ -197,6 +216,12 @@
         cursor: grab;
         touch-action: none;
         box-shadow: 0 0 0 7px rgba(182, 104, 55, 0.16);
+      }
+
+      .preview-center.disabled {
+        opacity: 0.55;
+        pointer-events: none;
+        cursor: not-allowed;
       }
 
       .preview-center.dragging {
@@ -434,6 +459,7 @@
           <form action="{{ request.url_for('create_run') }}" method="post" enctype="multipart/form-data">
             <input id="requested_mode" name="requested_mode" type="hidden" value="quicklook">
             <input id="direction_angle_deg" name="direction_angle_deg" type="hidden" value="">
+            <input id="initial_roi_xyxy" name="initial_roi_xyxy" type="hidden" value="">
 
             <section class="form-section">
               <h2>对象类型</h2>
@@ -444,7 +470,7 @@
                 </button>
                 <button class="choice" data-preset="braided_like" type="button">
                   <strong>编织对象</strong>
-                  <span>适合编织类主体，支持方向预览与手动确认。</span>
+                  <span>适合编织类主体，先选首帧 ROI，再确认方向。</span>
                 </button>
               </div>
 
@@ -483,17 +509,19 @@
 
               <div class="preview-panel" id="braided_preview_panel">
                 <div class="preview-head">
-                  <strong>编织对象方向预览</strong>
-                  <p class="preview-hint" id="preview_hint">选中视频后，拖动圆点对齐物体，再使用左右方向键每次旋转 1°，按回车确认方向。</p>
+                  <strong>编织对象 ROI 与方向确认</strong>
+                  <p class="preview-hint" id="preview_hint">选中视频后，先在首帧拖出初始 ROI，再确认方向。</p>
                 </div>
-                <div class="preview-stage" id="preview_stage" tabindex="0" aria-label="编织对象方向预览">
+                <div class="preview-stage" id="preview_stage" tabindex="0" aria-label="编织对象 ROI 与方向确认">
                   <video id="preview_video" controls preload="metadata" muted playsinline></video>
                   <div class="preview-overlay">
+                    <div class="preview-roi" id="preview_roi" aria-hidden="true"></div>
                     <div class="preview-line" id="preview_line" aria-hidden="true"></div>
                     <div class="preview-center" id="preview_center" title="拖动圆点对齐方向参考线"></div>
                   </div>
                 </div>
                 <div class="preview-meta">
+                  <span class="preview-token" id="preview_roi_token">尚未选择初始 ROI</span>
                   <span class="preview-token" id="preview_angle_token">方向角度：0°</span>
                   <span class="preview-token" id="preview_confirm_token">尚未确认方向</span>
                 </div>
@@ -570,14 +598,17 @@
       const modeTitle = document.getElementById("mode_title");
       const modeCopy = document.getElementById("mode_copy");
       const directionAngleInput = document.getElementById("direction_angle_deg");
+      const initialRoiInput = document.getElementById("initial_roi_xyxy");
       const previewPanel = document.getElementById("braided_preview_panel");
       const previewStage = document.getElementById("preview_stage");
       const previewVideo = document.getElementById("preview_video");
       const previewLine = document.getElementById("preview_line");
       const previewCenter = document.getElementById("preview_center");
+      const previewRoi = document.getElementById("preview_roi");
       const previewHint = document.getElementById("preview_hint");
       const previewAngleToken = document.getElementById("preview_angle_token");
       const previewConfirmToken = document.getElementById("preview_confirm_token");
+      const previewRoiToken = document.getElementById("preview_roi_token");
       const submitButton = document.getElementById("submit_button");
       let previewRequestToken = 0;
       let directionAngle = 0;
@@ -585,6 +616,11 @@
       let previewCenterX = 50;
       let previewCenterY = 50;
       let previewDragPointerId = null;
+      let roiDragPointerId = null;
+      let roiStartPoint = null;
+      let roiBox = null;
+      let previewSourceWidth = null;
+      let previewSourceHeight = null;
       let previewObjectUrl = null;
 
       function isBraidedPreset() {
@@ -596,33 +632,114 @@
         directionAngleInput.value = "";
       }
 
+      function resetInitialRoi() {
+        roiDragPointerId = null;
+        roiStartPoint = null;
+        roiBox = null;
+        initialRoiInput.value = "";
+        updatePreviewRoi();
+      }
+
       function resetPreviewCenter() {
         previewCenterX = 50;
         previewCenterY = 50;
       }
 
       function updatePreviewHintText() {
-        previewHint.textContent = directionConfirmed
-          ? "方向已确认。若要调整，拖动圆点重新对齐，或继续使用左右方向键会自动取消确认。"
-          : "拖动圆点对齐物体，再使用左右方向键每次旋转 1°，按回车确认方向后再开始分析。";
+        if (!roiBox) {
+          previewHint.textContent = "先在预览画面上拖出矩形，圈定首帧编织主体的初始 ROI。";
+        } else if (!directionConfirmed) {
+          previewHint.textContent = "初始 ROI 已选择。拖动圆点对齐方向参考线，用左右方向键微调，按回车确认方向。";
+        } else {
+          previewHint.textContent = "初始 ROI 和方向已确认。若重新拖 ROI，需再次确认方向；ROI 只用于初始定位，后续帧继续跟踪。";
+        }
       }
 
       function updatePreviewLine() {
+        const hasRoi = Boolean(roiBox);
         previewLine.style.left = `${previewCenterX}%`;
         previewLine.style.top = `${previewCenterY}%`;
         previewLine.style.transform = `translate(-50%, -50%) rotate(${directionAngle}deg)`;
         previewCenter.style.left = `${previewCenterX}%`;
         previewCenter.style.top = `${previewCenterY}%`;
         previewAngleToken.textContent = `方向角度：${directionAngle}°`;
-        previewConfirmToken.textContent = directionConfirmed ? "方向已确认，按开始分析继续" : "尚未确认方向";
+        previewLine.classList.toggle("disabled", !hasRoi);
+        previewCenter.classList.toggle("disabled", !hasRoi);
+        previewCenter.setAttribute("aria-disabled", String(!hasRoi));
+        previewCenter.title = hasRoi ? "拖动圆点对齐方向参考线" : "先选择初始 ROI 后再确认方向";
+        previewConfirmToken.textContent = directionConfirmed
+          ? "方向已确认，按开始分析继续"
+          : (hasRoi ? "尚未确认方向" : "选择 ROI 后再确认方向");
         previewConfirmToken.classList.toggle("ready", directionConfirmed);
         updatePreviewHintText();
       }
 
+      function getPreviewVideoRect() {
+        const rect = previewVideo.getBoundingClientRect();
+        if (!rect.width || !rect.height) {
+          return null;
+        }
+        return rect;
+      }
+
+      function updatePreviewSourceSize(width = null, height = null) {
+        const videoWidth = Number(width || previewVideo.videoWidth || 0);
+        const videoHeight = Number(height || previewVideo.videoHeight || 0);
+        previewSourceWidth = videoWidth > 0 ? videoWidth : null;
+        previewSourceHeight = videoHeight > 0 ? videoHeight : null;
+      }
+
+      function pointFromVideoPointer(event) {
+        const rect = getPreviewVideoRect();
+        if (!rect) {
+          return null;
+        }
+        return {
+          x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+          y: clamp((event.clientY - rect.top) / rect.height, 0, 1),
+        };
+      }
+
+      function updatePreviewRoi() {
+        const hasRoi = Boolean(roiBox);
+        previewRoi.classList.toggle("visible", hasRoi);
+        if (hasRoi) {
+          const videoRect = getPreviewVideoRect();
+          const stageRect = previewStage.getBoundingClientRect();
+          if (videoRect && stageRect) {
+            const left = videoRect.left - stageRect.left + roiBox.x0 * videoRect.width;
+            const top = videoRect.top - stageRect.top + roiBox.y0 * videoRect.height;
+            const width = (roiBox.x1 - roiBox.x0) * videoRect.width;
+            const height = (roiBox.y1 - roiBox.y0) * videoRect.height;
+            previewRoi.style.left = `${left}px`;
+            previewRoi.style.top = `${top}px`;
+            previewRoi.style.width = `${width}px`;
+            previewRoi.style.height = `${height}px`;
+          }
+        }
+        previewRoiToken.textContent = hasRoi ? "初始 ROI 已选择" : "尚未选择初始 ROI";
+        previewRoiToken.classList.toggle("ready", hasRoi);
+        updatePreviewLine();
+        updatePreviewHintText();
+      }
+
+      function syncInitialRoiInput() {
+        if (!roiBox || !previewSourceWidth || !previewSourceHeight) {
+          initialRoiInput.value = "";
+          return;
+        }
+        const x0 = Math.round(roiBox.x0 * previewSourceWidth);
+        const y0 = Math.round(roiBox.y0 * previewSourceHeight);
+        const x1 = Math.round(roiBox.x1 * previewSourceWidth);
+        const y1 = Math.round(roiBox.y1 * previewSourceHeight);
+        initialRoiInput.value = JSON.stringify([x0, y0, x1, y1]);
+      }
+
       function updateSubmitState() {
-        const requiresDirection = isBraidedPreset();
+        const requiresBraidedSetup = isBraidedPreset();
         const hasVideo = Boolean(videoInput.files && videoInput.files.length > 0);
-        const allowSubmit = !requiresDirection || !hasVideo || directionConfirmed;
+        const hasInitialRoi = Boolean(initialRoiInput.value);
+        const allowSubmit = !requiresBraidedSetup || !hasVideo || (directionConfirmed && hasInitialRoi);
         submitButton.disabled = !allowSubmit;
       }
 
@@ -639,6 +756,8 @@
         previewVideo.removeAttribute("src");
         previewVideo.pause();
         previewVideo.load();
+        previewSourceWidth = null;
+        previewSourceHeight = null;
       }
 
       function updatePreviewVisibility() {
@@ -712,6 +831,7 @@
         previewVideo.src = previewObjectUrl;
         previewVideo.load();
         await waitForPreviewReady(requestToken);
+        updatePreviewSourceSize();
       }
 
       async function loadServerPreview(file, requestToken) {
@@ -734,6 +854,7 @@
         if (result.poster_url) {
           previewVideo.poster = result.poster_url;
         }
+        updatePreviewSourceSize(result.source_width, result.source_height);
         previewVideo.load();
       }
 
@@ -803,6 +924,7 @@
         if (!isBraidedPreset()) {
           previewRequestToken += 1;
           resetDirectionConfirmation();
+          resetInitialRoi();
           resetPreviewCenter();
           updatePreviewVisibility();
           updatePreviewLine();
@@ -811,6 +933,7 @@
         if (!videoInput.files || !videoInput.files.length) {
           previewRequestToken += 1;
           resetDirectionConfirmation();
+          resetInitialRoi();
           resetPreviewCenter();
           updatePreviewVisibility();
           updatePreviewLine();
@@ -846,13 +969,26 @@
       videoInput.addEventListener("change", () => {
         directionAngle = 0;
         resetDirectionConfirmation();
+        resetInitialRoi();
         resetPreviewCenter();
         void loadPreviewFromFile();
         updatePreviewLine();
       });
       temperatureInput.addEventListener("change", updateModeBox);
+      previewVideo.addEventListener("loadedmetadata", () => {
+        if (!previewSourceWidth || !previewSourceHeight) {
+          updatePreviewSourceSize();
+          syncInitialRoiInput();
+          updateSubmitState();
+        }
+      });
       previewCenter.addEventListener("pointerdown", (event) => {
         if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+          return;
+        }
+        if (!roiBox) {
+          updatePreviewHintText();
+          previewStage.focus();
           return;
         }
         previewDragPointerId = event.pointerId;
@@ -882,8 +1018,77 @@
       }
       previewCenter.addEventListener("pointerup", finishPreviewDrag);
       previewCenter.addEventListener("pointercancel", finishPreviewDrag);
+      previewStage.addEventListener("pointerdown", (event) => {
+        if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+          return;
+        }
+        if (event.target === previewCenter) {
+          return;
+        }
+        const point = pointFromVideoPointer(event);
+        if (!point) {
+          return;
+        }
+        resetDirectionConfirmation();
+        roiDragPointerId = event.pointerId;
+        roiStartPoint = point;
+        roiBox = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
+        previewStage.setPointerCapture(event.pointerId);
+        syncInitialRoiInput();
+        updatePreviewRoi();
+        updatePreviewLine();
+        updateSubmitState();
+        event.preventDefault();
+      });
+      previewStage.addEventListener("pointermove", (event) => {
+        if (roiDragPointerId !== event.pointerId || !roiStartPoint) {
+          return;
+        }
+        const point = pointFromVideoPointer(event);
+        if (!point) {
+          return;
+        }
+        roiBox = {
+          x0: Math.min(roiStartPoint.x, point.x),
+          y0: Math.min(roiStartPoint.y, point.y),
+          x1: Math.max(roiStartPoint.x, point.x),
+          y1: Math.max(roiStartPoint.y, point.y),
+        };
+        syncInitialRoiInput();
+        updatePreviewRoi();
+        updatePreviewLine();
+        updateSubmitState();
+        event.preventDefault();
+      });
+      function finishRoiDrag(event) {
+        if (roiDragPointerId !== event.pointerId) {
+          return;
+        }
+        if (previewStage.hasPointerCapture(event.pointerId)) {
+          previewStage.releasePointerCapture(event.pointerId);
+        }
+        roiDragPointerId = null;
+        roiStartPoint = null;
+        if (roiBox && (roiBox.x1 - roiBox.x0 < 0.01 || roiBox.y1 - roiBox.y0 < 0.01)) {
+          resetInitialRoi();
+        } else {
+          syncInitialRoiInput();
+          updatePreviewRoi();
+        }
+        updatePreviewLine();
+        updateSubmitState();
+      }
+      previewStage.addEventListener("pointerup", finishRoiDrag);
+      previewStage.addEventListener("pointercancel", finishRoiDrag);
+      window.addEventListener("resize", updatePreviewRoi);
       window.addEventListener("keydown", (event) => {
         if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+          return;
+        }
+        const isDirectionKey = event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Enter";
+        if (isDirectionKey && !roiBox) {
+          updatePreviewHintText();
+          event.preventDefault();
           return;
         }
         if (event.key === "ArrowLeft") {
@@ -909,6 +1114,7 @@
       syncPresetButtons();
       updateModeBox();
       updatePreviewLine();
+      updatePreviewRoi();
       updateSubmitState();
     </script>
   </body>
