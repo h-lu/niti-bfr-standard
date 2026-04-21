@@ -10,6 +10,7 @@ import pandas as pd
 
 from .extract_braided import (
     BraidedExtractionConfig,
+    BraidedTrackingState,
     compute_directional_span_from_mask,
     extract_braided_geometry,
 )
@@ -1802,6 +1803,7 @@ def analyze_braided_video_quicklook(
     direction_enabled = direction_angle_deg is not None
     rows: list[dict[str, float]] = []
     frame_idx = 0
+    braided_tracking_state: BraidedTrackingState | None = None
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -1810,7 +1812,10 @@ def analyze_braided_video_quicklook(
             frame_idx += 1
             continue
         try:
-            geom = extract_braided_geometry(frame, extraction)
+            geom = extract_braided_geometry(frame, extraction, tracking_state=braided_tracking_state)
+            braided_tracking_state = getattr(geom, "tracking_state", None)
+            if braided_tracking_state is None:
+                braided_tracking_state = _next_braided_tracking_state(frame.shape, extraction, geom)
             row = {
                 "frame": frame_idx,
                 "time_sec": frame_idx / fps,
@@ -1872,6 +1877,7 @@ def analyze_braided_video_quicklook(
                 ),
             }
         except RuntimeError:
+            braided_tracking_state = None
             row = {
                 "frame": frame_idx,
                 "time_sec": frame_idx / fps,
@@ -2079,3 +2085,34 @@ def analyze_braided_video_quicklook(
         analyzed_frame_count=len(series),
         frame_stride=frame_stride,
     )
+
+
+def _next_braided_tracking_state(
+    frame_shape: tuple[int, ...],
+    extraction: BraidedExtractionConfig,
+    geom: Any,
+) -> BraidedTrackingState | None:
+    contour_xy = np.asarray(getattr(geom, "contour_xy", np.empty((0, 2))), dtype=float)
+    if contour_xy.size == 0:
+        return None
+    if not np.all(np.isfinite(contour_xy)):
+        return None
+    full_x0, full_y0, full_x1, full_y1 = extraction.roi_xyxy
+    min_xy = np.floor(np.min(contour_xy, axis=0)).astype(int)
+    max_xy = np.ceil(np.max(contour_xy, axis=0)).astype(int)
+    span_x = max(int(max_xy[0] - min_xy[0]), 1)
+    span_y = max(int(max_xy[1] - min_xy[1]), 1)
+    margin_x = max(24, int(round(0.18 * span_x)))
+    margin_y = max(24, int(round(0.18 * span_y)))
+    height, width = frame_shape[:2]
+    x0 = max(int(full_x0), int(min_xy[0]) - margin_x)
+    y0 = max(int(full_y0), int(min_xy[1]) - margin_y)
+    x1 = min(int(full_x1), int(max_xy[0]) + margin_x + 1)
+    y1 = min(int(full_y1), int(max_xy[1]) + margin_y + 1)
+    x0 = int(np.clip(x0, 0, max(width - 2, 0)))
+    y0 = int(np.clip(y0, 0, max(height - 2, 0)))
+    x1 = int(np.clip(x1, x0 + 2, width))
+    y1 = int(np.clip(y1, y0 + 2, height))
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return None
+    return BraidedTrackingState(roi_xyxy=(x0, y0, x1, y1))

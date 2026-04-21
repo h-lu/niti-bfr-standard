@@ -471,7 +471,6 @@ def extract_geometry(frame_bgr: np.ndarray, config: ExtractionConfig) -> Extract
 
     contour_local = _component_contour(component)
     contour_global = contour_local + np.array([x0, y0], dtype=float)
-    tangent = _estimate_tangent(contour_local, config)
     roi_offset_xy = np.array([x0, y0], dtype=float)
     anchor_reference_local = _anchor_reference(contour_local, config, roi_offset_xy)
     skeleton_path_local = _extract_skeleton_path_local(component, anchor_reference_local)
