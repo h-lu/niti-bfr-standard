@@ -1691,73 +1691,75 @@ def analyze_video(
     frame_geometries: dict[int, Any] | None = {} if retain_frame_geometries else None
     frame_geometries_bytes = 0
     frame_idx = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if frame_idx % frame_stride != 0:
-            frame_idx += 1
-            continue
-        try:
-            geom = extract_geometry(frame, extraction)
-            route_a_anchor = geom.route_a_anchor_xy
-            route_a_tip = geom.route_a_tip_xy
-            x_route_a = geom.x_route_a_px
-            anchor = geom.anchor_xy
-            tip = geom.tip_xy
-            x = geom.x_px
-            quality = geom.quality
-            centerline_points = len(geom.sampled_centerline_xy)
-            x_fit = geom.x_fit_px
-            kappa_fit = geom.kappa_fit_px_inv
-            quadratic_rmse_px = geom.quadratic_rmse_px
-            circle_rmse_px = geom.circle_rmse_px
-            model_name = geom.model_name
-            frame_geometries_bytes = _maybe_cache_frame_geometry(
-                frame_geometries,
-                frame_idx=frame_idx,
-                geom=_debug_geometry_snapshot(geom, object_type="wire_like"),
-                cached_bytes=frame_geometries_bytes,
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if frame_idx % frame_stride != 0:
+                frame_idx += 1
+                continue
+            try:
+                geom = extract_geometry(frame, extraction)
+                route_a_anchor = geom.route_a_anchor_xy
+                route_a_tip = geom.route_a_tip_xy
+                x_route_a = geom.x_route_a_px
+                anchor = geom.anchor_xy
+                tip = geom.tip_xy
+                x = geom.x_px
+                quality = geom.quality
+                centerline_points = len(geom.sampled_centerline_xy)
+                x_fit = geom.x_fit_px
+                kappa_fit = geom.kappa_fit_px_inv
+                quadratic_rmse_px = geom.quadratic_rmse_px
+                circle_rmse_px = geom.circle_rmse_px
+                model_name = geom.model_name
+                frame_geometries_bytes = _maybe_cache_frame_geometry(
+                    frame_geometries,
+                    frame_idx=frame_idx,
+                    geom=_debug_geometry_snapshot(geom, object_type="wire_like"),
+                    cached_bytes=frame_geometries_bytes,
+                )
+            except RuntimeError:
+                route_a_anchor = np.array([np.nan, np.nan])
+                route_a_tip = np.array([np.nan, np.nan])
+                x_route_a = np.nan
+                anchor = np.array([np.nan, np.nan])
+                tip = np.array([np.nan, np.nan])
+                x = np.nan
+                quality = 0.0
+                centerline_points = 0
+                x_fit = np.nan
+                kappa_fit = np.nan
+                quadratic_rmse_px = np.nan
+                circle_rmse_px = np.nan
+                model_name = "failed"
+            rows.append(
+                {
+                    "frame": frame_idx,
+                    "time_sec": frame_idx / fps,
+                    "route_a_anchor_x": route_a_anchor[0],
+                    "route_a_anchor_y": route_a_anchor[1],
+                    "route_a_tip_x": route_a_tip[0],
+                    "route_a_tip_y": route_a_tip[1],
+                    "x_route_a_px": x_route_a,
+                    "anchor_x": anchor[0],
+                    "anchor_y": anchor[1],
+                    "tip_x": tip[0],
+                    "tip_y": tip[1],
+                    "x_px": x,
+                    "x_fit_px": x_fit,
+                    "kappa_fit_px_inv": kappa_fit,
+                    "quality": quality,
+                    "centerline_points": centerline_points,
+                    "quadratic_rmse_px": quadratic_rmse_px,
+                    "circle_rmse_px": circle_rmse_px,
+                    "model_name": model_name,
+                }
             )
-        except RuntimeError:
-            route_a_anchor = np.array([np.nan, np.nan])
-            route_a_tip = np.array([np.nan, np.nan])
-            x_route_a = np.nan
-            anchor = np.array([np.nan, np.nan])
-            tip = np.array([np.nan, np.nan])
-            x = np.nan
-            quality = 0.0
-            centerline_points = 0
-            x_fit = np.nan
-            kappa_fit = np.nan
-            quadratic_rmse_px = np.nan
-            circle_rmse_px = np.nan
-            model_name = "failed"
-        rows.append(
-            {
-                "frame": frame_idx,
-                "time_sec": frame_idx / fps,
-                "route_a_anchor_x": route_a_anchor[0],
-                "route_a_anchor_y": route_a_anchor[1],
-                "route_a_tip_x": route_a_tip[0],
-                "route_a_tip_y": route_a_tip[1],
-                "x_route_a_px": x_route_a,
-                "anchor_x": anchor[0],
-                "anchor_y": anchor[1],
-                "tip_x": tip[0],
-                "tip_y": tip[1],
-                "x_px": x,
-                "x_fit_px": x_fit,
-                "kappa_fit_px_inv": kappa_fit,
-                "quality": quality,
-                "centerline_points": centerline_points,
-                "quadratic_rmse_px": quadratic_rmse_px,
-                "circle_rmse_px": circle_rmse_px,
-                "model_name": model_name,
-            }
-        )
-        frame_idx += 1
-    cap.release()
+            frame_idx += 1
+    finally:
+        cap.release()
 
     series = pd.DataFrame(rows)
     series = apply_route_c(series, route_c or RouteCConfig())
@@ -1893,153 +1895,155 @@ def analyze_braided_video_quicklook(
     frame_idx = 0
     braided_tracking_state: BraidedTrackingState | None = None
     fixed_roi_mode = extraction.initial_roi_xyxy is not None
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        if frame_idx % frame_stride != 0:
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            if frame_idx % frame_stride != 0:
+                frame_idx += 1
+                continue
+            try:
+                geom = extract_braided_geometry(
+                    frame,
+                    extraction,
+                    tracking_state=None if fixed_roi_mode else braided_tracking_state,
+                )
+                if fixed_roi_mode:
+                    braided_tracking_state = None
+                else:
+                    braided_tracking_state = getattr(geom, "tracking_state", None)
+                    if braided_tracking_state is None:
+                        braided_tracking_state = _next_braided_tracking_state(frame.shape, extraction, geom)
+                row = {
+                    "frame": frame_idx,
+                    "time_sec": frame_idx / fps,
+                    "anchor_x": geom.anchor_xy[0],
+                    "anchor_y": geom.anchor_xy[1],
+                    "tip_x": geom.tip_xy[0],
+                    "tip_y": geom.tip_xy[1],
+                    "quality": geom.quality,
+                    "length_env_px": geom.length_env_px,
+                    "length_axis_px": geom.length_axis_px,
+                    "length_axis_skeleton_px": geom.length_axis_skeleton_px,
+                    "length_axis_body_bins_px": geom.length_axis_body_bins_px,
+                    "length_axis_alt_px": geom.length_axis_alt_px,
+                    "length_axis_disagreement_px": geom.length_axis_disagreement_px,
+                    "centerline_disagreement": geom.centerline_disagreement,
+                    "endpoint_gap_alt_centerline_px": geom.endpoint_gap_alt_centerline_px,
+                    "diameter_max_px": geom.diameter_max_px,
+                    "diameter_max_orth_px": geom.diameter_max_orth_px,
+                    "diameter_max_thickness_px": geom.diameter_max_thickness_px,
+                    "diameter_max_feret_px": geom.diameter_max_feret_px,
+                    "diameter_p95_px": geom.diameter_p95_px,
+                    "diameter_mid_median_px": geom.diameter_mid_median_px,
+                    "diameter_mid_p90_px": geom.diameter_mid_p90_px,
+                    "diameter_peak_span_px": geom.diameter_peak_span_px,
+                    "diameter_peak_pos_norm": geom.diameter_peak_pos_norm,
+                    "area_proj_px2": geom.area_proj_px2,
+                    "area_proj_contour_width_integral_px2": geom.area_proj_contour_width_integral_px2,
+                    "area_proj_contour_px2": geom.area_proj_contour_px2,
+                    "area_proj_definition_gap_px2": geom.area_proj_definition_gap_px2,
+                    "body_mask_area_px2": geom.body_mask_area_px2,
+                    "component_area_px2": geom.component_area_px2,
+                    "excluded_attachment_area_px2": geom.excluded_attachment_area_px2,
+                    "body_mask_attachment_leak_fraction": geom.body_mask_attachment_leak_fraction,
+                    "attachment_count": geom.attachment_count,
+                    "attachment_border_touch_count": geom.attachment_border_touch_count,
+                    "attachment_max_elongation": geom.attachment_max_elongation,
+                    "attachment_max_solidity": geom.attachment_max_solidity,
+                    "attachment_max_orientation_mismatch_deg": geom.attachment_max_orientation_mismatch_deg,
+                    "attachment_max_distance_to_main_axis_px": geom.attachment_max_distance_to_main_axis_px,
+                    "x_peak_norm": geom.x_peak_norm,
+                    "taper_left_px": geom.taper_left_px,
+                    "taper_right_px": geom.taper_right_px,
+                    "landing_zone_left_px": geom.landing_zone_left_px,
+                    "landing_zone_right_px": geom.landing_zone_right_px,
+                    "transition_zone_left_px": geom.transition_zone_left_px,
+                    "transition_zone_right_px": geom.transition_zone_right_px,
+                    "compaction_zone_length_px": geom.compaction_zone_length_px,
+                    "zone_symmetry": geom.zone_symmetry,
+                    "branch_component_count_after_pruning": geom.branch_component_count_after_pruning,
+                    "branch_count_after_pruning": geom.branch_count_after_pruning,
+                    "endpoint_jump_px": geom.endpoint_jump_px,
+                    "axis_peak_position_stability": geom.axis_peak_position_stability,
+                    "centerline_points": len(geom.sampled_centerline_xy),
+                    "direction_angle_deg": float(direction_angle_deg) if direction_enabled else np.nan,
+                    "direction_span_px": (
+                        compute_directional_span_from_mask(geom.body_tube_mask, float(direction_angle_deg))
+                        if direction_enabled
+                        else np.nan
+                    ),
+                }
+                frame_geometries_bytes = _maybe_cache_frame_geometry(
+                    frame_geometries,
+                    frame_idx=frame_idx,
+                    geom=_debug_geometry_snapshot(geom, object_type="braided_like"),
+                    cached_bytes=frame_geometries_bytes,
+                )
+            except RuntimeError:
+                if not fixed_roi_mode:
+                    braided_tracking_state = None
+                row = {
+                    "frame": frame_idx,
+                    "time_sec": frame_idx / fps,
+                    "anchor_x": np.nan,
+                    "anchor_y": np.nan,
+                    "tip_x": np.nan,
+                    "tip_y": np.nan,
+                    "quality": 0.0,
+                    "length_env_px": np.nan,
+                    "length_axis_px": np.nan,
+                    "length_axis_skeleton_px": np.nan,
+                    "length_axis_body_bins_px": np.nan,
+                    "length_axis_alt_px": np.nan,
+                    "length_axis_disagreement_px": np.nan,
+                    "centerline_disagreement": np.nan,
+                    "endpoint_gap_alt_centerline_px": np.nan,
+                    "diameter_max_px": np.nan,
+                    "diameter_max_orth_px": np.nan,
+                    "diameter_max_thickness_px": np.nan,
+                    "diameter_max_feret_px": np.nan,
+                    "diameter_p95_px": np.nan,
+                    "diameter_mid_median_px": np.nan,
+                    "diameter_mid_p90_px": np.nan,
+                    "diameter_peak_span_px": np.nan,
+                    "diameter_peak_pos_norm": np.nan,
+                    "area_proj_px2": np.nan,
+                    "area_proj_contour_width_integral_px2": np.nan,
+                    "area_proj_contour_px2": np.nan,
+                    "area_proj_definition_gap_px2": np.nan,
+                    "body_mask_area_px2": np.nan,
+                    "component_area_px2": np.nan,
+                    "excluded_attachment_area_px2": np.nan,
+                    "body_mask_attachment_leak_fraction": np.nan,
+                    "attachment_count": np.nan,
+                    "attachment_border_touch_count": np.nan,
+                    "attachment_max_elongation": np.nan,
+                    "attachment_max_solidity": np.nan,
+                    "attachment_max_orientation_mismatch_deg": np.nan,
+                    "attachment_max_distance_to_main_axis_px": np.nan,
+                    "x_peak_norm": np.nan,
+                    "taper_left_px": np.nan,
+                    "taper_right_px": np.nan,
+                    "landing_zone_left_px": np.nan,
+                    "landing_zone_right_px": np.nan,
+                    "transition_zone_left_px": np.nan,
+                    "transition_zone_right_px": np.nan,
+                    "compaction_zone_length_px": np.nan,
+                    "zone_symmetry": np.nan,
+                    "branch_component_count_after_pruning": np.nan,
+                    "branch_count_after_pruning": np.nan,
+                    "endpoint_jump_px": np.nan,
+                    "axis_peak_position_stability": np.nan,
+                    "centerline_points": 0,
+                    "direction_angle_deg": float(direction_angle_deg) if direction_enabled else np.nan,
+                    "direction_span_px": np.nan,
+                }
+            rows.append(row)
             frame_idx += 1
-            continue
-        try:
-            geom = extract_braided_geometry(
-                frame,
-                extraction,
-                tracking_state=None if fixed_roi_mode else braided_tracking_state,
-            )
-            if fixed_roi_mode:
-                braided_tracking_state = None
-            else:
-                braided_tracking_state = getattr(geom, "tracking_state", None)
-                if braided_tracking_state is None:
-                    braided_tracking_state = _next_braided_tracking_state(frame.shape, extraction, geom)
-            row = {
-                "frame": frame_idx,
-                "time_sec": frame_idx / fps,
-                "anchor_x": geom.anchor_xy[0],
-                "anchor_y": geom.anchor_xy[1],
-                "tip_x": geom.tip_xy[0],
-                "tip_y": geom.tip_xy[1],
-                "quality": geom.quality,
-                "length_env_px": geom.length_env_px,
-                "length_axis_px": geom.length_axis_px,
-                "length_axis_skeleton_px": geom.length_axis_skeleton_px,
-                "length_axis_body_bins_px": geom.length_axis_body_bins_px,
-                "length_axis_alt_px": geom.length_axis_alt_px,
-                "length_axis_disagreement_px": geom.length_axis_disagreement_px,
-                "centerline_disagreement": geom.centerline_disagreement,
-                "endpoint_gap_alt_centerline_px": geom.endpoint_gap_alt_centerline_px,
-                "diameter_max_px": geom.diameter_max_px,
-                "diameter_max_orth_px": geom.diameter_max_orth_px,
-                "diameter_max_thickness_px": geom.diameter_max_thickness_px,
-                "diameter_max_feret_px": geom.diameter_max_feret_px,
-                "diameter_p95_px": geom.diameter_p95_px,
-                "diameter_mid_median_px": geom.diameter_mid_median_px,
-                "diameter_mid_p90_px": geom.diameter_mid_p90_px,
-                "diameter_peak_span_px": geom.diameter_peak_span_px,
-                "diameter_peak_pos_norm": geom.diameter_peak_pos_norm,
-                "area_proj_px2": geom.area_proj_px2,
-                "area_proj_contour_width_integral_px2": geom.area_proj_contour_width_integral_px2,
-                "area_proj_contour_px2": geom.area_proj_contour_px2,
-                "area_proj_definition_gap_px2": geom.area_proj_definition_gap_px2,
-                "body_mask_area_px2": geom.body_mask_area_px2,
-                "component_area_px2": geom.component_area_px2,
-                "excluded_attachment_area_px2": geom.excluded_attachment_area_px2,
-                "body_mask_attachment_leak_fraction": geom.body_mask_attachment_leak_fraction,
-                "attachment_count": geom.attachment_count,
-                "attachment_border_touch_count": geom.attachment_border_touch_count,
-                "attachment_max_elongation": geom.attachment_max_elongation,
-                "attachment_max_solidity": geom.attachment_max_solidity,
-                "attachment_max_orientation_mismatch_deg": geom.attachment_max_orientation_mismatch_deg,
-                "attachment_max_distance_to_main_axis_px": geom.attachment_max_distance_to_main_axis_px,
-                "x_peak_norm": geom.x_peak_norm,
-                "taper_left_px": geom.taper_left_px,
-                "taper_right_px": geom.taper_right_px,
-                "landing_zone_left_px": geom.landing_zone_left_px,
-                "landing_zone_right_px": geom.landing_zone_right_px,
-                "transition_zone_left_px": geom.transition_zone_left_px,
-                "transition_zone_right_px": geom.transition_zone_right_px,
-                "compaction_zone_length_px": geom.compaction_zone_length_px,
-                "zone_symmetry": geom.zone_symmetry,
-                "branch_component_count_after_pruning": geom.branch_component_count_after_pruning,
-                "branch_count_after_pruning": geom.branch_count_after_pruning,
-                "endpoint_jump_px": geom.endpoint_jump_px,
-                "axis_peak_position_stability": geom.axis_peak_position_stability,
-                "centerline_points": len(geom.sampled_centerline_xy),
-                "direction_angle_deg": float(direction_angle_deg) if direction_enabled else np.nan,
-                "direction_span_px": (
-                    compute_directional_span_from_mask(geom.body_tube_mask, float(direction_angle_deg))
-                    if direction_enabled
-                    else np.nan
-                ),
-            }
-            frame_geometries_bytes = _maybe_cache_frame_geometry(
-                frame_geometries,
-                frame_idx=frame_idx,
-                geom=_debug_geometry_snapshot(geom, object_type="braided_like"),
-                cached_bytes=frame_geometries_bytes,
-            )
-        except RuntimeError:
-            if not fixed_roi_mode:
-                braided_tracking_state = None
-            row = {
-                "frame": frame_idx,
-                "time_sec": frame_idx / fps,
-                "anchor_x": np.nan,
-                "anchor_y": np.nan,
-                "tip_x": np.nan,
-                "tip_y": np.nan,
-                "quality": 0.0,
-                "length_env_px": np.nan,
-                "length_axis_px": np.nan,
-                "length_axis_skeleton_px": np.nan,
-                "length_axis_body_bins_px": np.nan,
-                "length_axis_alt_px": np.nan,
-                "length_axis_disagreement_px": np.nan,
-                "centerline_disagreement": np.nan,
-                "endpoint_gap_alt_centerline_px": np.nan,
-                "diameter_max_px": np.nan,
-                "diameter_max_orth_px": np.nan,
-                "diameter_max_thickness_px": np.nan,
-                "diameter_max_feret_px": np.nan,
-                "diameter_p95_px": np.nan,
-                "diameter_mid_median_px": np.nan,
-                "diameter_mid_p90_px": np.nan,
-                "diameter_peak_span_px": np.nan,
-                "diameter_peak_pos_norm": np.nan,
-                "area_proj_px2": np.nan,
-                "area_proj_contour_width_integral_px2": np.nan,
-                "area_proj_contour_px2": np.nan,
-                "area_proj_definition_gap_px2": np.nan,
-                "body_mask_area_px2": np.nan,
-                "component_area_px2": np.nan,
-                "excluded_attachment_area_px2": np.nan,
-                "body_mask_attachment_leak_fraction": np.nan,
-                "attachment_count": np.nan,
-                "attachment_border_touch_count": np.nan,
-                "attachment_max_elongation": np.nan,
-                "attachment_max_solidity": np.nan,
-                "attachment_max_orientation_mismatch_deg": np.nan,
-                "attachment_max_distance_to_main_axis_px": np.nan,
-                "x_peak_norm": np.nan,
-                "taper_left_px": np.nan,
-                "taper_right_px": np.nan,
-                "landing_zone_left_px": np.nan,
-                "landing_zone_right_px": np.nan,
-                "transition_zone_left_px": np.nan,
-                "transition_zone_right_px": np.nan,
-                "compaction_zone_length_px": np.nan,
-                "zone_symmetry": np.nan,
-                "branch_component_count_after_pruning": np.nan,
-                "branch_count_after_pruning": np.nan,
-                "endpoint_jump_px": np.nan,
-                "axis_peak_position_stability": np.nan,
-                "centerline_points": 0,
-                "direction_angle_deg": float(direction_angle_deg) if direction_enabled else np.nan,
-                "direction_span_px": np.nan,
-            }
-        rows.append(row)
-        frame_idx += 1
-    cap.release()
+    finally:
+        cap.release()
 
     series = _augment_braided_qc_series(pd.DataFrame(rows))
     valid_axis = series["length_axis_px"].to_numpy(dtype=float)

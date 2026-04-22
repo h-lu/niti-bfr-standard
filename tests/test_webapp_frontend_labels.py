@@ -641,6 +641,42 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(payload["asset_generation_status"], "running")
         self.assertTrue(payload["refresh"])
 
+    def test_postprocess_read_failure_marks_asset_generation_failed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "postprocess-read-failure"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "analysis.csv").write_text("not,a,valid,analysis\n", encoding="utf-8")
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed", preset="wire_like")
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "asset_generation_status": "running",
+                    },
+                )
+
+                with mock.patch.object(webapp.pd, "read_csv", side_effect=ValueError("bad csv")):
+                    webapp._run_postprocess_task(
+                        run_id=run_id,
+                        run=dict(webapp._get_run(run_id)),
+                        prepared=None,
+                        result=None,
+                        extraction_cfg=None,
+                        video_path=None,
+                    )
+                summary = webapp._load_summary(run_id)
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["asset_generation_status"], "failed")
+        self.assertIn("analysis.csv read failed", summary["asset_generation_error"])
+        self.assertIn("bad csv", summary["asset_generation_error"])
+
     def test_delete_run_blocks_pending_or_running_asset_generation(self) -> None:
         for asset_status in ("pending", "running"):
             with self.subTest(asset_status=asset_status):
