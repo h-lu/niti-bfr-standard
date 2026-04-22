@@ -86,6 +86,53 @@ class WebappFrontendLabelTests(unittest.TestCase):
             BENCHMARK_FAMILY_DISPLAY=display,
         )
 
+    def _insert_basic_run(
+        self,
+        *,
+        run_id: str,
+        run_dir: Path,
+        status: str = "completed",
+        preset: str = "wire_like",
+        actual_mode: str | None = "quicklook",
+    ) -> None:
+        webapp._insert_run(
+            {
+                "id": run_id,
+                "created_at": webapp._utc_now(),
+                "status": status,
+                "run_name": None,
+                "preset": preset,
+                "requested_mode": "quicklook",
+                "frame_stride": 1,
+                "actual_mode": actual_mode,
+                "formal_metric_label": None,
+                "formal_gate_reason": None,
+                "af95_c": None,
+                "aftan_c": None,
+                "original_frame_count": None,
+                "analyzed_frame_count": None,
+                "annotated_video_filename": None,
+                "video_filename": "demo.mp4",
+                "temperature_filename": None,
+                "run_dir": str(run_dir),
+                "error_text": None,
+                "direction_angle_deg": None,
+                "direction_metric_enabled": 0,
+            }
+        )
+
+    def _write_expected_asset_outputs(
+        self,
+        run: dict[str, object],
+        summary: dict[str, object],
+    ) -> None:
+        outputs_dir = Path(str(run["run_dir"])) / "outputs"
+        outputs_dir.mkdir(parents=True, exist_ok=True)
+        for filename in _expected_plot_outputs(run, summary):
+            (outputs_dir / filename).write_text("asset", encoding="utf-8")
+        process_video_filename = str(summary["process_video_filename"])
+        (outputs_dir / process_video_filename).write_bytes(b"asset")
+
     def test_braided_sample_is_exposed(self) -> None:
         self.assertIn("braided_synthetic_quicklook", SAMPLE_RUNS)
         self.assertEqual(SAMPLE_RUNS["braided_synthetic_quicklook"]["preset"], "braided_demo")
@@ -646,6 +693,281 @@ class WebappFrontendLabelTests(unittest.TestCase):
                         self.assertEqual(response.status_code, 409)
                         self.assertTrue(run_dir.exists())
                         self.assertIsNotNone(webapp._get_run(run_id))
+
+    def test_build_run_card_blocks_delete_when_asset_generation_is_active(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "delete-card-active-asset"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "completed",
+                        "run_name": "asset active",
+                        "preset": "braided_like",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 1,
+                        "actual_mode": "quicklook",
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": 12,
+                        "analyzed_frame_count": 12,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                        "direction_angle_deg": None,
+                        "direction_metric_enabled": 0,
+                    }
+                )
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "braided_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "asset_generation_status": "running",
+                    },
+                )
+
+                card = webapp._build_run_card(webapp._get_run(run_id))
+
+        self.assertFalse(card["can_delete"])
+        self.assertEqual(card["delete_block_label"], "资产生成中")
+        self.assertIn("结果图表和过程视频仍在生成中", card["delete_block_reason"])
+
+    def test_history_delete_button_matches_backend_asset_generation_block(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "history-delete-parity"
+                run_dir = webapp.RUNS_ROOT / run_id
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed")
+                self._write_json(
+                    run_dir / "outputs" / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "asset_generation_status": "pending",
+                    },
+                )
+
+                run = webapp._get_run(run_id)
+                summary = webapp._load_summary(run_id)
+                availability = webapp._delete_availability(run, summary)
+                card = webapp._build_run_card(run)
+                response = webapp.history(_FakeRequest())
+                text = response.body.decode("utf-8")
+
+                self.assertFalse(availability["can_delete"])
+                self.assertEqual(card["can_delete"], availability["can_delete"])
+                self.assertEqual(card["delete_block_reason"], availability["delete_block_reason"])
+                self.assertIn("资产生成中", text)
+                self.assertIn('disabled title="结果图表和过程视频仍在生成中，暂不能删除。"', text)
+                with self.assertRaises(webapp.HTTPException) as raised:
+                    webapp.delete_run(_FakeRequest(), run_id)
+                self.assertEqual(raised.exception.status_code, 409)
+                self.assertEqual(raised.exception.detail, availability["delete_block_reason"])
+
+    def test_reconcile_stale_running_run_marks_failed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "stale-running-reconcile"
+                run_dir = webapp.RUNS_ROOT / run_id
+                (run_dir / "outputs").mkdir(parents=True, exist_ok=True)
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "running",
+                        "run_name": "stale running",
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 1,
+                        "actual_mode": None,
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": None,
+                        "analyzed_frame_count": None,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                        "direction_angle_deg": None,
+                        "direction_metric_enabled": 0,
+                    }
+                )
+
+                webapp._reconcile_stale_active_runs()
+                reconciled = webapp._get_run(run_id)
+
+        self.assertIsNotNone(reconciled)
+        self.assertEqual(reconciled["status"], "failed")
+        self.assertIn("Interrupted during app restart", reconciled["error_text"])
+
+    def test_reconcile_stale_running_run_preserves_completed_outputs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "stale-running-with-outputs"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="running", actual_mode=None)
+                (outputs_dir / "analysis.csv").write_text("frame,quality\n0,1\n", encoding="utf-8")
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "af95_c": 42.5,
+                        "aftan_c": 41.0,
+                        "original_frame_count": 20,
+                        "analyzed_frame_count": 10,
+                        "asset_generation_status": "completed",
+                    },
+                )
+
+                counts = webapp._reconcile_stale_active_runs()
+                reconciled = webapp._get_run(run_id)
+                card = webapp._build_run_card(reconciled)
+
+        self.assertEqual(counts["run_completed"], 1)
+        self.assertEqual(reconciled["status"], "completed")
+        self.assertEqual(reconciled["actual_mode"], "quicklook")
+        self.assertEqual(reconciled["af95_c"], 42.5)
+        self.assertEqual(reconciled["aftan_c"], 41.0)
+        self.assertEqual(reconciled["original_frame_count"], 20)
+        self.assertEqual(reconciled["analyzed_frame_count"], 10)
+        self.assertIsNone(reconciled["error_text"])
+        self.assertTrue(card["can_delete"])
+
+    def test_reconcile_stale_asset_generation_marks_failed_and_unlocks_delete(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "stale-asset-failed"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "completed",
+                        "run_name": "stale asset",
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 1,
+                        "actual_mode": "quicklook",
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": 12,
+                        "analyzed_frame_count": 12,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                        "direction_angle_deg": None,
+                        "direction_metric_enabled": 0,
+                    }
+                )
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "asset_generation_status": "running",
+                        "process_video_filename": None,
+                    },
+                )
+                (outputs_dir / webapp.PROCESS_VIDEO_WEBM_FILENAME).write_bytes(b"webm")
+
+                webapp._reconcile_stale_active_runs()
+                summary = webapp._load_summary(run_id)
+                card = webapp._build_run_card(webapp._get_run(run_id))
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["asset_generation_status"], "failed")
+        self.assertEqual(summary["process_video_filename"], webapp.PROCESS_VIDEO_WEBM_FILENAME)
+        self.assertIn("Interrupted during app restart", summary["asset_generation_error"])
+        self.assertTrue(card["can_delete"])
+
+    def test_reconcile_stale_asset_generation_marks_completed_when_assets_exist(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "stale-asset-complete"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": webapp._utc_now(),
+                        "status": "completed",
+                        "run_name": "stale asset complete",
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 1,
+                        "actual_mode": "quicklook",
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": 12,
+                        "analyzed_frame_count": 12,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                        "direction_angle_deg": None,
+                        "direction_metric_enabled": 0,
+                    }
+                )
+                summary_payload = {
+                    "preset": "wire_like",
+                    "requested_mode": "quicklook",
+                    "actual_mode": "quicklook",
+                    "asset_generation_status": "running",
+                    "process_video_filename": None,
+                }
+                self._write_json(outputs_dir / "summary.json", summary_payload)
+                (outputs_dir / webapp.PROCESS_VIDEO_WEBM_FILENAME).write_bytes(b"webm")
+                for filename in _expected_plot_outputs(webapp._get_run(run_id), summary_payload):
+                    (outputs_dir / filename).write_bytes(b"plot")
+
+                webapp._reconcile_stale_active_runs()
+                summary = webapp._load_summary(run_id)
+                card = webapp._build_run_card(webapp._get_run(run_id))
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["asset_generation_status"], "completed")
+        self.assertIsNone(summary.get("asset_generation_error"))
+        self.assertEqual(summary["process_video_filename"], webapp.PROCESS_VIDEO_WEBM_FILENAME)
+        self.assertTrue(card["can_delete"])
 
     def test_benchmark_page_falls_back_to_analysis_metrics(self) -> None:
         with TemporaryDirectory() as tmp:

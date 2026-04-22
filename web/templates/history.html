@@ -256,8 +256,8 @@
                   <div class="action-stack">
                     <a class="action-link" href="{{ request.url_for('run_detail', run_id=run['id']) }}">查看详情</a>
                     <form action="{{ request.url_for('delete_run', run_id=run['id']) }}" method="post" onsubmit="return confirm('确认删除这条历史记录吗？对应运行目录也会一并清理。');">
-                      <button class="danger-button" type="submit" {% if not run["can_delete"] %}disabled title="处理中任务暂不支持删除"{% endif %}>
-                        {% if run["can_delete"] %}删除记录{% else %}处理中不可删{% endif %}
+                      <button class="danger-button" type="submit" {% if not run["can_delete"] %}disabled title="{{ run['delete_block_reason'] }}"{% endif %}>
+                        {% if run["can_delete"] %}删除记录{% else %}{{ run["delete_block_label"] }}{% endif %}
                       </button>
                     </form>
                   </div>

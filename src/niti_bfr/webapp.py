@@ -80,6 +80,16 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _POSTPROCESS_LOCK = threading.Lock()
 _POSTPROCESS_IN_FLIGHT: set[str] = set()
 _SUMMARY_UNSET = object()
+ACTIVE_RUN_STATUSES = {"queued", "running"}
+ACTIVE_ASSET_GENERATION_STATUSES = {"pending", "running"}
+STALE_RUN_INTERRUPTED_ERROR = (
+    "Interrupted during app restart before analysis completed; no completed output summary was found. "
+    "Please rerun this video."
+)
+STALE_ASSET_INTERRUPTED_ERROR = (
+    "Interrupted during app restart while generating derived result assets; completed analysis data was preserved, "
+    "but the missing assets were not regenerated automatically."
+)
 
 SAMPLE_RUNS: dict[str, dict[str, str]] = {
     "wire_like_quicklook": {
@@ -293,6 +303,7 @@ async def forwarded_prefix_middleware(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     _ensure_storage()
+    _reconcile_stale_active_runs()
     _cleanup_preview_cache()
 
 
@@ -1013,7 +1024,146 @@ def _postprocess_needed(
 def _asset_generation_active(summary: dict[str, Any] | None) -> bool:
     if not isinstance(summary, dict):
         return False
-    return str(summary.get("asset_generation_status") or "") in {"pending", "running"}
+    return str(summary.get("asset_generation_status") or "") in ACTIVE_ASSET_GENERATION_STATUSES
+
+
+def _recover_existing_process_video_filename(outputs_dir: Path, summary: dict[str, Any] | None) -> str | None:
+    if isinstance(summary, dict):
+        filename = str(summary.get("process_video_filename") or "").strip()
+        if filename and (outputs_dir / filename).exists():
+            return filename
+    for candidate in (PROCESS_VIDEO_WEBM_FILENAME, PROCESS_VIDEO_FILENAME):
+        if (outputs_dir / candidate).exists():
+            return candidate
+    return None
+
+
+def _delete_availability(
+    run: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    status = run.get("status") if isinstance(run, dict) else run["status"]
+    if status in ACTIVE_RUN_STATUSES:
+        if status == "queued":
+            reason = "任务仍在排队中，暂不能删除。"
+            label = "排队中不可删"
+        else:
+            reason = "任务主分析仍在处理中，暂不能删除。"
+            label = "处理中不可删"
+        return {
+            "can_delete": False,
+            "delete_block_reason": reason,
+            "delete_block_label": label,
+        }
+    asset_status = str(summary.get("asset_generation_status") or "") if isinstance(summary, dict) else ""
+    if asset_status in ACTIVE_ASSET_GENERATION_STATUSES:
+        reason = "结果图表和过程视频仍在生成中，暂不能删除。"
+        return {
+            "can_delete": False,
+            "delete_block_reason": reason,
+            "delete_block_label": "资产生成中",
+        }
+    return {
+        "can_delete": True,
+        "delete_block_reason": None,
+        "delete_block_label": None,
+    }
+
+
+def _completed_result_outputs_exist(
+    run: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any] | None,
+) -> bool:
+    return isinstance(summary, dict) and _analysis_csv_path_for_run(run).exists()
+
+
+def _asset_outputs_complete(
+    run: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any],
+) -> bool:
+    try:
+        return _plot_outputs_complete(run, summary) and _process_video_ready(_outputs_dir_for_run(run), summary)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _run_value(run: sqlite3.Row | dict[str, Any], key: str, default: Any = None) -> Any:
+    if isinstance(run, dict):
+        return run.get(key, default)
+    return run[key] if key in run.keys() else default
+
+
+def _completed_run_values_from_summary(
+    run: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "actual_mode": summary.get("actual_mode") or _run_value(run, "actual_mode") or "quicklook",
+        "formal_metric_label": summary.get("formal_metric_label") or _run_value(run, "formal_metric_label"),
+        "formal_gate_reason": summary.get("formal_gate_reason") or _run_value(run, "formal_gate_reason"),
+        "af95_c": _coerce_float(summary.get("af95_c")) if summary.get("af95_c") is not None else _run_value(run, "af95_c"),
+        "aftan_c": _coerce_float(summary.get("aftan_c")) if summary.get("aftan_c") is not None else _run_value(run, "aftan_c"),
+        "original_frame_count": summary.get("original_frame_count") or _run_value(run, "original_frame_count"),
+        "analyzed_frame_count": summary.get("analyzed_frame_count") or _run_value(run, "analyzed_frame_count"),
+        "annotated_video_filename": summary.get("annotated_video_filename") or _run_value(run, "annotated_video_filename"),
+        "error_text": None,
+    }
+
+
+def _reconcile_stale_active_runs() -> dict[str, int]:
+    counts = Counter(
+        {
+            "run_completed": 0,
+            "run_failed": 0,
+            "asset_completed": 0,
+            "asset_failed": 0,
+            "asset_skipped_in_flight": 0,
+        }
+    )
+    for run in _list_all_runs():
+        run_id = run["id"]
+        summary = _load_summary(run_id)
+        if run["status"] in ACTIVE_RUN_STATUSES:
+            if _completed_result_outputs_exist(run, summary):
+                _update_run(run_id, _completed_run_values_from_summary(run, summary or {}))
+                counts["run_completed"] += 1
+            else:
+                _update_run(run_id, {"status": "failed", "error_text": STALE_RUN_INTERRUPTED_ERROR})
+                counts["run_failed"] += 1
+            refreshed = _get_run(run_id)
+            if refreshed is None:
+                continue
+            run = refreshed
+            summary = _load_summary(run_id)
+
+        if _asset_generation_active(summary):
+            if _postprocess_in_flight(run_id):
+                counts["asset_skipped_in_flight"] += 1
+                continue
+            recovered_process_video = None
+            asset_summary = dict(summary) if isinstance(summary, dict) else {}
+            if isinstance(summary, dict):
+                recovered_process_video = _recover_existing_process_video_filename(_outputs_dir_for_run(run), summary)
+                if recovered_process_video:
+                    asset_summary["process_video_filename"] = recovered_process_video
+            if run["status"] == "completed" and _asset_outputs_complete(run, asset_summary):
+                _update_summary_fields(
+                    run,
+                    process_video_filename=recovered_process_video,
+                    asset_generation_status="completed",
+                    asset_generation_error=None,
+                )
+                counts["asset_completed"] += 1
+            else:
+                _update_summary_fields(
+                    run,
+                    process_video_filename=recovered_process_video,
+                    asset_generation_status="failed",
+                    asset_generation_error=STALE_ASSET_INTERRUPTED_ERROR,
+                )
+                counts["asset_failed"] += 1
+    return dict(counts)
 
 
 def _postprocess_in_flight(run_id: str) -> bool:
@@ -2091,7 +2241,7 @@ def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
         payload["original_frame_count"] = summary.get("original_frame_count")
     payload["requested_mode"] = payload.get("requested_mode") or _requested_mode_for_run(payload.get("temperature_filename"))
     payload["status_label"] = _run_status_label(payload.get("status"))
-    payload["can_delete"] = payload.get("status") not in {"queued", "running"}
+    payload.update(_delete_availability(payload, summary))
     return payload
 
 
@@ -2364,8 +2514,9 @@ def delete_run(request: Request, run_id: str) -> RedirectResponse:
     run = _get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    if run["status"] in {"queued", "running"} or _asset_generation_active(_load_summary(run_id)):
-        raise HTTPException(status_code=409, detail="run is still active")
+    availability = _delete_availability(run, _load_summary(run_id))
+    if not availability["can_delete"]:
+        raise HTTPException(status_code=409, detail=availability["delete_block_reason"] or "run is still active")
     _delete_run_assets(run_id, Path(run["run_dir"]))
     _delete_run_record(run_id)
     return RedirectResponse(url=f"{request.url_for('history')}?deleted=1", status_code=303)
@@ -3530,6 +3681,12 @@ def _list_runs(limit: int) -> list[sqlite3.Row]:
             "SELECT * FROM runs ORDER BY datetime(created_at) DESC LIMIT ?",
             (limit,),
         ).fetchall()
+    return list(rows)
+
+
+def _list_all_runs() -> list[sqlite3.Row]:
+    with _connect_db() as conn:
+        rows = conn.execute("SELECT * FROM runs ORDER BY datetime(created_at) DESC").fetchall()
     return list(rows)
 
 
