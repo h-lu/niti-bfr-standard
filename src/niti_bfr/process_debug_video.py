@@ -457,13 +457,9 @@ def _render_wire_debug_frame(
     x0, y0, x1, y1 = extraction.roi_xyxy
     cv2.rectangle(overlay, (x0, y0), (x1, y1), ROUTE_COLORS["A"], 2)
     contour = np.round(geom.contour_xy).astype(np.int32).reshape(-1, 1, 2)
-    centerline = np.round(geom.sampled_centerline_xy).astype(np.int32).reshape(-1, 1, 2)
-    fit_samples = np.round(geom.fit_samples_xy).astype(np.int32).reshape(-1, 1, 2)
-    fit_curve = np.round(geom.fitted_curve_xy).astype(np.int32).reshape(-1, 1, 2)
+    fitted_curve = np.round(geom.fitted_curve_xy).astype(np.int32).reshape(-1, 1, 2)
     cv2.polylines(overlay, [contour], isClosed=True, color=(120, 120, 120), thickness=1, lineType=cv2.LINE_AA)
-    cv2.polylines(overlay, [centerline], isClosed=False, color=ROUTE_COLORS["B"], thickness=2, lineType=cv2.LINE_AA)
-    cv2.polylines(overlay, [fit_samples], isClosed=False, color=(0, 220, 255), thickness=2, lineType=cv2.LINE_AA)
-    cv2.polylines(overlay, [fit_curve], isClosed=False, color=(255, 180, 0), thickness=2, lineType=cv2.LINE_AA)
+    cv2.polylines(overlay, [fitted_curve], isClosed=False, color=ROUTE_COLORS["B"], thickness=2, lineType=cv2.LINE_AA)
 
     cv2.line(
         overlay,
@@ -500,13 +496,13 @@ def _render_wire_debug_frame(
         _frame_line(row),
         f"两端距离  数值={_fmt(_row_value(row, 'x_route_a_px'), suffix=' px')}"
         f"  rec={_fmt(_row_value(row, 'x_route_a_recovery'), precision=3)}",
-        f"整体弯曲程度  辅助值={_fmt(_row_value(row, 'x_fit_px'), suffix=' px')}"
+        f"整体弯曲程度（拟合主线）  辅助值={_fmt(_row_value(row, 'x_fit_px'), suffix=' px')}"
         f"  kappa={_fmt(_row_value(row, 'kappa_fit_px_inv'), precision=5)}",
-        f"连续跟踪后的弯曲程度  数值={_fmt(_row_value(row, 'x_route_c_px'), suffix=' px')}"
+        f"temporal chord / 时序平滑弦线  数值={_fmt(_row_value(row, 'x_route_c_px'), suffix=' px')}"
         f"  kappa={_fmt(_row_value(row, 'kappa_route_c_px_inv'), precision=5)}",
         f"质量={_fmt(_row_value(row, 'quality'), precision=3)}"
         f"  模型={_row_text(row, 'model_name') or '-'}",
-        "橙色：两端距离  紫色：整体弯曲程度  绿色：连续跟踪后的弯曲程度",
+        "橙色：两端距离  紫色：整体弯曲拟合主线  绿色：temporal chord / 时序平滑弦线",
     ]
     _draw_text_block(canvas, lines, origin_xy=(panel_x, 36), width=SIDEBAR_WIDTH - 36)
     _draw_trend_plot(
@@ -519,7 +515,7 @@ def _render_wire_debug_frame(
         metric_specs=[
             ("x_route_a_recovery", ROUTE_COLORS["A"], "两端距离"),
             ("kappa_fit_recovery", ROUTE_COLORS["B"], "整体弯曲"),
-            ("kappa_route_c_recovery", ROUTE_COLORS["C"], "连续跟踪"),
+            ("kappa_route_c_recovery", ROUTE_COLORS["C"], "时序平滑弦线"),
         ],
     )
     return canvas

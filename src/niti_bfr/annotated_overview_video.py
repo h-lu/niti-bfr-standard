@@ -295,15 +295,9 @@ def _make_wire_overlay(
     try:
         geom = extract_geometry(source_frame, extraction)
         contour = _points_as_polyline(geom.contour_xy)
-        centerline = _points_as_polyline(geom.sampled_centerline_xy)
-        fit_samples = _points_as_polyline(geom.fit_samples_xy)
         fitted_curve = _points_as_polyline(geom.fitted_curve_xy)
         if contour is not None:
             cv2.polylines(overlay, [contour], True, (130, 130, 130), 1, cv2.LINE_AA)
-        if centerline is not None:
-            cv2.polylines(overlay, [centerline], False, (255, 220, 120), 2, cv2.LINE_AA)
-        if fit_samples is not None:
-            cv2.polylines(overlay, [fit_samples], False, (255, 255, 0), 2, cv2.LINE_AA)
         if fitted_curve is not None:
             cv2.polylines(overlay, [fitted_curve], False, ROUTE_COLORS["B"], 2, cv2.LINE_AA)
         _draw_segment(overlay, geom.route_a_anchor_xy, geom.route_a_tip_xy, ROUTE_COLORS["A"], thickness=3)
@@ -325,8 +319,8 @@ def _make_wire_overlay(
         overlay,
         [
             ("A", "endpoint / chord", ROUTE_COLORS["A"]),
-            ("B", "shape fit / centerline", ROUTE_COLORS["B"]),
-            ("C", "temporal chord", ROUTE_COLORS["C"]),
+            ("B", "shape fit / 拟合主线", ROUTE_COLORS["B"]),
+            ("C", "temporal chord / 时序平滑弦线", ROUTE_COLORS["C"]),
         ],
     )
     return overlay
