@@ -444,6 +444,64 @@ class ProcessDebugVideoTests(unittest.TestCase):
 
         extract_mock.assert_not_called()
 
+    def test_braided_annotated_overview_uses_cached_geometry_source_roi_for_mask(self) -> None:
+        frame = np.zeros((12, 20, 3), dtype=np.uint8)
+        extraction = BraidedExtractionConfig(roi_xyxy=(0, 0, 20, 12))
+        source_roi = (5, 2, 9, 6)
+        geom = SimpleNamespace(
+            source_roi_xyxy=source_roi,
+            body_tube_mask=np.ones((4, 4), dtype=np.uint8),
+            contour_xy=np.array([[5, 2], [5, 5], [8, 5], [8, 2]], dtype=float),
+            body_contour_xy=np.array([[5, 2], [5, 5], [8, 5], [8, 2]], dtype=float),
+            sampled_centerline_xy=np.array([[5, 3], [8, 3]], dtype=float),
+            sampled_width_segments_xy=np.empty((0, 2, 2), dtype=float),
+            anchor_xy=np.array([5, 3], dtype=float),
+            tip_xy=np.array([8, 3], dtype=float),
+        )
+        row = SimpleNamespace(frame=0, time_sec=0.0)
+        seen_rois: list[tuple[int, int, int, int]] = []
+
+        def capture_blend(frame_bgr, mask, roi_xyxy, color_bgr, *, alpha):
+            seen_rois.append(roi_xyxy)
+            self.assertEqual(mask.shape, (4, 4))
+            return frame_bgr
+
+        with mock.patch.object(annotated_overview_video, "extract_braided_geometry") as extract_mock, mock.patch.object(
+            annotated_overview_video, "_blend_mask_on_roi", side_effect=capture_blend
+        ), mock.patch.object(annotated_overview_video, "_draw_legend_box"), mock.patch.object(
+            annotated_overview_video, "_draw_header_badge"
+        ):
+            annotated_overview_video._make_braided_overlay(frame.copy(), row, [], extraction, geom)
+
+        extract_mock.assert_not_called()
+        self.assertEqual(seen_rois, [source_roi])
+
+    def test_braided_annotated_overview_falls_back_to_extraction_roi_for_old_cached_geometry(self) -> None:
+        frame = np.zeros((12, 20, 3), dtype=np.uint8)
+        extraction = BraidedExtractionConfig(roi_xyxy=(0, 0, 20, 12))
+        geom = SimpleNamespace(
+            body_tube_mask=np.ones((12, 20), dtype=np.uint8),
+            contour_xy=np.array([[1, 1], [1, 10], [18, 10], [18, 1]], dtype=float),
+            body_contour_xy=np.array([[1, 1], [1, 10], [18, 10], [18, 1]], dtype=float),
+            sampled_centerline_xy=np.array([[1, 5], [18, 5]], dtype=float),
+            sampled_width_segments_xy=np.empty((0, 2, 2), dtype=float),
+            anchor_xy=np.array([1, 5], dtype=float),
+            tip_xy=np.array([18, 5], dtype=float),
+        )
+        row = SimpleNamespace(frame=0, time_sec=0.0)
+        seen_rois: list[tuple[int, int, int, int]] = []
+
+        def capture_blend(frame_bgr, _mask, roi_xyxy, _color_bgr, *, alpha):
+            seen_rois.append(roi_xyxy)
+            return frame_bgr
+
+        with mock.patch.object(annotated_overview_video, "_blend_mask_on_roi", side_effect=capture_blend), mock.patch.object(
+            annotated_overview_video, "_draw_legend_box"
+        ), mock.patch.object(annotated_overview_video, "_draw_header_badge"):
+            annotated_overview_video._make_braided_overlay(frame.copy(), row, [], extraction, geom)
+
+        self.assertEqual(seen_rois, [extraction.roi_xyxy])
+
 
 if __name__ == "__main__":
     unittest.main()

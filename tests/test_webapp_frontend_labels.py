@@ -592,6 +592,74 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertIn(f"/runs/{run_id}/status", response_text)
         self.assertIn("页面会自动更新状态", response_text)
 
+    def test_run_detail_persists_asset_failure_after_refresh_stops(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "asset-failed-detail"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed", preset="wire_like")
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "asset_generation_status": "failed",
+                        "asset_generation_error": "plot write failed",
+                        "process_video_error": "process render failed",
+                    },
+                )
+
+                response = webapp.run_detail(_FakeRequest(), run_id)
+                text = response.body.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("输出文件生成", text)
+        self.assertIn("主分析状态：已完成", text)
+        self.assertIn("asset_generation_error: plot write failed", text)
+        self.assertIn("process_video_error: process render failed", text)
+        self.assertIn("输出文件：", text)
+        self.assertIn("生成失败", text)
+        self.assertNotIn('id="run_status_panel"', text)
+        self.assertIn("const shouldPollRunStatus = false;", text)
+
+    def test_run_detail_uses_run_dir_for_historical_outputs(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "migrated-run"
+                run_dir = webapp.RUNS_ROOT / "legacy-storage"
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed", preset="wire_like")
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "asset_generation_status": "completed",
+                        "process_video_filename": webapp.PROCESS_VIDEO_FILENAME,
+                        "analyzed_frame_count": 7,
+                    },
+                )
+                (outputs_dir / webapp.PROCESS_VIDEO_FILENAME).write_bytes(b"video")
+                (outputs_dir / "route_a_metric_over_time.png").write_bytes(b"plot")
+
+                loaded = webapp._load_summary(run_id)
+                status_payload = webapp.run_status(run_id)
+                response = webapp.run_detail(_FakeRequest(), run_id)
+                text = response.body.decode("utf-8")
+
+        self.assertEqual(loaded["analyzed_frame_count"], 7)
+        self.assertEqual(status_payload["asset_generation_status"], "completed")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("/files/runs/legacy-storage/outputs/analysis_process.mp4", text)
+        self.assertIn("/files/runs/legacy-storage/outputs/route_a_metric_over_time.png", text)
+
     def test_run_status_endpoint_is_read_only(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._storage_patch_context(tmp):
@@ -640,6 +708,131 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(payload["status"], "running")
         self.assertEqual(payload["asset_generation_status"], "running")
         self.assertTrue(payload["refresh"])
+
+    def test_run_status_reports_asset_failure_without_refresh(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "status-asset-failed"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed", preset="wire_like")
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "asset_generation_status": "failed",
+                        "asset_generation_error": "plot write failed",
+                        "process_video_error": "process render failed",
+                    },
+                )
+
+                payload = webapp.run_status(run_id)
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["asset_generation_status"], "failed")
+        self.assertEqual(payload["asset_generation_error"], "plot write failed")
+        self.assertEqual(payload["process_video_error"], "process render failed")
+        self.assertFalse(payload["refresh"])
+        self.assertFalse(payload["active"])
+
+    def test_postprocess_read_failure_marks_asset_generation_failed(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "postprocess-read-failure"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "analysis.csv").write_text("not,a,valid,analysis\n", encoding="utf-8")
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed", preset="wire_like")
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "actual_mode": "quicklook",
+                        "asset_generation_status": "running",
+                    },
+                )
+
+                with mock.patch.object(webapp.pd, "read_csv", side_effect=ValueError("bad csv")):
+                    webapp._run_postprocess_task(
+                        run_id=run_id,
+                        run=dict(webapp._get_run(run_id)),
+                        prepared=None,
+                        result=None,
+                        extraction_cfg=None,
+                        video_path=None,
+                    )
+                summary = webapp._load_summary(run_id)
+
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["asset_generation_status"], "failed")
+        self.assertIn("analysis.csv read failed", summary["asset_generation_error"])
+        self.assertIn("bad csv", summary["asset_generation_error"])
+
+    def test_postprocess_rebuild_config_falls_back_to_summary_roi(self) -> None:
+        cases = [
+            ("wire_like", [6, 7, 60, 70], "roi_xyxy"),
+            ("braided_like", [12, 24, 220, 260], "initial_roi_xyxy"),
+        ]
+        for preset, roi_xyxy, attr_name in cases:
+            with self.subTest(preset=preset):
+                with TemporaryDirectory() as tmp:
+                    with self._storage_patch_context(tmp):
+                        webapp._ensure_storage()
+                        run_id = f"postprocess-summary-roi-{preset}"
+                        run_dir = webapp.RUNS_ROOT / run_id
+                        outputs_dir = run_dir / "outputs"
+                        outputs_dir.mkdir(parents=True, exist_ok=True)
+                        (outputs_dir / "analysis.csv").write_text("frame,quality\n0,0.9\n", encoding="utf-8")
+                        self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed", preset=preset)
+                        self._write_json(
+                            outputs_dir / "summary.json",
+                            {
+                                "preset": preset,
+                                "requested_mode": "quicklook",
+                                "actual_mode": "quicklook",
+                                "asset_generation_status": "running",
+                                "process_video_filename": None,
+                                "initial_roi_xyxy": roi_xyxy,
+                            },
+                        )
+                        fake_result = webapp.AnalysisResult(
+                            series=pd.DataFrame({"frame": [0], "time_sec": [0.0], "quality": [0.9]}),
+                            fit=None,
+                            af95_c=None,
+                            aftan_c=None,
+                            reportability_status="quicklook_only",
+                            route_results=[],
+                            input_fps=20.0,
+                            original_frame_count=1,
+                            analyzed_frame_count=1,
+                            frame_stride=1,
+                        )
+                        captured_extractions = []
+
+                        def _fake_render(**kwargs):
+                            captured_extractions.append(kwargs["extraction"])
+                            output_path = Path(kwargs["output_path"])
+                            output_path.write_bytes(b"process")
+                            return output_path
+
+                        with (
+                            mock.patch.object(webapp, "render_process_debug_video", side_effect=_fake_render),
+                            mock.patch.object(webapp, "_write_plots", autospec=True),
+                        ):
+                            webapp._run_postprocess_task(
+                                run_id=run_id,
+                                run=dict(webapp._get_run(run_id)),
+                                prepared=None,
+                                result=fake_result,
+                                extraction_cfg=None,
+                                video_path=None,
+                            )
+
+                self.assertEqual(getattr(captured_extractions[0], attr_name), tuple(roi_xyxy))
 
     def test_delete_run_blocks_pending_or_running_asset_generation(self) -> None:
         for asset_status in ("pending", "running"):

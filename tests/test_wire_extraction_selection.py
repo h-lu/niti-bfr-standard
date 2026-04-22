@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import unittest
 
+import cv2
 import numpy as np
 
-from niti_bfr.extract import ExtractionConfig, _component_mask
+from niti_bfr.extract import ExtractionConfig, _component_mask, extract_geometry
 
 
 class WireExtractionSelectionTests(unittest.TestCase):
@@ -50,6 +51,22 @@ class WireExtractionSelectionTests(unittest.TestCase):
         self.assertGreater(len(rows), 0)
         self.assertLessEqual(int(cols.min()), 11)
         self.assertGreaterEqual(int(cols.max()), 73)
+
+    def test_extract_geometry_rejects_empty_clipped_roi_without_opencv_error(self) -> None:
+        frame = np.full((20, 20, 3), 255, dtype=np.uint8)
+        config = ExtractionConfig(
+            roi_xyxy=(30, 30, 50, 50),
+            blur_ksize=1,
+            open_kernel=1,
+            close_kernel=1,
+            min_component_area=1,
+        )
+
+        with self.assertRaises(RuntimeError) as ctx:
+            extract_geometry(frame, config)
+
+        self.assertNotIsInstance(ctx.exception, cv2.error)
+        self.assertIn("ROI", str(ctx.exception))
 
 
 if __name__ == "__main__":

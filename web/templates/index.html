@@ -257,6 +257,19 @@
         color: var(--ok);
       }
 
+      .preview-confirm-button {
+        min-height: 34px;
+        padding: 0 14px;
+        border-radius: 999px;
+        font-size: 13px;
+        font-weight: 800;
+      }
+
+      .preview-confirm-button[disabled] {
+        opacity: 0.52;
+        cursor: not-allowed;
+      }
+
       .mode-box {
         margin-top: 18px;
         padding: 16px 18px;
@@ -528,6 +541,7 @@
                   <span class="preview-token" id="preview_roi_token">尚未选择固定 ROI</span>
                   <span class="preview-token direction-only" id="preview_angle_token">方向角度：0°</span>
                   <span class="preview-token direction-only" id="preview_confirm_token">尚未确认方向</span>
+                  <button class="preview-confirm-button direction-only" id="confirm_direction_button" type="button" disabled>确认方向</button>
                 </div>
               </div>
 
@@ -613,8 +627,10 @@
       const previewHint = document.getElementById("preview_hint");
       const previewAngleToken = document.getElementById("preview_angle_token");
       const previewConfirmToken = document.getElementById("preview_confirm_token");
+      const confirmDirectionButton = document.getElementById("confirm_direction_button");
       const previewRoiToken = document.getElementById("preview_roi_token");
       const submitButton = document.getElementById("submit_button");
+      const MIN_ROI_SOURCE_PX = 2;
       let previewRequestToken = 0;
       let directionAngle = 0;
       let directionConfirmed = false;
@@ -663,7 +679,7 @@
         if (!roiBox) {
           previewHint.textContent = "先在预览画面上拖出矩形，圈定所有帧共用的固定 ROI。";
         } else if (needsDirection && !directionConfirmed) {
-          previewHint.textContent = "固定 ROI 已选择。拖动圆点对齐方向参考线，用左右方向键微调，按回车确认方向。";
+          previewHint.textContent = "固定 ROI 已选择。拖动圆点对齐方向参考线，用左右方向键微调，点击确认方向或按回车。";
         } else if (needsDirection) {
           previewHint.textContent = "固定 ROI 和方向已确认。若重新拖 ROI，需再次确认方向；该 ROI 将用于所有帧。";
         } else {
@@ -673,6 +689,7 @@
 
       function updatePreviewLine() {
         const hasRoi = Boolean(roiBox);
+        const hasInitialRoi = Boolean(initialRoiInput.value);
         const needsDirection = requiresDirectionConfirmation();
         document.querySelectorAll(".direction-only").forEach((element) => {
           element.classList.toggle("hidden", !needsDirection);
@@ -689,9 +706,11 @@
         previewCenter.classList.toggle("disabled", !hasRoi || !needsDirection);
         previewCenter.setAttribute("aria-disabled", String(!hasRoi || !needsDirection));
         previewCenter.title = hasRoi ? "拖动圆点对齐方向参考线" : "先选择固定 ROI 后再确认方向";
+        confirmDirectionButton.disabled = !needsDirection || !hasInitialRoi;
+        confirmDirectionButton.textContent = directionConfirmed ? "方向已确认" : "确认方向";
         previewConfirmToken.textContent = directionConfirmed
           ? "方向已确认，按开始分析继续"
-          : (hasRoi ? "尚未确认方向" : "选择固定 ROI 后再确认方向");
+          : (hasInitialRoi ? "尚未确认方向" : "选择固定 ROI 后再确认方向");
         previewConfirmToken.classList.toggle("ready", directionConfirmed);
         updatePreviewHintText();
       }
@@ -724,6 +743,7 @@
 
       function updatePreviewRoi() {
         const hasRoi = Boolean(roiBox);
+        const hasInitialRoi = Boolean(initialRoiInput.value);
         previewRoi.classList.toggle("visible", hasRoi);
         if (hasRoi) {
           const videoRect = getPreviewVideoRect();
@@ -739,22 +759,37 @@
             previewRoi.style.height = `${height}px`;
           }
         }
-        previewRoiToken.textContent = hasRoi ? "固定 ROI 已选择" : "尚未选择固定 ROI";
-        previewRoiToken.classList.toggle("ready", hasRoi);
+        previewRoiToken.textContent = !hasRoi
+          ? "尚未选择固定 ROI"
+          : (hasInitialRoi ? "固定 ROI 已选择" : "ROI 至少需要 2 px 宽和高");
+        previewRoiToken.classList.toggle("ready", hasInitialRoi);
         updatePreviewLine();
         updatePreviewHintText();
       }
 
-      function syncInitialRoiInput() {
-        if (!roiBox || !previewSourceWidth || !previewSourceHeight) {
-          initialRoiInput.value = "";
-          return;
+      function sourceRoiFromBox(box = roiBox) {
+        if (!box || !previewSourceWidth || !previewSourceHeight) {
+          return null;
         }
-        const x0 = Math.round(roiBox.x0 * previewSourceWidth);
-        const y0 = Math.round(roiBox.y0 * previewSourceHeight);
-        const x1 = Math.round(roiBox.x1 * previewSourceWidth);
-        const y1 = Math.round(roiBox.y1 * previewSourceHeight);
-        initialRoiInput.value = JSON.stringify([x0, y0, x1, y1]);
+        const x0 = Math.round(box.x0 * previewSourceWidth);
+        const y0 = Math.round(box.y0 * previewSourceHeight);
+        const x1 = Math.round(box.x1 * previewSourceWidth);
+        const y1 = Math.round(box.y1 * previewSourceHeight);
+        return {
+          coords: [x0, y0, x1, y1],
+          width: x1 - x0,
+          height: y1 - y0,
+        };
+      }
+
+      function syncInitialRoiInput() {
+        const sourceRoi = sourceRoiFromBox();
+        if (!sourceRoi || sourceRoi.width < MIN_ROI_SOURCE_PX || sourceRoi.height < MIN_ROI_SOURCE_PX) {
+          initialRoiInput.value = "";
+          return false;
+        }
+        initialRoiInput.value = JSON.stringify(sourceRoi.coords);
+        return true;
       }
 
       function updateSubmitState() {
@@ -971,6 +1006,17 @@
         updatePreviewLine();
       }
 
+      function confirmDirection() {
+        if (!isBraidedPreset() || !initialRoiInput.value) {
+          updatePreviewHintText();
+          return;
+        }
+        directionConfirmed = true;
+        directionAngleInput.value = String(directionAngle);
+        updatePreviewLine();
+        updateSubmitState();
+      }
+
       presetButtons.forEach((button) => {
         button.addEventListener("click", () => {
           presetSelect.value = button.dataset.preset;
@@ -996,9 +1042,11 @@
         if (!previewSourceWidth || !previewSourceHeight) {
           updatePreviewSourceSize();
           syncInitialRoiInput();
+          updatePreviewRoi();
           updateSubmitState();
         }
       });
+      confirmDirectionButton.addEventListener("click", confirmDirection);
       previewCenter.addEventListener("pointerdown", (event) => {
         if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
           return;
@@ -1086,10 +1134,9 @@
         }
         roiDragPointerId = null;
         roiStartPoint = null;
-        if (roiBox && (roiBox.x1 - roiBox.x0 < 0.01 || roiBox.y1 - roiBox.y0 < 0.01)) {
+        if (!syncInitialRoiInput()) {
           resetInitialRoi();
         } else {
-          syncInitialRoiInput();
           updatePreviewRoi();
         }
         updatePreviewLine();
@@ -1121,10 +1168,7 @@
           updateSubmitState();
           event.preventDefault();
         } else if (event.key === "Enter") {
-          directionConfirmed = true;
-          directionAngleInput.value = String(directionAngle);
-          updatePreviewLine();
-          updateSubmitState();
+          confirmDirection();
           event.preventDefault();
         }
       });

@@ -348,10 +348,11 @@ def _make_braided_overlay(
     cached_geom: Any | None = None,
 ) -> np.ndarray:
     assert isinstance(extraction, BraidedExtractionConfig)
-    x0, y0, x1, y1 = extraction.roi_xyxy
+    roi_xyxy = extraction.roi_xyxy
     try:
         geom = cached_geom if cached_geom is not None else extract_braided_geometry(overlay.copy(), extraction)
-        blended = _blend_mask_on_roi(overlay, geom.body_tube_mask, extraction.roi_xyxy, ROUTE_COLORS["C"], alpha=0.26)
+        roi_xyxy = _geometry_source_roi_xyxy(geom, extraction.roi_xyxy)
+        blended = _blend_mask_on_roi(overlay, geom.body_tube_mask, roi_xyxy, ROUTE_COLORS["C"], alpha=0.26)
         overlay[:, :] = blended
         contour = _points_as_polyline(geom.contour_xy)
         body_contour = _points_as_polyline(geom.body_contour_xy)
@@ -387,6 +388,7 @@ def _make_braided_overlay(
             )
     except RuntimeError as exc:
         header_lines.append(f"extraction warning: {exc}")
+    x0, y0, x1, y1 = roi_xyxy
     cv2.rectangle(overlay, (x0, y0), (x1, y1), (80, 180, 255), 2)
     _draw_header_badge(overlay, header_lines)
     _draw_legend_box(
@@ -398,6 +400,13 @@ def _make_braided_overlay(
         ],
     )
     return overlay
+
+
+def _geometry_source_roi_xyxy(geom: Any, fallback_roi_xyxy: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    roi_xyxy = getattr(geom, "source_roi_xyxy", fallback_roi_xyxy)
+    if not isinstance(roi_xyxy, (list, tuple)) or len(roi_xyxy) != 4:
+        return fallback_roi_xyxy
+    return tuple(int(value) for value in roi_xyxy)
 
 
 def _blend_mask_on_roi(
@@ -412,6 +421,10 @@ def _blend_mask_on_roi(
     x0, y0, x1, y1 = roi_xyxy
     roi = blended[y0:y1, x0:x1]
     support = mask > 0
+    if support.shape != roi.shape[:2]:
+        raise RuntimeError(
+            f"mask shape {support.shape} does not match roi shape {roi.shape[:2]} for roi_xyxy={roi_xyxy}"
+        )
     if np.any(support):
         color = np.asarray(color_bgr, dtype=np.float32)
         roi[support] = np.round((1.0 - alpha) * roi[support].astype(np.float32) + alpha * color[None, :]).astype(np.uint8)

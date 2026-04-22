@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import yaml
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -62,6 +62,7 @@ PROJECT_OUTPUTS_ROOT = ROOT / "outputs"
 ANNOTATED_VIDEO_FILENAME = "annotated_overview.mp4"
 PROCESS_VIDEO_FILENAME = "analysis_process.mp4"
 PROCESS_VIDEO_WEBM_FILENAME = "analysis_process.webm"
+SAFE_MEDIA_FILE_SUFFIXES = {".mp4", ".webm", ".png", ".jpg", ".jpeg"}
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
 RUNS_ROOT.mkdir(parents=True, exist_ok=True)
@@ -72,10 +73,42 @@ PATH_PREFIX_ALIASES = ("/niti",)
 
 app = FastAPI(title="NiTi BFR 分析台")
 app.mount("/assets", StaticFiles(directory=str(ASSETS_ROOT)), name="assets")
-app.mount("/files", StaticFiles(directory=str(DATA_ROOT)), name="files")
+
+
+def _safe_media_file_path(path: str) -> Path:
+    raw_path = Path(path)
+    parts = raw_path.parts
+    if not parts or raw_path.is_absolute() or any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=404, detail="file not found")
+    if raw_path.suffix.lower() not in SAFE_MEDIA_FILE_SUFFIXES:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    allowed = False
+    if len(parts) == 4 and parts[0] == "runs" and parts[2] == "outputs":
+        allowed = True
+    elif len(parts) == 3 and parts[0] == "previews" and parts[2] in {"preview.mp4", "preview.webm", "preview_poster.jpg"}:
+        allowed = True
+    if not allowed:
+        raise HTTPException(status_code=404, detail="file not found")
+
+    data_root = DATA_ROOT.resolve()
+    candidate = (DATA_ROOT / raw_path).resolve()
+    try:
+        candidate.relative_to(data_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="file not found") from exc
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return candidate
+
+
+@app.get("/files/{path:path}", name="files")
+def serve_file(path: str) -> FileResponse:
+    return FileResponse(str(_safe_media_file_path(path)))
+
+
 for _prefix in PATH_PREFIX_ALIASES:
     app.mount(f"{_prefix}/assets", StaticFiles(directory=str(ASSETS_ROOT)), name=f"assets{_prefix}")
-    app.mount(f"{_prefix}/files", StaticFiles(directory=str(DATA_ROOT)), name=f"files{_prefix}")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _POSTPROCESS_LOCK = threading.Lock()
 _POSTPROCESS_IN_FLIGHT: set[str] = set()
@@ -661,6 +694,28 @@ def _parse_initial_roi_xyxy(raw_value: Any) -> tuple[int, int, int, int] | None:
     return x0, y0, x1, y1
 
 
+def _clip_initial_roi_xyxy_to_frame(
+    roi_xyxy: tuple[int, int, int, int],
+    frame_size: tuple[int, int],
+) -> tuple[int, int, int, int]:
+    width, height = (int(frame_size[0]), int(frame_size[1]))
+    if width < 2 or height < 2:
+        raise ValueError("video frame must be at least 2 px wide and high")
+    x0, y0, x1, y1 = roi_xyxy
+    clipped = (
+        max(0, min(int(x0), width)),
+        max(0, min(int(y0), height)),
+        max(0, min(int(x1), width)),
+        max(0, min(int(y1), height)),
+    )
+    cx0, cy0, cx1, cy1 = clipped
+    if cx1 <= cx0 or cy1 <= cy0:
+        raise ValueError("initial_roi_xyxy must overlap the video frame")
+    if cx1 - cx0 < 2 or cy1 - cy0 < 2:
+        raise ValueError("initial_roi_xyxy must be at least 2 px wide and high after clipping to the video frame")
+    return clipped
+
+
 def _encode_initial_roi_xyxy(roi_xyxy: tuple[int, int, int, int] | None) -> str | None:
     if roi_xyxy is None:
         return None
@@ -673,6 +728,22 @@ def _row_initial_roi_xyxy(run: sqlite3.Row | dict[str, Any]) -> tuple[int, int, 
     else:
         raw_value = run["initial_roi_xyxy"] if "initial_roi_xyxy" in run.keys() else None
     return _parse_initial_roi_xyxy(raw_value)
+
+
+def _summary_initial_roi_xyxy(summary: dict[str, Any] | None) -> tuple[int, int, int, int] | None:
+    if not isinstance(summary, dict):
+        return None
+    return _parse_initial_roi_xyxy(summary.get("initial_roi_xyxy"))
+
+
+def _postprocess_initial_roi_xyxy(
+    run: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any] | None,
+) -> tuple[int, int, int, int] | None:
+    roi_xyxy = _row_initial_roi_xyxy(run)
+    if roi_xyxy is not None:
+        return roi_xyxy
+    return _summary_initial_roi_xyxy(summary)
 
 
 def _route_specs_for_preset(preset: str | None) -> dict[str, dict[str, Any]]:
@@ -765,9 +836,17 @@ def _build_smoothed_route_results(preset: str | None, series: pd.DataFrame) -> d
     return route_smoothed
 
 
-def _analysis_csv_path_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
-    run_dir: str | None = None
-    run_id: str | None = None
+def _run_dir_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    if isinstance(run, str):
+        try:
+            run_row = _get_run(run)
+        except sqlite3.Error:
+            run_row = None
+        if run_row is not None:
+            run_dir = run_row["run_dir"] if "run_dir" in run_row.keys() else None
+            if run_dir:
+                return Path(str(run_dir))
+        return RUNS_ROOT / run
     if isinstance(run, dict):
         run_dir = run.get("run_dir")
         run_id = run.get("id")
@@ -775,8 +854,12 @@ def _analysis_csv_path_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
         run_dir = run["run_dir"] if "run_dir" in run.keys() else None
         run_id = run["id"] if "id" in run.keys() else None
     if run_dir:
-        return Path(str(run_dir)) / "outputs" / "analysis.csv"
-    return RUNS_ROOT / str(run_id or "") / "outputs" / "analysis.csv"
+        return Path(str(run_dir))
+    return RUNS_ROOT / str(run_id or "")
+
+
+def _analysis_csv_path_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    return _outputs_dir_for_run(run) / "analysis.csv"
 
 
 def _backfill_smoothed_summary_fields(
@@ -901,20 +984,16 @@ def _refresh_plot_outputs_for_display(
     _schedule_postprocess(run_id, run=run, prepared=prepared, force_inline=force_inline)
 
 
-def _outputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
-    return _analysis_csv_path_for_run(run).parent
+def _outputs_dir_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    return _run_dir_for_run(run) / "outputs"
 
 
-def _inputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
-    run_dir = run.get("run_dir") if isinstance(run, dict) else run["run_dir"]
-    return Path(str(run_dir)) / "inputs"
+def _inputs_dir_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    return _run_dir_for_run(run) / "inputs"
 
 
 def _summary_path_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
-    if isinstance(run, str):
-        return RUNS_ROOT / run / "outputs" / "summary.json"
-    run_dir = run.get("run_dir") if isinstance(run, dict) else run["run_dir"]
-    return Path(str(run_dir)) / "outputs" / "summary.json"
+    return _outputs_dir_for_run(run) / "summary.json"
 
 
 def _process_video_ready(outputs_dir: Path, prepared: dict[str, Any]) -> bool:
@@ -1123,7 +1202,7 @@ def _reconcile_stale_active_runs() -> dict[str, int]:
     )
     for run in _list_all_runs():
         run_id = run["id"]
-        summary = _load_summary(run_id)
+        summary = _load_summary(run)
         if run["status"] in ACTIVE_RUN_STATUSES:
             if _completed_result_outputs_exist(run, summary):
                 _update_run(run_id, _completed_run_values_from_summary(run, summary or {}))
@@ -1135,7 +1214,7 @@ def _reconcile_stale_active_runs() -> dict[str, int]:
             if refreshed is None:
                 continue
             run = refreshed
-            summary = _load_summary(run_id)
+            summary = _load_summary(run)
 
         if _asset_generation_active(summary):
             if _postprocess_in_flight(run_id):
@@ -1258,10 +1337,21 @@ def _run_postprocess_task(
         outputs_dir.mkdir(parents=True, exist_ok=True)
         analysis_csv = outputs_dir / "analysis.csv"
         if not analysis_csv.exists():
+            _update_summary_fields(
+                run_payload,
+                asset_generation_status="failed",
+                asset_generation_error="analysis.csv missing; derived assets were not generated",
+            )
             return
 
-        prepared_summary = dict(prepared) if prepared is not None else _prepare_summary_for_display(run_payload, _load_summary(run_id))
+        loaded_summary = _load_summary(run_payload)
+        prepared_summary = dict(prepared) if prepared is not None else _prepare_summary_for_display(run_payload, loaded_summary)
         if prepared_summary is None:
+            _update_summary_fields(
+                run_payload,
+                asset_generation_status="failed",
+                asset_generation_error="summary unavailable; derived assets were not generated",
+            )
             return
 
         _update_summary_fields(
@@ -1274,18 +1364,32 @@ def _run_postprocess_task(
         if analysis_result is None:
             try:
                 series = pd.read_csv(analysis_csv)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                _update_summary_fields(
+                    run_payload,
+                    asset_generation_status="failed",
+                    asset_generation_error=f"analysis.csv read failed: {_postprocess_fallback_error(exc)}",
+                )
                 return
             analysis_result = _result_for_display_plots(run_payload, prepared_summary, series)
 
         if extraction_cfg is None:
             config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
             preset = run_payload["preset"]
+            summary_for_roi = prepared_summary
+            if isinstance(summary_for_roi, dict) and summary_for_roi.get("initial_roi_xyxy") is None:
+                summary_for_roi = loaded_summary
+            roi_xyxy = _postprocess_initial_roi_xyxy(run_payload, summary_for_roi)
             if preset in {"wire_like", "demo"}:
-                extraction_cfg = _build_wire_extraction_config(config, preset, roi_xyxy=_row_initial_roi_xyxy(run_payload))
+                extraction_cfg = _build_wire_extraction_config(config, preset, roi_xyxy=roi_xyxy)
             elif preset in {"braided_like", "braided_demo"}:
-                extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=_row_initial_roi_xyxy(run_payload))
+                extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=roi_xyxy)
             else:
+                _update_summary_fields(
+                    run_payload,
+                    asset_generation_status="failed",
+                    asset_generation_error=f"unsupported preset for asset generation: {preset}",
+                )
                 return
 
         resolved_video_path = Path(video_path) if video_path is not None else _inputs_dir_for_run(run_payload) / run_payload["video_filename"]
@@ -1360,8 +1464,7 @@ def _generate_process_video_asset(
     outputs_dir = _outputs_dir_for_run(run)
     process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
     process_video_webm_path = outputs_dir / PROCESS_VIDEO_WEBM_FILENAME
-    run_id = run.get("id") if isinstance(run, dict) else run["id"]
-    summary = _load_summary(run_id) or {}
+    summary = _load_summary(run) or {}
     existing_name = str(summary.get("process_video_filename") or "").strip()
     if existing_name and (outputs_dir / existing_name).exists():
         return None
@@ -2232,7 +2335,7 @@ def _build_benchmark_page_data() -> dict[str, Any]:
 
 def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
     payload = dict(run)
-    summary = _prepare_summary_for_display(payload, _load_summary(payload["id"]), backfill_smoothed=False)
+    summary = _prepare_summary_for_display(payload, _load_summary(payload), backfill_smoothed=False)
     payload["summary"] = summary
     if summary is not None:
         payload["reportability_status"] = summary.get("reportability_status")
@@ -2262,6 +2365,7 @@ def _run_status_payload(run: sqlite3.Row | dict[str, Any], summary: dict[str, An
         "status_label": _run_status_label(run_payload["status"]),
         "asset_generation_status": summary_payload.get("asset_generation_status"),
         "asset_generation_error": summary_payload.get("asset_generation_error"),
+        "process_video_error": summary_payload.get("process_video_error"),
         "error_text": run_payload.get("error_text"),
         "refresh": refresh,
         "active": refresh,
@@ -2392,6 +2496,13 @@ async def create_run(
 
     video_path = inputs_dir / _safe_filename(video_file.filename)
     await _save_upload(video_file, video_path)
+    frame_size = _video_frame_size(video_path)
+    if parsed_initial_roi is not None and frame_size is not None:
+        try:
+            parsed_initial_roi = _clip_initial_roi_xyxy_to_frame(parsed_initial_roi, frame_size)
+        except ValueError as exc:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     temperature_path: Path | None = None
     if temperature_file and temperature_file.filename:
@@ -2518,7 +2629,7 @@ def delete_run(request: Request, run_id: str) -> RedirectResponse:
     run = _get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    availability = _delete_availability(run, _load_summary(run_id))
+    availability = _delete_availability(run, _load_summary(run))
     if not availability["can_delete"]:
         raise HTTPException(status_code=409, detail=availability["delete_block_reason"] or "run is still active")
     _delete_run_assets(run_id, Path(run["run_dir"]))
@@ -2531,7 +2642,7 @@ def run_status(run_id: str) -> dict[str, Any]:
     run_row = _get_run(run_id)
     if run_row is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return _run_status_payload(run_row, _load_summary(run_id))
+    return _run_status_payload(run_row, _load_summary(run_row))
 
 
 @app.get("/runs/{run_id}")
@@ -2541,7 +2652,7 @@ def run_detail(request: Request, run_id: str) -> Any:
         raise HTTPException(status_code=404, detail="run not found")
     run = dict(run_row)
 
-    summary = _prepare_summary_for_display(run, _load_summary(run_id), backfill_smoothed=False)
+    summary = _prepare_summary_for_display(run, _load_summary(run), backfill_smoothed=False)
     temperature_available = bool(
         run.get("temperature_filename")
         or (summary and (summary.get("temperature_c_min") is not None or summary.get("temperature_c_max") is not None))
@@ -2551,7 +2662,7 @@ def run_detail(request: Request, run_id: str) -> Any:
     other_image_files = []
     video_files = []
     download_files = []
-    outputs_dir = RUNS_ROOT / run_id / "outputs"
+    outputs_dir = _outputs_dir_for_run(run)
     if outputs_dir.exists():
         for path in sorted(outputs_dir.iterdir()):
             rel = path.relative_to(DATA_ROOT).as_posix()
@@ -2583,14 +2694,6 @@ def run_detail(request: Request, run_id: str) -> Any:
                     other_image_files.append(payload)
                 download_files.append(payload)
                 continue
-            if path.suffix.lower() in {".csv", ".json"}:
-                download_files.append(
-                    {
-                        "name": path.name,
-                        "label": _worker_output_label(path.name, run["preset"]),
-                        "url": str(request.url_for("files", path=rel)),
-                    }
-                )
     annotated_video = None
     process_video = None
     if summary and summary.get("annotated_video_filename"):
@@ -2677,6 +2780,13 @@ def health() -> dict[str, str]:
 
 for _prefix in PATH_PREFIX_ALIASES:
     app.add_api_route(f"{_prefix}/", home, methods=["GET"], include_in_schema=False, name=f"home{_prefix}")
+    app.add_api_route(
+        f"{_prefix}/files/{{path:path}}",
+        serve_file,
+        methods=["GET"],
+        include_in_schema=False,
+        name=f"files{_prefix}",
+    )
     app.add_api_route(f"{_prefix}/history", history, methods=["GET"], include_in_schema=False, name=f"history{_prefix}")
     app.add_api_route(
         f"{_prefix}/benchmarks",
@@ -3733,8 +3843,8 @@ def _write_summary(path: Path, summary: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def _load_summary(run_id: str) -> dict[str, Any] | None:
-    path = RUNS_ROOT / run_id / "outputs" / "summary.json"
+def _load_summary(run: sqlite3.Row | dict[str, Any] | str) -> dict[str, Any] | None:
+    path = _summary_path_for_run(run)
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))

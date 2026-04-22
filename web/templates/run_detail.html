@@ -11,6 +11,8 @@
 {% set reported_af95 = object_summary.get('object_reported_af95_c') if object_summary else none %}
 {% set reported_aftan = object_summary.get('object_reported_aftan_c') if object_summary else none %}
 {% set debug_gate_reason = object_summary.get('formal_gate_reason') if object_summary else none %}
+{% set asset_generation_status = summary.get('asset_generation_status') if summary else none %}
+{% set asset_failed = summary and (asset_generation_status == 'failed' or summary.get('asset_generation_error') or summary.get('process_video_error')) %}
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -398,6 +400,20 @@
                 </div>
                 <div class="meta-pill">提交时间：{{ display_time(run['created_at']) }}</div>
                 <div class="meta-pill">{{ run_status_label(run['status']) }}</div>
+                {% if asset_generation_status %}
+                <div class="meta-pill">
+                  输出文件：
+                  {% if asset_generation_status == 'failed' %}
+                    生成失败
+                  {% elif asset_generation_status in ['pending', 'running'] %}
+                    生成中
+                  {% elif asset_generation_status == 'completed' %}
+                    已生成
+                  {% else %}
+                    {{ asset_generation_status }}
+                  {% endif %}
+                </div>
+                {% endif %}
               </div>
             </div>
 
@@ -451,6 +467,21 @@
         {% if refresh %}
         <section class="section-card" id="run_status_panel" aria-live="polite">
           <div class="empty" id="run_status_text">处理中，页面会自动更新状态。</div>
+        </section>
+        {% endif %}
+
+        {% if asset_failed %}
+        <section class="section-card" id="asset_status_panel">
+          <div class="section-header">
+            <div>
+              <h2>输出文件生成</h2>
+              <p class="section-note">主分析状态：{{ run_status_label(run['status']) }}。下面的问题只影响图表或过程视频等派生文件，不隐藏已完成的分析结果。</p>
+            </div>
+          </div>
+          <div class="error">
+            <pre>{% if summary.get('asset_generation_error') or summary.get('process_video_error') %}{% if summary.get('asset_generation_error') %}asset_generation_error: {{ summary.get('asset_generation_error') }}{% endif %}{% if summary.get('asset_generation_error') and summary.get('process_video_error') %}
+{% endif %}{% if summary.get('process_video_error') %}process_video_error: {{ summary.get('process_video_error') }}{% endif %}{% else %}asset_generation_status: {{ asset_generation_status }}{% endif %}</pre>
+          </div>
         </section>
         {% endif %}
 
@@ -719,6 +750,9 @@
         }
         if (payload.asset_generation_error) {
           parts.push("输出文件生成失败");
+        }
+        if (payload.process_video_error) {
+          parts.push("过程视频生成失败");
         }
         return parts.length ? parts.join(" · ") : "处理中";
       }

@@ -51,6 +51,28 @@ class ExtractionResult:
     circle_rmse_px: float
 
 
+def _clip_roi_xyxy_to_frame(
+    roi_xyxy: tuple[int, int, int, int],
+    frame_shape: tuple[int, ...],
+) -> tuple[int, int, int, int]:
+    height, width = frame_shape[:2]
+    if width < 1 or height < 1:
+        raise RuntimeError("empty frame")
+    x0, y0, x1, y1 = (int(value) for value in roi_xyxy)
+    clipped = (
+        max(0, min(x0, width)),
+        max(0, min(y0, height)),
+        max(0, min(x1, width)),
+        max(0, min(y1, height)),
+    )
+    cx0, cy0, cx1, cy1 = clipped
+    if cx1 <= cx0 or cy1 <= cy0:
+        raise RuntimeError("wire ROI does not overlap the frame")
+    if cx1 - cx0 < 2 or cy1 - cy0 < 2:
+        raise RuntimeError("wire ROI crop is too small after clipping")
+    return clipped
+
+
 def _largest_component(mask: np.ndarray) -> np.ndarray:
     num, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
     best_label = 0
@@ -575,9 +597,13 @@ def _local_to_global(points_local: np.ndarray, anchor_xy: np.ndarray, tangent: n
 
 
 def extract_geometry(frame_bgr: np.ndarray, config: ExtractionConfig) -> ExtractionResult:
+    if frame_bgr is None or frame_bgr.size == 0:
+        raise RuntimeError("empty frame")
     gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-    x0, y0, x1, y1 = config.roi_xyxy
+    x0, y0, x1, y1 = _clip_roi_xyxy_to_frame(config.roi_xyxy, gray.shape)
     crop = gray[y0:y1, x0:x1]
+    if crop.size == 0:
+        raise RuntimeError("wire ROI crop is empty")
     roi_offset_xy = np.array([x0, y0], dtype=float)
     blur = cv2.GaussianBlur(crop, (config.blur_ksize, config.blur_ksize), 0)
     mask = (blur < config.threshold_dark).astype(np.uint8) * 255

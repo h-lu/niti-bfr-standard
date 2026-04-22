@@ -121,6 +121,13 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertIn("requiresDirectionConfirmation", text)
         self.assertIn("先选固定 ROI，再确认方向", text)
         self.assertIn("该 ROI 将用于所有帧", text)
+        self.assertIn('id="confirm_direction_button"', text)
+        self.assertIn('confirmDirectionButton.addEventListener("click", confirmDirection)', text)
+        self.assertIn("点击确认方向或按回车", text)
+        self.assertIn("const MIN_ROI_SOURCE_PX = 2", text)
+        self.assertIn("function sourceRoiFromBox", text)
+        self.assertIn("sourceRoi.width < MIN_ROI_SOURCE_PX", text)
+        self.assertNotIn("roiBox.x1 - roiBox.x0 < 0.01", text)
         self.assertLess(text.index("尚未选择固定 ROI"), text.index("方向角度：0°"))
         self.assertIn('name="initial_roi_xyxy"', text)
         self.assertIn("preview_roi", text)
@@ -328,6 +335,34 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertIsNone(row["direction_angle_deg"])
         self.assertEqual(row["direction_metric_enabled"], 0)
 
+    def test_create_wire_run_clips_initial_roi_to_video_frame(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_video_frame_size", return_value=(100, 80)):
+                webapp._ensure_storage()
+                response = self._create_run_direct(
+                    preset="wire_like",
+                    frame_stride="1",
+                    initial_roi_xyxy="[10,20,150,90]",
+                )
+                rows = webapp._list_runs(limit=1)
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(dict(rows[0])["initial_roi_xyxy"], "[10,20,100,80]")
+
+    def test_create_wire_run_rejects_roi_outside_video_frame(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_video_frame_size", return_value=(100, 80)):
+                webapp._ensure_storage()
+                with self.assertRaises(webapp.HTTPException) as ctx:
+                    self._create_run_direct(
+                        preset="wire_like",
+                        frame_stride="1",
+                        initial_roi_xyxy="[120,20,150,40]",
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("overlap", ctx.exception.detail)
+
     def test_create_run_with_temperature_csv_derives_formal_request(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
@@ -482,6 +517,50 @@ class RealFrontendFlowTests(unittest.TestCase):
         payload = response.json()
         self.assertIn("/files/previews/", payload["preview_url"])
 
+    def test_files_route_only_serves_safe_output_and_preview_media(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp):
+                webapp._ensure_storage()
+                run_id = "file-scope"
+                outputs_dir = webapp.RUNS_ROOT / run_id / "outputs"
+                inputs_dir = webapp.RUNS_ROOT / run_id / "inputs"
+                preview_dir = webapp.PREVIEWS_ROOT / "preview-1"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                inputs_dir.mkdir(parents=True, exist_ok=True)
+                preview_dir.mkdir(parents=True, exist_ok=True)
+                (outputs_dir / "plot.png").write_bytes(b"png")
+                (outputs_dir / "summary.json").write_text("{}", encoding="utf-8")
+                (inputs_dir / "source.mp4").write_bytes(b"input")
+                (preview_dir / "preview.mp4").write_bytes(b"preview")
+                (preview_dir / "preview_poster.jpg").write_bytes(b"poster")
+                (preview_dir / "source.mp4").write_bytes(b"preview-source")
+                webapp.DB_PATH.write_bytes(b"db")
+                (webapp.DATA_ROOT / "debug.log").write_text("log", encoding="utf-8")
+
+                allowed_output = webapp.serve_file(f"runs/{run_id}/outputs/plot.png")
+                allowed_preview = webapp.serve_file("previews/preview-1/preview.mp4")
+                allowed_preview_poster = webapp.serve_file("previews/preview-1/preview_poster.jpg")
+                blocked = [
+                    "runs.db",
+                    "debug.log",
+                    f"runs/{run_id}/inputs/source.mp4",
+                    f"runs/{run_id}/outputs/summary.json",
+                    "previews/preview-1/source.mp4",
+                    "unknown/plot.png",
+                    f"runs/{run_id}/outputs/../inputs/source.mp4",
+                ]
+
+                prefix_route_names = {getattr(route, "name", "") for route in webapp.app.routes}
+
+        self.assertEqual(allowed_output.status_code, 200)
+        self.assertEqual(allowed_preview.status_code, 200)
+        self.assertEqual(allowed_preview_poster.status_code, 200)
+        self.assertIn("files/niti", prefix_route_names)
+        for path in blocked:
+            with self.subTest(path=path), self.assertRaises(webapp.HTTPException) as ctx:
+                webapp.serve_file(path)
+            self.assertEqual(ctx.exception.status_code, 404)
+
     def test_create_run_rejects_invalid_frame_stride(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
@@ -551,6 +630,41 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertEqual(result.analyzed_frame_count, 3)
         self.assertEqual(result.frame_stride, 2)
         self.assertEqual(result.series["frame"].tolist(), [0, 2, 4])
+
+    def test_wire_analysis_releases_capture_when_unexpected_error_escapes(self) -> None:
+        class DummyCapture:
+            def __init__(self) -> None:
+                self.released = False
+                self.index = 0
+
+            def isOpened(self) -> bool:
+                return True
+
+            def get(self, _prop: int) -> float:
+                return 10.0
+
+            def read(self):
+                if self.index:
+                    return False, None
+                self.index += 1
+                return True, np.zeros((8, 8, 3), dtype=np.uint8)
+
+            def release(self) -> None:
+                self.released = True
+
+        capture = DummyCapture()
+        extraction = webapp._build_wire_extraction_config(
+            {"analysis": {"demo_extraction": {"roi_xyxy": [0, 0, 4, 4], "blur_ksize": 1, "threshold_dark": 0, "open_kernel": 1, "close_kernel": 1}}},
+            "demo",
+        )
+        with mock.patch("niti_bfr.pipeline.cv2.VideoCapture", return_value=capture), mock.patch(
+            "niti_bfr.pipeline.extract_geometry",
+            side_effect=ValueError("unexpected"),
+        ):
+            with self.assertRaises(ValueError):
+                analyze_video("dummy.mp4", extraction=extraction)
+
+        self.assertTrue(capture.released)
 
     def test_build_summary_keeps_frame_counts_for_results_page(self) -> None:
         result = AnalysisResult(
