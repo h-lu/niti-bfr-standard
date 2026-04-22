@@ -730,6 +730,22 @@ def _row_initial_roi_xyxy(run: sqlite3.Row | dict[str, Any]) -> tuple[int, int, 
     return _parse_initial_roi_xyxy(raw_value)
 
 
+def _summary_initial_roi_xyxy(summary: dict[str, Any] | None) -> tuple[int, int, int, int] | None:
+    if not isinstance(summary, dict):
+        return None
+    return _parse_initial_roi_xyxy(summary.get("initial_roi_xyxy"))
+
+
+def _postprocess_initial_roi_xyxy(
+    run: sqlite3.Row | dict[str, Any],
+    summary: dict[str, Any] | None,
+) -> tuple[int, int, int, int] | None:
+    roi_xyxy = _row_initial_roi_xyxy(run)
+    if roi_xyxy is not None:
+        return roi_xyxy
+    return _summary_initial_roi_xyxy(summary)
+
+
 def _route_specs_for_preset(preset: str | None) -> dict[str, dict[str, Any]]:
     return BRAIDED_ROUTE_SPECS if _is_braided_preset(preset) else WIRE_ROUTE_SPECS
 
@@ -820,9 +836,17 @@ def _build_smoothed_route_results(preset: str | None, series: pd.DataFrame) -> d
     return route_smoothed
 
 
-def _analysis_csv_path_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
-    run_dir: str | None = None
-    run_id: str | None = None
+def _run_dir_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    if isinstance(run, str):
+        try:
+            run_row = _get_run(run)
+        except sqlite3.Error:
+            run_row = None
+        if run_row is not None:
+            run_dir = run_row["run_dir"] if "run_dir" in run_row.keys() else None
+            if run_dir:
+                return Path(str(run_dir))
+        return RUNS_ROOT / run
     if isinstance(run, dict):
         run_dir = run.get("run_dir")
         run_id = run.get("id")
@@ -830,8 +854,12 @@ def _analysis_csv_path_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
         run_dir = run["run_dir"] if "run_dir" in run.keys() else None
         run_id = run["id"] if "id" in run.keys() else None
     if run_dir:
-        return Path(str(run_dir)) / "outputs" / "analysis.csv"
-    return RUNS_ROOT / str(run_id or "") / "outputs" / "analysis.csv"
+        return Path(str(run_dir))
+    return RUNS_ROOT / str(run_id or "")
+
+
+def _analysis_csv_path_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    return _outputs_dir_for_run(run) / "analysis.csv"
 
 
 def _backfill_smoothed_summary_fields(
@@ -956,20 +984,16 @@ def _refresh_plot_outputs_for_display(
     _schedule_postprocess(run_id, run=run, prepared=prepared, force_inline=force_inline)
 
 
-def _outputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
-    return _analysis_csv_path_for_run(run).parent
+def _outputs_dir_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    return _run_dir_for_run(run) / "outputs"
 
 
-def _inputs_dir_for_run(run: sqlite3.Row | dict[str, Any]) -> Path:
-    run_dir = run.get("run_dir") if isinstance(run, dict) else run["run_dir"]
-    return Path(str(run_dir)) / "inputs"
+def _inputs_dir_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
+    return _run_dir_for_run(run) / "inputs"
 
 
 def _summary_path_for_run(run: sqlite3.Row | dict[str, Any] | str) -> Path:
-    if isinstance(run, str):
-        return RUNS_ROOT / run / "outputs" / "summary.json"
-    run_dir = run.get("run_dir") if isinstance(run, dict) else run["run_dir"]
-    return Path(str(run_dir)) / "outputs" / "summary.json"
+    return _outputs_dir_for_run(run) / "summary.json"
 
 
 def _process_video_ready(outputs_dir: Path, prepared: dict[str, Any]) -> bool:
@@ -1178,7 +1202,7 @@ def _reconcile_stale_active_runs() -> dict[str, int]:
     )
     for run in _list_all_runs():
         run_id = run["id"]
-        summary = _load_summary(run_id)
+        summary = _load_summary(run)
         if run["status"] in ACTIVE_RUN_STATUSES:
             if _completed_result_outputs_exist(run, summary):
                 _update_run(run_id, _completed_run_values_from_summary(run, summary or {}))
@@ -1190,7 +1214,7 @@ def _reconcile_stale_active_runs() -> dict[str, int]:
             if refreshed is None:
                 continue
             run = refreshed
-            summary = _load_summary(run_id)
+            summary = _load_summary(run)
 
         if _asset_generation_active(summary):
             if _postprocess_in_flight(run_id):
@@ -1320,7 +1344,8 @@ def _run_postprocess_task(
             )
             return
 
-        prepared_summary = dict(prepared) if prepared is not None else _prepare_summary_for_display(run_payload, _load_summary(run_id))
+        loaded_summary = _load_summary(run_payload)
+        prepared_summary = dict(prepared) if prepared is not None else _prepare_summary_for_display(run_payload, loaded_summary)
         if prepared_summary is None:
             _update_summary_fields(
                 run_payload,
@@ -1351,10 +1376,14 @@ def _run_postprocess_task(
         if extraction_cfg is None:
             config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
             preset = run_payload["preset"]
+            summary_for_roi = prepared_summary
+            if isinstance(summary_for_roi, dict) and summary_for_roi.get("initial_roi_xyxy") is None:
+                summary_for_roi = loaded_summary
+            roi_xyxy = _postprocess_initial_roi_xyxy(run_payload, summary_for_roi)
             if preset in {"wire_like", "demo"}:
-                extraction_cfg = _build_wire_extraction_config(config, preset, roi_xyxy=_row_initial_roi_xyxy(run_payload))
+                extraction_cfg = _build_wire_extraction_config(config, preset, roi_xyxy=roi_xyxy)
             elif preset in {"braided_like", "braided_demo"}:
-                extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=_row_initial_roi_xyxy(run_payload))
+                extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=roi_xyxy)
             else:
                 _update_summary_fields(
                     run_payload,
@@ -1435,8 +1464,7 @@ def _generate_process_video_asset(
     outputs_dir = _outputs_dir_for_run(run)
     process_video_path = outputs_dir / PROCESS_VIDEO_FILENAME
     process_video_webm_path = outputs_dir / PROCESS_VIDEO_WEBM_FILENAME
-    run_id = run.get("id") if isinstance(run, dict) else run["id"]
-    summary = _load_summary(run_id) or {}
+    summary = _load_summary(run) or {}
     existing_name = str(summary.get("process_video_filename") or "").strip()
     if existing_name and (outputs_dir / existing_name).exists():
         return None
@@ -2307,7 +2335,7 @@ def _build_benchmark_page_data() -> dict[str, Any]:
 
 def _build_run_card(run: sqlite3.Row) -> dict[str, Any]:
     payload = dict(run)
-    summary = _prepare_summary_for_display(payload, _load_summary(payload["id"]), backfill_smoothed=False)
+    summary = _prepare_summary_for_display(payload, _load_summary(payload), backfill_smoothed=False)
     payload["summary"] = summary
     if summary is not None:
         payload["reportability_status"] = summary.get("reportability_status")
@@ -2337,6 +2365,7 @@ def _run_status_payload(run: sqlite3.Row | dict[str, Any], summary: dict[str, An
         "status_label": _run_status_label(run_payload["status"]),
         "asset_generation_status": summary_payload.get("asset_generation_status"),
         "asset_generation_error": summary_payload.get("asset_generation_error"),
+        "process_video_error": summary_payload.get("process_video_error"),
         "error_text": run_payload.get("error_text"),
         "refresh": refresh,
         "active": refresh,
@@ -2600,7 +2629,7 @@ def delete_run(request: Request, run_id: str) -> RedirectResponse:
     run = _get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")
-    availability = _delete_availability(run, _load_summary(run_id))
+    availability = _delete_availability(run, _load_summary(run))
     if not availability["can_delete"]:
         raise HTTPException(status_code=409, detail=availability["delete_block_reason"] or "run is still active")
     _delete_run_assets(run_id, Path(run["run_dir"]))
@@ -2613,7 +2642,7 @@ def run_status(run_id: str) -> dict[str, Any]:
     run_row = _get_run(run_id)
     if run_row is None:
         raise HTTPException(status_code=404, detail="run not found")
-    return _run_status_payload(run_row, _load_summary(run_id))
+    return _run_status_payload(run_row, _load_summary(run_row))
 
 
 @app.get("/runs/{run_id}")
@@ -2623,7 +2652,7 @@ def run_detail(request: Request, run_id: str) -> Any:
         raise HTTPException(status_code=404, detail="run not found")
     run = dict(run_row)
 
-    summary = _prepare_summary_for_display(run, _load_summary(run_id), backfill_smoothed=False)
+    summary = _prepare_summary_for_display(run, _load_summary(run), backfill_smoothed=False)
     temperature_available = bool(
         run.get("temperature_filename")
         or (summary and (summary.get("temperature_c_min") is not None or summary.get("temperature_c_max") is not None))
@@ -2633,7 +2662,7 @@ def run_detail(request: Request, run_id: str) -> Any:
     other_image_files = []
     video_files = []
     download_files = []
-    outputs_dir = RUNS_ROOT / run_id / "outputs"
+    outputs_dir = _outputs_dir_for_run(run)
     if outputs_dir.exists():
         for path in sorted(outputs_dir.iterdir()):
             rel = path.relative_to(DATA_ROOT).as_posix()
@@ -3814,8 +3843,8 @@ def _write_summary(path: Path, summary: dict[str, Any]) -> None:
     tmp_path.replace(path)
 
 
-def _load_summary(run_id: str) -> dict[str, Any] | None:
-    path = RUNS_ROOT / run_id / "outputs" / "summary.json"
+def _load_summary(run: sqlite3.Row | dict[str, Any] | str) -> dict[str, Any] | None:
+    path = _summary_path_for_run(run)
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
