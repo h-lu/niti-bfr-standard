@@ -119,6 +119,7 @@ def render_process_debug_video(
         for frame_idx, row in enumerate(series.itertuples(index=False)):
             target_frame = int(row.frame)
             frame_bgr, next_frame_pos = _read_frame_at(cap, target_frame, next_frame_pos)
+            cached_geom = _cached_geometry_for_frame(result, target_frame)
             try:
                 if object_kind == "braided_like":
                     assert isinstance(extraction, BraidedExtractionConfig)
@@ -128,11 +129,13 @@ def render_process_debug_video(
                         render_roi_xyxy = braided_tracking_state.roi_xyxy
                     else:
                         render_roi_xyxy = extraction.roi_xyxy
-                    geom = extract_braided_geometry(
-                        frame_bgr,
-                        extraction,
-                        tracking_state=None if fixed_braided_roi_mode else braided_tracking_state,
-                    )
+                    geom = cached_geom
+                    if geom is None:
+                        geom = extract_braided_geometry(
+                            frame_bgr,
+                            extraction,
+                            tracking_state=None if fixed_braided_roi_mode else braided_tracking_state,
+                        )
                     if fixed_braided_roi_mode:
                         braided_tracking_state = None
                     else:
@@ -150,7 +153,9 @@ def render_process_debug_video(
                     )
                 else:
                     assert isinstance(extraction, ExtractionConfig)
-                    geom = extract_geometry(frame_bgr, extraction)
+                    geom = cached_geom
+                    if geom is None:
+                        geom = extract_geometry(frame_bgr, extraction)
                     canvas = _render_wire_debug_frame(
                         frame_bgr=frame_bgr,
                         geom=geom,
@@ -175,6 +180,13 @@ def render_process_debug_video(
     if isinstance(writer, BrowserCompatibleWriter):
         return writer.output_path
     return output_path
+
+
+def _cached_geometry_for_frame(result: AnalysisResult, frame_number: int) -> Any | None:
+    frame_geometries = getattr(result, "frame_geometries", None)
+    if not isinstance(frame_geometries, dict):
+        return None
+    return frame_geometries.get(int(frame_number))
 
 
 def _open_browser_compatible_writer(
@@ -781,16 +793,41 @@ def _draw_unicode_texts(
 ) -> None:
     if not entries:
         return
-    image = Image.fromarray(cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB))
-    draw = ImageDraw.Draw(image)
+    boxes: list[tuple[int, int, int, int, str, tuple[int, int], int, tuple[int, int, int]]] = []
     for text, origin_xy, font_size, color_bgr in entries:
+        font = _load_font(font_size)
+        try:
+            left, top, right, bottom = font.getbbox(text)
+        except AttributeError:
+            width, height = font.getsize(text)
+            left, top, right, bottom = 0, 0, width, height
+        x, y = origin_xy
+        pad = 4
+        x0 = max(0, int(np.floor(x + left - pad)))
+        y0 = max(0, int(np.floor(y + top - pad)))
+        x1 = min(canvas.shape[1], int(np.ceil(x + right + pad)))
+        y1 = min(canvas.shape[0], int(np.ceil(y + bottom + pad)))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        boxes.append((x0, y0, x1, y1, text, origin_xy, font_size, color_bgr))
+    if not boxes:
+        return
+    roi_x0 = min(box[0] for box in boxes)
+    roi_y0 = min(box[1] for box in boxes)
+    roi_x1 = max(box[2] for box in boxes)
+    roi_y1 = max(box[3] for box in boxes)
+    roi = canvas[roi_y0:roi_y1, roi_x0:roi_x1]
+    image = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+    draw = ImageDraw.Draw(image)
+    for _, _, _, _, text, origin_xy, font_size, color_bgr in boxes:
+        shifted_origin = (int(origin_xy[0] - roi_x0), int(origin_xy[1] - roi_y0))
         draw.text(
-            origin_xy,
+            shifted_origin,
             text,
             font=_load_font(font_size),
             fill=(int(color_bgr[2]), int(color_bgr[1]), int(color_bgr[0])),
         )
-    canvas[:] = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
+    canvas[roi_y0:roi_y1, roi_x0:roi_x1] = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
 
 
 _FONT_CACHE: dict[int, ImageFont.ImageFont] = {}

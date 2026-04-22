@@ -668,6 +668,87 @@ class RealFrontendFlowTests(unittest.TestCase):
                 self.assertEqual(analyze_mock.call_args.kwargs["extraction"].roi_xyxy, (6, 7, 60, 70))
                 self.assertEqual(render_mock.call_args.kwargs["extraction"].roi_xyxy, (6, 7, 60, 70))
 
+    def test_execute_run_passes_retained_geometries_to_process_video_asset(self) -> None:
+        cases = [
+            (
+                "wire_like",
+                "analyze_video",
+                pd.DataFrame({"frame": [0], "time_sec": [0.0], "quality": [0.9]}),
+            ),
+            (
+                "braided_like",
+                "analyze_braided_video_quicklook",
+                pd.DataFrame({"frame": [0], "time_sec": [0.0], "quality": [0.9], "length_axis_px": [20.0]}),
+            ),
+        ]
+        for preset, analyzer_name, series in cases:
+            with self.subTest(preset=preset), TemporaryDirectory() as tmp:
+                with self._patched_storage(tmp):
+                    webapp._ensure_storage()
+                    run_id = f"run-cached-geometry-{preset}"
+                    run_dir = webapp.RUNS_ROOT / run_id
+                    inputs_dir = run_dir / "inputs"
+                    outputs_dir = run_dir / "outputs"
+                    inputs_dir.mkdir(parents=True, exist_ok=True)
+                    outputs_dir.mkdir(parents=True, exist_ok=True)
+                    (inputs_dir / "demo.mp4").write_bytes(b"fake-video")
+                    cached_geometries = {0: object()}
+
+                    webapp._insert_run(
+                        {
+                            "id": run_id,
+                            "created_at": webapp._utc_now(),
+                            "status": "queued",
+                            "run_name": "cached geometry",
+                            "preset": preset,
+                            "requested_mode": "quicklook",
+                            "frame_stride": 1,
+                            "direction_angle_deg": 15.0 if preset == "braided_like" else None,
+                            "direction_metric_enabled": 1 if preset == "braided_like" else 0,
+                            "initial_roi_xyxy": "[6,7,60,70]",
+                            "actual_mode": None,
+                            "formal_metric_label": None,
+                            "formal_gate_reason": None,
+                            "af95_c": None,
+                            "aftan_c": None,
+                            "original_frame_count": None,
+                            "analyzed_frame_count": None,
+                            "annotated_video_filename": None,
+                            "video_filename": "demo.mp4",
+                            "temperature_filename": None,
+                            "run_dir": str(run_dir),
+                            "error_text": None,
+                        }
+                    )
+                    fake_result = AnalysisResult(
+                        series=series,
+                        fit=None,
+                        af95_c=None,
+                        aftan_c=None,
+                        reportability_status="quicklook_only",
+                        route_results=[],
+                        input_fps=20.0,
+                        original_frame_count=1,
+                        analyzed_frame_count=1,
+                        frame_stride=1,
+                        frame_geometries=cached_geometries,
+                    )
+
+                    def fake_render(**kwargs):
+                        Path(kwargs["output_path"]).write_bytes(b"process")
+
+                    with (
+                        mock.patch.object(webapp, analyzer_name, return_value=fake_result) as analyze_mock,
+                        mock.patch.object(webapp, "compute_braided_acceptance", return_value={}),
+                        mock.patch.object(webapp, "render_process_debug_video", side_effect=fake_render) as render_mock,
+                        mock.patch.object(webapp, "_write_plots", autospec=True),
+                        mock.patch.object(webapp, "route_results_dataframe", return_value=pd.DataFrame()),
+                    ):
+                        webapp._execute_run(run_id)
+
+                    self.assertTrue(analyze_mock.call_args.kwargs["retain_frame_geometries"])
+                    self.assertIs(render_mock.call_args.kwargs["result"].frame_geometries, cached_geometries)
+
     def test_execute_braided_run_uses_persisted_initial_roi(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp):

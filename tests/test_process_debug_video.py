@@ -50,6 +50,107 @@ class _DummyWriter:
 
 
 class ProcessDebugVideoTests(unittest.TestCase):
+    def test_process_debug_renderer_reuses_cached_wire_geometry(self) -> None:
+        frame_shape = (12, 20, 3)
+        frames = [np.zeros(frame_shape, dtype=np.uint8) for _ in range(2)]
+        cached_geometries = {
+            0: SimpleNamespace(frame=0),
+            1: SimpleNamespace(frame=1),
+        }
+        result = AnalysisResult(
+            series=pd.DataFrame({"frame": [0, 1]}),
+            fit=None,
+            af95_c=None,
+            aftan_c=None,
+            frame_geometries=cached_geometries,
+        )
+        extraction = ExtractionConfig(roi_xyxy=(0, 0, 20, 12))
+        writer = _DummyWriter()
+        rendered_geometries: list[SimpleNamespace] = []
+
+        def fake_render(**kwargs):
+            rendered_geometries.append(kwargs["geom"])
+            return np.zeros((12, 20 + 420, 3), dtype=np.uint8)
+
+        with TemporaryDirectory() as tmp, mock.patch(
+            "niti_bfr.process_debug_video.cv2.VideoCapture",
+            return_value=_DummyCapture(frame_shape),
+        ), mock.patch(
+            "niti_bfr.process_debug_video._open_browser_compatible_writer",
+            return_value=writer,
+        ), mock.patch(
+            "niti_bfr.process_debug_video._read_frame_at",
+            side_effect=[(frames[0], 1), (frames[1], 2)],
+        ), mock.patch(
+            "niti_bfr.process_debug_video.extract_geometry",
+        ) as extract_mock, mock.patch(
+            "niti_bfr.process_debug_video._render_wire_debug_frame",
+            side_effect=fake_render,
+        ):
+            render_process_debug_video(
+                "dummy.mp4",
+                Path(tmp) / "process.mp4",
+                extraction=extraction,
+                result=result,
+                object_type="wire_like",
+            )
+
+        extract_mock.assert_not_called()
+        self.assertEqual(rendered_geometries, [cached_geometries[0], cached_geometries[1]])
+        self.assertEqual(len(writer.frames), 2)
+
+    def test_process_debug_renderer_reuses_cached_braided_geometry(self) -> None:
+        frame_shape = (12, 20, 3)
+        frames = [np.zeros(frame_shape, dtype=np.uint8) for _ in range(2)]
+        cached_geometries = {
+            0: SimpleNamespace(tracking_state=BraidedTrackingState((1, 1, 18, 10))),
+            1: SimpleNamespace(tracking_state=BraidedTrackingState((2, 2, 19, 11))),
+        }
+        result = AnalysisResult(
+            series=pd.DataFrame({"frame": [0, 1]}),
+            fit=None,
+            af95_c=None,
+            aftan_c=None,
+            frame_geometries=cached_geometries,
+        )
+        extraction = BraidedExtractionConfig(roi_xyxy=(0, 0, 20, 12))
+        writer = _DummyWriter()
+        rendered_geometries: list[SimpleNamespace] = []
+
+        def fake_render(**kwargs):
+            rendered_geometries.append(kwargs["geom"])
+            return np.zeros((12, 20 + 420, 3), dtype=np.uint8)
+
+        with TemporaryDirectory() as tmp, mock.patch(
+            "niti_bfr.process_debug_video.cv2.VideoCapture",
+            return_value=_DummyCapture(frame_shape),
+        ), mock.patch(
+            "niti_bfr.process_debug_video._open_browser_compatible_writer",
+            return_value=writer,
+        ), mock.patch(
+            "niti_bfr.process_debug_video._read_frame_at",
+            side_effect=[(frames[0], 1), (frames[1], 2)],
+        ), mock.patch(
+            "niti_bfr.process_debug_video.extract_braided_geometry",
+        ) as extract_mock, mock.patch(
+            "niti_bfr.process_debug_video._render_braided_debug_frame",
+            side_effect=fake_render,
+        ), mock.patch(
+            "niti_bfr.process_debug_video._next_braided_tracking_state",
+        ) as next_state_mock:
+            render_process_debug_video(
+                "dummy.mp4",
+                Path(tmp) / "process.mp4",
+                extraction=extraction,
+                result=result,
+                object_type="braided_like",
+            )
+
+        extract_mock.assert_not_called()
+        next_state_mock.assert_not_called()
+        self.assertEqual(rendered_geometries, [cached_geometries[0], cached_geometries[1]])
+        self.assertEqual(len(writer.frames), 2)
+
     def test_braided_renderer_reuses_geom_tracking_state(self) -> None:
         frame_shape = (12, 20, 3)
         frames = [np.zeros(frame_shape, dtype=np.uint8) for _ in range(2)]
@@ -322,6 +423,26 @@ class ProcessDebugVideoTests(unittest.TestCase):
             annotated_overview_video._make_wire_overlay(frame.copy(), row, [], extraction)
 
         self.assertIn(("B", "shape fit / 拟合主线", annotated_overview_video.ROUTE_COLORS["B"]), legend_entries)
+
+    def test_wire_annotated_overview_reuses_cached_geometry(self) -> None:
+        frame = np.zeros((24, 32, 3), dtype=np.uint8)
+        extraction = ExtractionConfig(roi_xyxy=(2, 3, 30, 22))
+        geom = SimpleNamespace(
+            contour_xy=np.array([[4, 4], [4, 20], [28, 20], [28, 4]], dtype=float),
+            fitted_curve_xy=np.array([[7, 5], [13, 9], [21, 12]], dtype=float),
+            route_a_anchor_xy=np.array([5, 5], dtype=float),
+            route_a_tip_xy=np.array([26, 18], dtype=float),
+            anchor_xy=np.array([6, 6], dtype=float),
+            tip_xy=np.array([24, 17], dtype=float),
+        )
+        row = SimpleNamespace(frame=0, time_sec=0.0)
+
+        with mock.patch.object(annotated_overview_video, "extract_geometry") as extract_mock, mock.patch.object(
+            annotated_overview_video, "_draw_legend_box"
+        ), mock.patch.object(annotated_overview_video, "_draw_header_badge"):
+            annotated_overview_video._make_wire_overlay(frame.copy(), row, [], extraction, geom)
+
+        extract_mock.assert_not_called()
 
 
 if __name__ == "__main__":

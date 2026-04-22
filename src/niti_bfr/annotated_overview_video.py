@@ -88,6 +88,7 @@ def render_annotated_overview_video(
         for analyzed_idx, row in enumerate(series.itertuples(index=False), start=1):
             frame_number = int(row.frame)
             frame_bgr, next_frame_pos = _read_frame_at(cap, frame_number, next_frame_pos)
+            cached_geom = _cached_geometry_for_frame(result, frame_number)
             overlay = _make_overlay_frame(
                 frame_bgr=frame_bgr,
                 row=row,
@@ -95,6 +96,7 @@ def render_annotated_overview_video(
                 analyzed_total=total_rows,
                 object_type=object_kind,
                 extraction=extraction,
+                cached_geom=cached_geom,
             )
             canvas = _compose_canvas(
                 overlay=overlay,
@@ -114,6 +116,13 @@ def render_annotated_overview_video(
         writer.release()
 
     return output_path
+
+
+def _cached_geometry_for_frame(result: AnalysisResult, frame_number: int) -> Any | None:
+    frame_geometries = getattr(result, "frame_geometries", None)
+    if not isinstance(frame_geometries, dict):
+        return None
+    return frame_geometries.get(int(frame_number))
 
 
 def _open_browser_compatible_writer(
@@ -272,6 +281,7 @@ def _make_overlay_frame(
     analyzed_total: int,
     object_type: ObjectType,
     extraction: ExtractionConfig | BraidedExtractionConfig,
+    cached_geom: Any | None = None,
 ) -> np.ndarray:
     overlay = frame_bgr.copy()
     header_lines = [
@@ -279,7 +289,11 @@ def _make_overlay_frame(
         f"frame {int(row.frame):04d} | analyzed {analyzed_idx}/{analyzed_total} | t={_format_float(_row_value(row, 'time_sec'), precision=2, suffix='s')}",
     ]
     if object_type == "wire_like":
+        if cached_geom is not None:
+            return _make_wire_overlay(overlay, row, header_lines, extraction, cached_geom)
         return _make_wire_overlay(overlay, row, header_lines, extraction)
+    if cached_geom is not None:
+        return _make_braided_overlay(overlay, row, header_lines, extraction, cached_geom)
     return _make_braided_overlay(overlay, row, header_lines, extraction)
 
 
@@ -288,12 +302,12 @@ def _make_wire_overlay(
     row: Any,
     header_lines: list[str],
     extraction: ExtractionConfig | BraidedExtractionConfig,
+    cached_geom: Any | None = None,
 ) -> np.ndarray:
     assert isinstance(extraction, ExtractionConfig)
-    source_frame = overlay.copy()
     x0, y0, x1, y1 = extraction.roi_xyxy
     try:
-        geom = extract_geometry(source_frame, extraction)
+        geom = cached_geom if cached_geom is not None else extract_geometry(overlay.copy(), extraction)
         contour = _points_as_polyline(geom.contour_xy)
         fitted_curve = _points_as_polyline(geom.fitted_curve_xy)
         if contour is not None:
@@ -331,12 +345,12 @@ def _make_braided_overlay(
     row: Any,
     header_lines: list[str],
     extraction: ExtractionConfig | BraidedExtractionConfig,
+    cached_geom: Any | None = None,
 ) -> np.ndarray:
     assert isinstance(extraction, BraidedExtractionConfig)
-    source_frame = overlay.copy()
     x0, y0, x1, y1 = extraction.roi_xyxy
     try:
-        geom = extract_braided_geometry(source_frame, extraction)
+        geom = cached_geom if cached_geom is not None else extract_braided_geometry(overlay.copy(), extraction)
         blended = _blend_mask_on_roi(overlay, geom.body_tube_mask, extraction.roi_xyxy, ROUTE_COLORS["C"], alpha=0.26)
         overlay[:, :] = blended
         contour = _points_as_polyline(geom.contour_xy)
