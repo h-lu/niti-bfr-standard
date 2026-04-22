@@ -9,6 +9,8 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 
+import niti_bfr.annotated_overview_video as annotated_overview_video
+import niti_bfr.process_debug_video as process_debug_video
 from niti_bfr.extract_braided import BraidedExtractionConfig, BraidedTrackingState
 from niti_bfr.extract import ExtractionConfig
 from niti_bfr.annotated_overview_video import render_annotated_overview_video
@@ -237,6 +239,89 @@ class ProcessDebugVideoTests(unittest.TestCase):
 
         self.assertEqual(seen_rois, [(3, 2, 17, 10), (3, 2, 17, 10)])
         self.assertEqual(len(writer.frames), 2)
+
+    def test_wire_debug_renderer_draws_route_b_as_fitted_curve(self) -> None:
+        frame = np.zeros((24, 32, 3), dtype=np.uint8)
+        extraction = ExtractionConfig(roi_xyxy=(2, 3, 30, 22))
+        geom = SimpleNamespace(
+            contour_xy=np.array([[4, 4], [4, 20], [28, 20], [28, 4]], dtype=float),
+            sampled_centerline_xy=np.array([[6, 6], [10, 10], [14, 14]], dtype=float),
+            fitted_curve_xy=np.array([[7, 5], [13, 9], [21, 12]], dtype=float),
+            route_a_anchor_xy=np.array([5, 5], dtype=float),
+            route_a_tip_xy=np.array([26, 18], dtype=float),
+            anchor_xy=np.array([6, 6], dtype=float),
+            tip_xy=np.array([24, 17], dtype=float),
+        )
+        row = SimpleNamespace(
+            frame=0,
+            time_sec=0.0,
+            temperature_c=20.0,
+            x_route_a_px=20.0,
+            x_route_a_recovery=0.1,
+            x_fit_px=19.0,
+            kappa_fit_px_inv=0.02,
+            x_route_c_px=18.0,
+            kappa_route_c_px_inv=0.01,
+            quality=0.9,
+            model_name="quadratic",
+        )
+        series = pd.DataFrame(
+            {
+                "frame": [0],
+                "x_route_a_recovery": [0.1],
+                "kappa_fit_recovery": [0.2],
+                "kappa_route_c_recovery": [0.3],
+            }
+        )
+        polyline_calls: list[np.ndarray] = []
+
+        def capture_polylines(_image, pts, *args, **kwargs):
+            polyline_calls.append(np.array(pts[0], copy=True))
+            return None
+
+        with mock.patch.object(process_debug_video.cv2, "polylines", side_effect=capture_polylines), mock.patch.object(
+            process_debug_video, "_make_canvas", side_effect=lambda overlay: overlay
+        ), mock.patch.object(process_debug_video, "_draw_text_block"), mock.patch.object(
+            process_debug_video, "_draw_trend_plot"
+        ):
+            process_debug_video._render_wire_debug_frame(
+                frame_bgr=frame,
+                geom=geom,
+                row=row,
+                series=series,
+                frame_idx=0,
+                extraction=extraction,
+            )
+
+        self.assertGreaterEqual(len(polyline_calls), 2)
+        np.testing.assert_array_equal(
+            polyline_calls[1],
+            np.round(geom.fitted_curve_xy).astype(np.int32).reshape(-1, 1, 2),
+        )
+
+    def test_wire_annotated_overview_labels_route_b_as_shape_fit(self) -> None:
+        frame = np.zeros((24, 32, 3), dtype=np.uint8)
+        extraction = ExtractionConfig(roi_xyxy=(2, 3, 30, 22))
+        geom = SimpleNamespace(
+            contour_xy=np.array([[4, 4], [4, 20], [28, 20], [28, 4]], dtype=float),
+            fitted_curve_xy=np.array([[7, 5], [13, 9], [21, 12]], dtype=float),
+            route_a_anchor_xy=np.array([5, 5], dtype=float),
+            route_a_tip_xy=np.array([26, 18], dtype=float),
+            anchor_xy=np.array([6, 6], dtype=float),
+            tip_xy=np.array([24, 17], dtype=float),
+        )
+        row = SimpleNamespace(frame=0, time_sec=0.0)
+        legend_entries: list[tuple[str, str, tuple[int, int, int]]] = []
+
+        def capture_legend(_overlay, entries):
+            legend_entries.extend(entries)
+
+        with mock.patch.object(annotated_overview_video, "extract_geometry", return_value=geom), mock.patch.object(
+            annotated_overview_video, "_draw_legend_box", side_effect=capture_legend
+        ), mock.patch.object(annotated_overview_video, "_draw_header_badge"):
+            annotated_overview_video._make_wire_overlay(frame.copy(), row, [], extraction)
+
+        self.assertIn(("B", "shape fit / 拟合主线", annotated_overview_video.ROUTE_COLORS["B"]), legend_entries)
 
 
 if __name__ == "__main__":
