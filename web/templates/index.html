@@ -229,6 +229,10 @@
         box-shadow: 0 0 0 10px rgba(182, 104, 55, 0.2);
       }
 
+      .direction-only.hidden {
+        display: none;
+      }
+
       .preview-meta {
         display: flex;
         flex-wrap: wrap;
@@ -507,23 +511,23 @@
                 </div>
               </div>
 
-              <div class="preview-panel" id="braided_preview_panel">
+              <div class="preview-panel" id="roi_preview_panel">
                 <div class="preview-head">
-                  <strong>编织对象 ROI 与方向确认</strong>
+                  <strong id="preview_title">手动固定 ROI</strong>
                   <p class="preview-hint" id="preview_hint">选中视频后，先在首帧拖出固定 ROI，再确认方向。</p>
                 </div>
-                <div class="preview-stage" id="preview_stage" tabindex="0" aria-label="编织对象 ROI 与方向确认">
+                <div class="preview-stage" id="preview_stage" tabindex="0" aria-label="手动固定 ROI">
                   <video id="preview_video" controls preload="metadata" muted playsinline></video>
                   <div class="preview-overlay">
                     <div class="preview-roi" id="preview_roi" aria-hidden="true"></div>
-                    <div class="preview-line" id="preview_line" aria-hidden="true"></div>
-                    <div class="preview-center" id="preview_center" title="拖动圆点对齐方向参考线"></div>
+                    <div class="preview-line direction-only" id="preview_line" aria-hidden="true"></div>
+                    <div class="preview-center direction-only" id="preview_center" title="拖动圆点对齐方向参考线"></div>
                   </div>
                 </div>
                 <div class="preview-meta">
                   <span class="preview-token" id="preview_roi_token">尚未选择固定 ROI</span>
-                  <span class="preview-token" id="preview_angle_token">方向角度：0°</span>
-                  <span class="preview-token" id="preview_confirm_token">尚未确认方向</span>
+                  <span class="preview-token direction-only" id="preview_angle_token">方向角度：0°</span>
+                  <span class="preview-token direction-only" id="preview_confirm_token">尚未确认方向</span>
                 </div>
               </div>
 
@@ -599,8 +603,9 @@
       const modeCopy = document.getElementById("mode_copy");
       const directionAngleInput = document.getElementById("direction_angle_deg");
       const initialRoiInput = document.getElementById("initial_roi_xyxy");
-      const previewPanel = document.getElementById("braided_preview_panel");
+      const previewPanel = document.getElementById("roi_preview_panel");
       const previewStage = document.getElementById("preview_stage");
+      const previewTitle = document.getElementById("preview_title");
       const previewVideo = document.getElementById("preview_video");
       const previewLine = document.getElementById("preview_line");
       const previewCenter = document.getElementById("preview_center");
@@ -627,6 +632,14 @@
         return presetSelect.value === "braided_like";
       }
 
+      function requiresRoiPreview() {
+        return presetSelect.value === "wire_like" || presetSelect.value === "braided_like";
+      }
+
+      function requiresDirectionConfirmation() {
+        return isBraidedPreset();
+      }
+
       function resetDirectionConfirmation() {
         directionConfirmed = false;
         directionAngleInput.value = "";
@@ -646,26 +659,35 @@
       }
 
       function updatePreviewHintText() {
+        const needsDirection = requiresDirectionConfirmation();
         if (!roiBox) {
           previewHint.textContent = "先在预览画面上拖出矩形，圈定所有帧共用的固定 ROI。";
-        } else if (!directionConfirmed) {
+        } else if (needsDirection && !directionConfirmed) {
           previewHint.textContent = "固定 ROI 已选择。拖动圆点对齐方向参考线，用左右方向键微调，按回车确认方向。";
-        } else {
+        } else if (needsDirection) {
           previewHint.textContent = "固定 ROI 和方向已确认。若重新拖 ROI，需再次确认方向；该 ROI 将用于所有帧。";
+        } else {
+          previewHint.textContent = "固定 ROI 已选择。该 ROI 将用于所有帧。";
         }
       }
 
       function updatePreviewLine() {
         const hasRoi = Boolean(roiBox);
+        const needsDirection = requiresDirectionConfirmation();
+        document.querySelectorAll(".direction-only").forEach((element) => {
+          element.classList.toggle("hidden", !needsDirection);
+        });
         previewLine.style.left = `${previewCenterX}%`;
         previewLine.style.top = `${previewCenterY}%`;
         previewLine.style.transform = `translate(-50%, -50%) rotate(${directionAngle}deg)`;
         previewCenter.style.left = `${previewCenterX}%`;
         previewCenter.style.top = `${previewCenterY}%`;
+        previewTitle.textContent = needsDirection ? "编织对象 ROI 与方向确认" : "细丝对象固定 ROI";
+        previewStage.setAttribute("aria-label", needsDirection ? "编织对象 ROI 与方向确认" : "细丝对象固定 ROI");
         previewAngleToken.textContent = `方向角度：${directionAngle}°`;
-        previewLine.classList.toggle("disabled", !hasRoi);
-        previewCenter.classList.toggle("disabled", !hasRoi);
-        previewCenter.setAttribute("aria-disabled", String(!hasRoi));
+        previewLine.classList.toggle("disabled", !hasRoi || !needsDirection);
+        previewCenter.classList.toggle("disabled", !hasRoi || !needsDirection);
+        previewCenter.setAttribute("aria-disabled", String(!hasRoi || !needsDirection));
         previewCenter.title = hasRoi ? "拖动圆点对齐方向参考线" : "先选择固定 ROI 后再确认方向";
         previewConfirmToken.textContent = directionConfirmed
           ? "方向已确认，按开始分析继续"
@@ -736,10 +758,11 @@
       }
 
       function updateSubmitState() {
-        const requiresBraidedSetup = isBraidedPreset();
         const hasVideo = Boolean(videoInput.files && videoInput.files.length > 0);
         const hasInitialRoi = Boolean(initialRoiInput.value);
-        const allowSubmit = !requiresBraidedSetup || !hasVideo || (directionConfirmed && hasInitialRoi);
+        const needsRoi = requiresRoiPreview();
+        const needsDirection = requiresDirectionConfirmation();
+        const allowSubmit = !needsRoi || !hasVideo || (hasInitialRoi && (!needsDirection || directionConfirmed));
         submitButton.disabled = !allowSubmit;
       }
 
@@ -761,7 +784,7 @@
       }
 
       function updatePreviewVisibility() {
-        const showPreview = isBraidedPreset() && Boolean(videoInput.files && videoInput.files.length > 0);
+        const showPreview = requiresRoiPreview() && Boolean(videoInput.files && videoInput.files.length > 0);
         previewPanel.classList.toggle("visible", showPreview);
         if (!showPreview) {
           clearPreviewSource();
@@ -860,7 +883,7 @@
 
       async function loadPreviewFromFile() {
         const file = videoInput.files && videoInput.files[0];
-        if (!isBraidedPreset() || !file) {
+        if (!requiresRoiPreview() || !file) {
           updatePreviewVisibility();
           return;
         }
@@ -920,17 +943,8 @@
           : "因为还没有上传温度表，结果页会先显示趋势、三种测量方式和回看视频。";
       }
 
-      function syncBraidedPreviewState() {
-        if (!isBraidedPreset()) {
-          previewRequestToken += 1;
-          resetDirectionConfirmation();
-          resetInitialRoi();
-          resetPreviewCenter();
-          updatePreviewVisibility();
-          updatePreviewLine();
-          return;
-        }
-        if (!videoInput.files || !videoInput.files.length) {
+      function syncPreviewState() {
+        if (!requiresRoiPreview() || !videoInput.files || !videoInput.files.length) {
           previewRequestToken += 1;
           resetDirectionConfirmation();
           resetInitialRoi();
@@ -961,7 +975,10 @@
         button.addEventListener("click", () => {
           presetSelect.value = button.dataset.preset;
           syncPresetButtons();
-          syncBraidedPreviewState();
+          resetDirectionConfirmation();
+          resetInitialRoi();
+          resetPreviewCenter();
+          syncPreviewState();
           updateSubmitState();
         });
       });
@@ -1019,7 +1036,7 @@
       previewCenter.addEventListener("pointerup", finishPreviewDrag);
       previewCenter.addEventListener("pointercancel", finishPreviewDrag);
       previewStage.addEventListener("pointerdown", (event) => {
-        if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+        if (!requiresRoiPreview() || !previewPanel.classList.contains("visible")) {
           return;
         }
         if (event.target === previewCenter) {

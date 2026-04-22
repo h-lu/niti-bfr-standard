@@ -1282,7 +1282,7 @@ def _run_postprocess_task(
             config = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
             preset = run_payload["preset"]
             if preset in {"wire_like", "demo"}:
-                extraction_cfg = _build_wire_extraction_config(config, preset)
+                extraction_cfg = _build_wire_extraction_config(config, preset, roi_xyxy=_row_initial_roi_xyxy(run_payload))
             elif preset in {"braided_like", "braided_demo"}:
                 extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=_row_initial_roi_xyxy(run_payload))
             else:
@@ -2361,15 +2361,19 @@ async def create_run(
     if parsed_frame_stride < 1:
         raise HTTPException(status_code=400, detail="frame_stride must be >= 1")
     parsed_initial_roi: tuple[int, int, int, int] | None = None
-    if preset == "braided_like":
+    if preset in {"wire_like", "braided_like"}:
         try:
             parsed_initial_roi = _parse_initial_roi_xyxy(initial_roi_xyxy)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if parsed_initial_roi is None:
-            raise HTTPException(status_code=400, detail="initial_roi_xyxy is required before direction confirmation for braided uploads")
+            if preset == "braided_like":
+                detail = "initial_roi_xyxy is required before direction confirmation for braided uploads"
+            else:
+                detail = "initial_roi_xyxy is required for wire_like uploads"
+            raise HTTPException(status_code=400, detail=detail)
     parsed_direction_angle: float | None = None
-    if direction_angle_deg.strip():
+    if preset == "braided_like" and direction_angle_deg.strip():
         try:
             parsed_direction_angle = float(direction_angle_deg)
         except ValueError as exc:
@@ -2738,7 +2742,7 @@ def _execute_run(run_id: str) -> None:
         frame_stride = int(run["frame_stride"]) if "frame_stride" in run.keys() and run["frame_stride"] is not None else 1
 
         if run["preset"] in {"wire_like", "demo"}:
-            extraction_cfg = _build_wire_extraction_config(config, run["preset"])
+            extraction_cfg = _build_wire_extraction_config(config, run["preset"], roi_xyxy=_row_initial_roi_xyxy(run))
             route_c = RouteCConfig(**config["analysis"].get("wire_like_extraction", {}).get("route_c", {}))
             result = analyze_video(
                 video_path,
@@ -3378,15 +3382,21 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         fig.savefig(out_dir / "braided_body_qc_vs_temperature.png", dpi=160)
         plt.close(fig)
 
-def _build_wire_extraction_config(config: dict[str, Any], preset: str) -> ExtractionConfig:
+def _build_wire_extraction_config(
+    config: dict[str, Any],
+    preset: str,
+    *,
+    roi_xyxy: tuple[int, int, int, int] | None = None,
+) -> ExtractionConfig:
     analysis = config["analysis"]
     raw = analysis.get("wire_like_extraction") if preset == "wire_like" else None
     if raw is None:
         raw = analysis.get("demo_extraction")
     if raw is None:
         raise RuntimeError("missing extraction preset")
+    resolved_roi_xyxy = tuple(int(value) for value in roi_xyxy) if roi_xyxy is not None else tuple(raw["roi_xyxy"])
     return ExtractionConfig(
-        roi_xyxy=tuple(raw["roi_xyxy"]),
+        roi_xyxy=resolved_roi_xyxy,
         blur_ksize=int(raw["blur_ksize"]),
         threshold_dark=int(raw["threshold_dark"]),
         open_kernel=int(raw["open_kernel"]),
