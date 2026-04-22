@@ -2750,6 +2750,7 @@ def _execute_run(run_id: str) -> None:
                 temperature_csv=temperature_path,
                 route_c=route_c,
                 frame_stride=frame_stride,
+                retain_frame_geometries=True,
             )
         elif run["preset"] in {"braided_like", "braided_demo"}:
             extraction_cfg = _build_braided_extraction_config(config, roi_xyxy=_row_initial_roi_xyxy(run))
@@ -2764,6 +2765,7 @@ def _execute_run(run_id: str) -> None:
                     if "direction_angle_deg" in run.keys() and run["direction_angle_deg"] is not None
                     else None
                 ),
+                retain_frame_geometries=True,
             )
         else:
             raise RuntimeError(f"unsupported preset: {run['preset']}")

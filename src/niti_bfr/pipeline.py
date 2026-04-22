@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import cv2
@@ -113,6 +114,71 @@ class AnalysisResult:
     original_frame_count: int | None = None
     analyzed_frame_count: int | None = None
     frame_stride: int = 1
+    frame_geometries: dict[int, Any] | None = field(default=None, repr=False)
+
+
+_FRAME_GEOMETRY_CACHE_MAX_BYTES = 128 * 1024 * 1024
+_WIRE_DEBUG_GEOMETRY_FIELDS = (
+    "contour_xy",
+    "fitted_curve_xy",
+    "route_a_anchor_xy",
+    "route_a_tip_xy",
+    "anchor_xy",
+    "tip_xy",
+)
+_BRAIDED_DEBUG_GEOMETRY_FIELDS = (
+    "source_roi_xyxy",
+    "body_tube_mask",
+    "contour_xy",
+    "body_contour_xy",
+    "sampled_centerline_xy",
+    "sampled_width_segments_xy",
+    "anchor_xy",
+    "tip_xy",
+    "tracking_state",
+)
+
+
+def _debug_geometry_snapshot(geom: Any, *, object_type: str) -> Any:
+    fields = _BRAIDED_DEBUG_GEOMETRY_FIELDS if object_type == "braided_like" else _WIRE_DEBUG_GEOMETRY_FIELDS
+    return SimpleNamespace(**{field: getattr(geom, field) for field in fields if hasattr(geom, field)})
+
+
+def _estimated_geometry_cache_bytes(geom: Any) -> int:
+    seen: set[int] = set()
+
+    def _array_bytes(value: Any) -> int:
+        value_id = id(value)
+        if value_id in seen:
+            return 0
+        seen.add(value_id)
+        if isinstance(value, np.ndarray):
+            return int(value.nbytes)
+        if isinstance(value, (list, tuple)):
+            return sum(_array_bytes(item) for item in value)
+        if isinstance(value, dict):
+            return sum(_array_bytes(item) for pair in value.items() for item in pair)
+        if hasattr(value, "__dict__"):
+            return sum(_array_bytes(item) for item in vars(value).values())
+        return 0
+
+    return max(_array_bytes(geom), 1)
+
+
+def _maybe_cache_frame_geometry(
+    cache: dict[int, Any] | None,
+    *,
+    frame_idx: int,
+    geom: Any,
+    cached_bytes: int,
+) -> int:
+    if cache is None:
+        return cached_bytes
+    estimated_bytes = _estimated_geometry_cache_bytes(geom)
+    if cached_bytes + estimated_bytes > _FRAME_GEOMETRY_CACHE_MAX_BYTES:
+        return cached_bytes
+    cache[int(frame_idx)] = geom
+    return cached_bytes + estimated_bytes
 
 
 def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvaluation]:
@@ -1613,6 +1679,7 @@ def analyze_video(
     temperature_time_offset_sec: float = 0.0,
     route_c: RouteCConfig | None = None,
     frame_stride: int = 1,
+    retain_frame_geometries: bool = False,
 ) -> AnalysisResult:
     frame_stride = max(int(frame_stride), 1)
     cap = cv2.VideoCapture(str(video_path))
@@ -1621,6 +1688,8 @@ def analyze_video(
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
     rows: list[dict[str, float]] = []
+    frame_geometries: dict[int, Any] | None = {} if retain_frame_geometries else None
+    frame_geometries_bytes = 0
     frame_idx = 0
     while True:
         ok, frame = cap.read()
@@ -1644,6 +1713,12 @@ def analyze_video(
             quadratic_rmse_px = geom.quadratic_rmse_px
             circle_rmse_px = geom.circle_rmse_px
             model_name = geom.model_name
+            frame_geometries_bytes = _maybe_cache_frame_geometry(
+                frame_geometries,
+                frame_idx=frame_idx,
+                geom=_debug_geometry_snapshot(geom, object_type="wire_like"),
+                cached_bytes=frame_geometries_bytes,
+            )
         except RuntimeError:
             route_a_anchor = np.array([np.nan, np.nan])
             route_a_tip = np.array([np.nan, np.nan])
@@ -1791,6 +1866,7 @@ def analyze_video(
         original_frame_count=frame_idx,
         analyzed_frame_count=len(series),
         frame_stride=frame_stride,
+        frame_geometries=frame_geometries,
     )
 
 
@@ -1802,6 +1878,7 @@ def analyze_braided_video_quicklook(
     acceptance_profile: str = "real_video",
     frame_stride: int = 1,
     direction_angle_deg: float | None = None,
+    retain_frame_geometries: bool = False,
 ) -> AnalysisResult:
     frame_stride = max(int(frame_stride), 1)
     cap = cv2.VideoCapture(str(video_path))
@@ -1811,6 +1888,8 @@ def analyze_braided_video_quicklook(
     fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
     direction_enabled = direction_angle_deg is not None
     rows: list[dict[str, float]] = []
+    frame_geometries: dict[int, Any] | None = {} if retain_frame_geometries else None
+    frame_geometries_bytes = 0
     frame_idx = 0
     braided_tracking_state: BraidedTrackingState | None = None
     fixed_roi_mode = extraction.initial_roi_xyxy is not None
@@ -1893,6 +1972,12 @@ def analyze_braided_video_quicklook(
                     else np.nan
                 ),
             }
+            frame_geometries_bytes = _maybe_cache_frame_geometry(
+                frame_geometries,
+                frame_idx=frame_idx,
+                geom=_debug_geometry_snapshot(geom, object_type="braided_like"),
+                cached_bytes=frame_geometries_bytes,
+            )
         except RuntimeError:
             if not fixed_roi_mode:
                 braided_tracking_state = None
@@ -2102,6 +2187,7 @@ def analyze_braided_video_quicklook(
         original_frame_count=frame_idx,
         analyzed_frame_count=len(series),
         frame_stride=frame_stride,
+        frame_geometries=frame_geometries,
     )
 
 
