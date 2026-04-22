@@ -1813,6 +1813,7 @@ def analyze_braided_video_quicklook(
     rows: list[dict[str, float]] = []
     frame_idx = 0
     braided_tracking_state: BraidedTrackingState | None = None
+    fixed_roi_mode = extraction.initial_roi_xyxy is not None
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -1821,10 +1822,17 @@ def analyze_braided_video_quicklook(
             frame_idx += 1
             continue
         try:
-            geom = extract_braided_geometry(frame, extraction, tracking_state=braided_tracking_state)
-            braided_tracking_state = getattr(geom, "tracking_state", None)
-            if braided_tracking_state is None:
-                braided_tracking_state = _next_braided_tracking_state(frame.shape, extraction, geom)
+            geom = extract_braided_geometry(
+                frame,
+                extraction,
+                tracking_state=None if fixed_roi_mode else braided_tracking_state,
+            )
+            if fixed_roi_mode:
+                braided_tracking_state = None
+            else:
+                braided_tracking_state = getattr(geom, "tracking_state", None)
+                if braided_tracking_state is None:
+                    braided_tracking_state = _next_braided_tracking_state(frame.shape, extraction, geom)
             row = {
                 "frame": frame_idx,
                 "time_sec": frame_idx / fps,
@@ -1886,7 +1894,8 @@ def analyze_braided_video_quicklook(
                 ),
             }
         except RuntimeError:
-            braided_tracking_state = None
+            if not fixed_roi_mode:
+                braided_tracking_state = None
             row = {
                 "frame": frame_idx,
                 "time_sec": frame_idx / fps,

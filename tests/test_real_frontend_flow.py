@@ -116,8 +116,9 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertNotIn("分析模式", text)
         self.assertIn("开始分析", text)
         self.assertIn("编织对象 ROI 与方向确认", text)
-        self.assertIn("先选首帧 ROI，再确认方向", text)
-        self.assertLess(text.index("尚未选择初始 ROI"), text.index("方向角度：0°"))
+        self.assertIn("先选固定 ROI，再确认方向", text)
+        self.assertIn("该 ROI 将用于所有帧", text)
+        self.assertLess(text.index("尚未选择固定 ROI"), text.index("方向角度：0°"))
         self.assertIn('name="initial_roi_xyxy"', text)
         self.assertIn("preview_roi", text)
 

@@ -110,6 +110,11 @@ def render_process_debug_video(
 
     next_frame_pos: int | None = None
     braided_tracking_state: BraidedTrackingState | None = None
+    fixed_braided_roi_mode = (
+        object_kind == "braided_like"
+        and isinstance(extraction, BraidedExtractionConfig)
+        and extraction.initial_roi_xyxy is not None
+    )
     try:
         for frame_idx, row in enumerate(series.itertuples(index=False)):
             target_frame = int(row.frame)
@@ -117,13 +122,23 @@ def render_process_debug_video(
             try:
                 if object_kind == "braided_like":
                     assert isinstance(extraction, BraidedExtractionConfig)
-                    render_roi_xyxy = (
-                        braided_tracking_state.roi_xyxy if braided_tracking_state is not None else extraction.roi_xyxy
+                    if fixed_braided_roi_mode and extraction.initial_roi_xyxy is not None:
+                        render_roi_xyxy = extraction.initial_roi_xyxy
+                    elif braided_tracking_state is not None:
+                        render_roi_xyxy = braided_tracking_state.roi_xyxy
+                    else:
+                        render_roi_xyxy = extraction.roi_xyxy
+                    geom = extract_braided_geometry(
+                        frame_bgr,
+                        extraction,
+                        tracking_state=None if fixed_braided_roi_mode else braided_tracking_state,
                     )
-                    geom = extract_braided_geometry(frame_bgr, extraction, tracking_state=braided_tracking_state)
-                    braided_tracking_state = getattr(geom, "tracking_state", None)
-                    if braided_tracking_state is None:
-                        braided_tracking_state = _next_braided_tracking_state(frame_bgr.shape, extraction, geom)
+                    if fixed_braided_roi_mode:
+                        braided_tracking_state = None
+                    else:
+                        braided_tracking_state = getattr(geom, "tracking_state", None)
+                        if braided_tracking_state is None:
+                            braided_tracking_state = _next_braided_tracking_state(frame_bgr.shape, extraction, geom)
                     canvas = _render_braided_debug_frame(
                         frame_bgr=frame_bgr,
                         geom=geom,
@@ -145,7 +160,7 @@ def render_process_debug_video(
                         extraction=extraction,
                     )
             except Exception as exc:  # noqa: BLE001
-                if object_kind == "braided_like":
+                if object_kind == "braided_like" and not fixed_braided_roi_mode:
                     braided_tracking_state = None
                 canvas = _render_error_canvas(
                     frame_bgr=frame_bgr,
