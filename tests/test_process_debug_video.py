@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 
 from niti_bfr.extract_braided import BraidedExtractionConfig, BraidedTrackingState
+from niti_bfr.extract import ExtractionConfig
+from niti_bfr.annotated_overview_video import render_annotated_overview_video
 from niti_bfr.pipeline import AnalysisResult
 from niti_bfr.process_debug_video import render_process_debug_video
 
@@ -192,6 +194,48 @@ class ProcessDebugVideoTests(unittest.TestCase):
         self.assertEqual(seen_tracking_states, [None, None])
         self.assertEqual(rendered_rois, [initial_roi, initial_roi])
         next_state_mock.assert_not_called()
+        self.assertEqual(len(writer.frames), 2)
+
+    def test_wire_annotated_overview_uses_extraction_roi(self) -> None:
+        frame_shape = (12, 20, 3)
+        frames = [np.zeros(frame_shape, dtype=np.uint8) for _ in range(2)]
+        result = AnalysisResult(
+            series=pd.DataFrame({"frame": [0, 1], "quality": [0.9, 0.9]}),
+            fit=None,
+            af95_c=None,
+            aftan_c=None,
+            route_results=[],
+        )
+        extraction = ExtractionConfig(roi_xyxy=(3, 2, 17, 10))
+        writer = _DummyWriter()
+        seen_rois: list[tuple[int, int, int, int]] = []
+
+        def fake_wire_overlay(overlay, _row, _header_lines, extraction_arg):
+            seen_rois.append(extraction_arg.roi_xyxy)
+            return overlay
+
+        with TemporaryDirectory() as tmp, mock.patch(
+            "niti_bfr.annotated_overview_video.cv2.VideoCapture",
+            return_value=_DummyCapture(frame_shape),
+        ), mock.patch(
+            "niti_bfr.annotated_overview_video._open_browser_compatible_writer",
+            return_value=writer,
+        ), mock.patch(
+            "niti_bfr.annotated_overview_video._read_frame_at",
+            side_effect=[(frames[0], 1), (frames[1], 2)],
+        ), mock.patch(
+            "niti_bfr.annotated_overview_video._make_wire_overlay",
+            side_effect=fake_wire_overlay,
+        ):
+            render_annotated_overview_video(
+                "dummy.mp4",
+                Path(tmp) / "overview.mp4",
+                extraction=extraction,
+                result=result,
+                object_type="wire_like",
+            )
+
+        self.assertEqual(seen_rois, [(3, 2, 17, 10), (3, 2, 17, 10)])
         self.assertEqual(len(writer.frames), 2)
 
 
