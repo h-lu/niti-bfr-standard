@@ -470,7 +470,7 @@
                 </button>
                 <button class="choice" data-preset="braided_like" type="button">
                   <strong>编织对象</strong>
-                  <span>适合编织类主体，先选首帧 ROI，再确认方向。</span>
+                  <span>适合编织类主体，先选固定 ROI，再确认方向。</span>
                 </button>
               </div>
 
@@ -510,7 +510,7 @@
               <div class="preview-panel" id="braided_preview_panel">
                 <div class="preview-head">
                   <strong>编织对象 ROI 与方向确认</strong>
-                  <p class="preview-hint" id="preview_hint">选中视频后，先在首帧拖出初始 ROI，再确认方向。</p>
+                  <p class="preview-hint" id="preview_hint">选中视频后，先在首帧拖出固定 ROI，再确认方向。</p>
                 </div>
                 <div class="preview-stage" id="preview_stage" tabindex="0" aria-label="编织对象 ROI 与方向确认">
                   <video id="preview_video" controls preload="metadata" muted playsinline></video>
@@ -521,7 +521,7 @@
                   </div>
                 </div>
                 <div class="preview-meta">
-                  <span class="preview-token" id="preview_roi_token">尚未选择初始 ROI</span>
+                  <span class="preview-token" id="preview_roi_token">尚未选择固定 ROI</span>
                   <span class="preview-token" id="preview_angle_token">方向角度：0°</span>
                   <span class="preview-token" id="preview_confirm_token">尚未确认方向</span>
                 </div>
@@ -647,11 +647,11 @@
 
       function updatePreviewHintText() {
         if (!roiBox) {
-          previewHint.textContent = "先在预览画面上拖出矩形，圈定首帧编织主体的初始 ROI。";
+          previewHint.textContent = "先在预览画面上拖出矩形，圈定所有帧共用的固定 ROI。";
         } else if (!directionConfirmed) {
-          previewHint.textContent = "初始 ROI 已选择。拖动圆点对齐方向参考线，用左右方向键微调，按回车确认方向。";
+          previewHint.textContent = "固定 ROI 已选择。拖动圆点对齐方向参考线，用左右方向键微调，按回车确认方向。";
         } else {
-          previewHint.textContent = "初始 ROI 和方向已确认。若重新拖 ROI，需再次确认方向；ROI 只用于初始定位，后续帧继续跟踪。";
+          previewHint.textContent = "固定 ROI 和方向已确认。若重新拖 ROI，需再次确认方向；该 ROI 将用于所有帧。";
         }
       }
 
@@ -666,10 +666,10 @@
         previewLine.classList.toggle("disabled", !hasRoi);
         previewCenter.classList.toggle("disabled", !hasRoi);
         previewCenter.setAttribute("aria-disabled", String(!hasRoi));
-        previewCenter.title = hasRoi ? "拖动圆点对齐方向参考线" : "先选择初始 ROI 后再确认方向";
+        previewCenter.title = hasRoi ? "拖动圆点对齐方向参考线" : "先选择固定 ROI 后再确认方向";
         previewConfirmToken.textContent = directionConfirmed
           ? "方向已确认，按开始分析继续"
-          : (hasRoi ? "尚未确认方向" : "选择 ROI 后再确认方向");
+          : (hasRoi ? "尚未确认方向" : "选择固定 ROI 后再确认方向");
         previewConfirmToken.classList.toggle("ready", directionConfirmed);
         updatePreviewHintText();
       }
@@ -717,7 +717,7 @@
             previewRoi.style.height = `${height}px`;
           }
         }
-        previewRoiToken.textContent = hasRoi ? "初始 ROI 已选择" : "尚未选择初始 ROI";
+        previewRoiToken.textContent = hasRoi ? "固定 ROI 已选择" : "尚未选择固定 ROI";
         previewRoiToken.classList.toggle("ready", hasRoi);
         updatePreviewLine();
         updatePreviewHintText();

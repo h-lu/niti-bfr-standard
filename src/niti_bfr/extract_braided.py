@@ -2005,15 +2005,18 @@ def _extract_braided_geometry_once(
         max_segments=int(config.qc_max_segments),
     )
 
-    tracking_state = BraidedTrackingState(
-        roi_xyxy=_tracking_roi_from_mask(
-            source_component,
-            roi_offset_xy,
-            image_shape=frame_bgr.shape,
-            search_bounds_xyxy=config.roi_xyxy,
-            min_component_area=int(config.min_component_area),
+    if config.initial_roi_xyxy is not None:
+        tracking_state = BraidedTrackingState(roi_xyxy=tuple(int(v) for v in roi_xyxy))
+    else:
+        tracking_state = BraidedTrackingState(
+            roi_xyxy=_tracking_roi_from_mask(
+                source_component,
+                roi_offset_xy,
+                image_shape=frame_bgr.shape,
+                search_bounds_xyxy=config.roi_xyxy,
+                min_component_area=int(config.min_component_area),
+            )
         )
-    )
 
     return BraidedExtractionResult(
         source_roi_xyxy=tuple(int(v) for v in roi_xyxy),
@@ -2086,16 +2089,19 @@ def extract_braided_geometry(
     config: BraidedExtractionConfig,
     tracking_state: BraidedTrackingState | None = None,
 ) -> BraidedExtractionResult:
+    if config.initial_roi_xyxy is not None:
+        fixed_roi = _normalize_roi_xyxy(config.initial_roi_xyxy, frame_bgr.shape)
+        result = _extract_braided_geometry_once(frame_bgr, config, roi_xyxy=fixed_roi)
+        result.tracking_state = BraidedTrackingState(fixed_roi)
+        return result
+
     roi_candidates: list[tuple[int, int, int, int]] = []
-    if tracking_state is None and config.initial_roi_xyxy is not None:
-        roi_candidates.append(_normalize_roi_xyxy(config.initial_roi_xyxy, frame_bgr.shape))
-    elif tracking_state is not None:
+    if tracking_state is not None:
         tracked_roi = _normalize_roi_xyxy(tracking_state.roi_xyxy, frame_bgr.shape)
         base_roi = _normalize_roi_xyxy(config.roi_xyxy, frame_bgr.shape)
         if tracked_roi != base_roi:
             roi_candidates.append(tracked_roi)
-    if tracking_state is not None or config.initial_roi_xyxy is None:
-        roi_candidates.append(_normalize_roi_xyxy(config.roi_xyxy, frame_bgr.shape))
+    roi_candidates.append(_normalize_roi_xyxy(config.roi_xyxy, frame_bgr.shape))
 
     last_error: RuntimeError | None = None
     successes: list[BraidedExtractionResult] = []

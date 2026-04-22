@@ -141,6 +141,59 @@ class ProcessDebugVideoTests(unittest.TestCase):
         self.assertEqual(next_state_mock.call_count, 2)
         self.assertEqual(len(writer.frames), 2)
 
+    def test_braided_renderer_uses_fixed_initial_roi_without_tracking_updates(self) -> None:
+        frame_shape = (12, 20, 3)
+        frames = [np.zeros(frame_shape, dtype=np.uint8) for _ in range(2)]
+        result = AnalysisResult(
+            series=pd.DataFrame({"frame": [0, 1]}),
+            fit=None,
+            af95_c=None,
+            aftan_c=None,
+        )
+        initial_roi = (3, 1, 17, 11)
+        extraction = BraidedExtractionConfig(roi_xyxy=(0, 0, 20, 12), initial_roi_xyxy=initial_roi)
+        writer = _DummyWriter()
+        seen_tracking_states: list[BraidedTrackingState | None] = []
+        rendered_rois: list[tuple[int, int, int, int]] = []
+
+        def fake_extract(_frame_bgr, _extraction, tracking_state=None):
+            seen_tracking_states.append(tracking_state)
+            return SimpleNamespace(tracking_state=BraidedTrackingState((1, 1, 19, 11)))
+
+        def fake_render(**kwargs):
+            rendered_rois.append(kwargs["roi_xyxy"])
+            return np.zeros((12, 20 + 420, 3), dtype=np.uint8)
+
+        with TemporaryDirectory() as tmp, mock.patch(
+            "niti_bfr.process_debug_video.cv2.VideoCapture",
+            return_value=_DummyCapture(frame_shape),
+        ), mock.patch(
+            "niti_bfr.process_debug_video._open_browser_compatible_writer",
+            return_value=writer,
+        ), mock.patch(
+            "niti_bfr.process_debug_video._read_frame_at",
+            side_effect=[(frames[0], 1), (frames[1], 2)],
+        ), mock.patch(
+            "niti_bfr.process_debug_video.extract_braided_geometry",
+            side_effect=fake_extract,
+        ), mock.patch(
+            "niti_bfr.process_debug_video._render_braided_debug_frame",
+            side_effect=fake_render,
+        ), mock.patch(
+            "niti_bfr.process_debug_video._next_braided_tracking_state",
+        ) as next_state_mock:
+            render_process_debug_video(
+                "dummy.mp4",
+                Path(tmp) / "process.mp4",
+                extraction=extraction,
+                result=result,
+            )
+
+        self.assertEqual(seen_tracking_states, [None, None])
+        self.assertEqual(rendered_rois, [initial_roi, initial_roi])
+        next_state_mock.assert_not_called()
+        self.assertEqual(len(writer.frames), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
