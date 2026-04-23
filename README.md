@@ -150,6 +150,13 @@
 - 路线 B: 已实现，提取主骨架路径计算 `x_fit(T)`，并对主弯段拟合得到 `kappa_fit(T)`
 - 路线 C: 已实现最小版，在路线 B 基础上加入弱端点约束和时间连续性，输出 `x_route_c(T)` 与 `kappa_route_c(T)`
 
+此外，`wire_like` 前端上传时会要求用户在固定 ROI 后确认一个方向角。该方向角会额外生成两种方向法结果:
+
+- `direction_centerline_span`: 中心线投影跨度，来自采样中心线点沿用户方向的投影范围
+- `direction_mask_span`: 轮廓/掩膜投影跨度，来自分割掩膜沿用户方向的投影范围
+
+这两种方向法会写入 `analysis.csv`、`summary.json` 的 `direction_results`，并在结果页“方向法”区域与 A / B / C 分开展示。它们是人工方向确认后的辅助对照量，不是新的 A / B / C 路线。
+
 它们在方法学上的定位是:
 
 - 路线 A: `standard-aligned displacement baseline`
@@ -254,6 +261,19 @@ python3 -m uvicorn niti_bfr.webapp:app --host 0.0.0.0 --port 8000
 启动后可在浏览器中打开:
 
 - <http://127.0.0.1:8000/>
+
+前端上传流程当前是:
+
+1. 选择对象类型: `wire_like` / `braided_like`
+2. 选择视频文件，浏览器会打开首帧预览
+3. 在预览画面上手动拖出固定 ROI
+4. 拖动方向参考线，并点击“确认方向”
+5. 可选上传温度 CSV；未上传时只做 `quicklook`，上传后尝试 `formal Af`
+6. 点击“开始分析”
+
+当前 `wire_like` 与 `braided_like` 上传都必须先有固定 ROI，再有方向确认；后端也会校验 `initial_roi_xyxy` 与 `direction_angle_deg`。其中 `wire_like` 的默认方向角是 `90°`，也就是预览里的竖直方向；`braided_like` 默认方向角是 `0°`。方向法是用户确认方向后的补充投影量，不替代 A / B / C 三条路线。
+
+前端的首页最近任务、历史记录和结果页提交时间统一按 `Asia/Shanghai` 显示；数据库里仍保存 UTC 时间。
 
 运行最小演示:
 
@@ -397,6 +417,22 @@ python3 scripts/analyze_braided_like.py \
 - 其中 `B` 路线固定指向 braided 的宽度/直径视角; 当前实现键为 strict body-only `diameter_max(T)`，并保留为对象级 formal candidate
 - `area_proj(T)` 当前稳定输出 route-level result, 承担 provisional / formal_blocked 对照与方法学验证角色
 - 同时继续导出最大直径、左右收口定位和 QC 叠加帧
+
+当前 web 上传的 `braided_like` 也要求用户先框选固定 ROI，再确认方向角。该方向角会额外计算:
+
+- `direction_span`: braided `body_tube_mask` 沿用户方向的投影跨度
+
+如果有温度 CSV，`direction_span` 会生成自己的恢复曲线、`Af-95`、`Af-tan`、status 与 gate reason；没有温度时保留为 quicklook 方向曲线。它同样是方向法辅助结果，不替代 braided `A:length_axis`、`B:diameter_max`、`C:area_proj`。
+
+结果页和派生文件当前会为方向法输出:
+
+- 分析过程视频 `analysis_process.mp4` 或 `analysis_process.webm`
+- 总览方向曲线 `direction_metric_over_time.png`
+- 有温度时的总览方向恢复曲线 `direction_recovery_vs_temperature.png`
+- wire 专属的 `direction_centerline_*` 与 `direction_mask_*` 方法曲线
+- braided 的 `direction_span` 曲线与过程视频中的方向参考线 / 投影跨度叠加
+
+过程视频中，wire 会同时叠加方向参考线、中心线投影跨度和轮廓/掩膜投影跨度；braided 会叠加方向参考线和 body-only 主体投影跨度。侧栏也会显示方向法当前帧数值，并绘制方向法随时间变化的小曲线。
 
 当前 web / JSON / summary 的阅读口径建议固定为:
 
