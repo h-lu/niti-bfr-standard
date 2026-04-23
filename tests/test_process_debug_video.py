@@ -460,6 +460,140 @@ class ProcessDebugVideoTests(unittest.TestCase):
         self.assertIn(process_debug_video.DIRECTION_CENTERLINE_COLOR, line_colors)
         self.assertIn(process_debug_video.DIRECTION_CONTOUR_COLOR, line_colors)
 
+    def test_wire_debug_renderer_adds_direction_metric_plot(self) -> None:
+        frame = np.zeros((24, 32, 3), dtype=np.uint8)
+        extraction = ExtractionConfig(roi_xyxy=(2, 3, 30, 22))
+        geom = SimpleNamespace(
+            contour_xy=np.array([[4, 6], [4, 18], [28, 18], [28, 6]], dtype=float),
+            sampled_centerline_xy=np.array([[6, 12], [26, 12]], dtype=float),
+            fitted_curve_xy=np.array([[7, 5], [13, 9], [21, 12]], dtype=float),
+            route_a_anchor_xy=np.array([5, 5], dtype=float),
+            route_a_tip_xy=np.array([26, 18], dtype=float),
+            anchor_xy=np.array([6, 6], dtype=float),
+            tip_xy=np.array([24, 17], dtype=float),
+        )
+        row = SimpleNamespace(
+            frame=1,
+            time_sec=1.0,
+            temperature_c=20.0,
+            direction_angle_deg=90.0,
+            x_route_a_px=20.0,
+            x_route_a_recovery=0.1,
+            x_fit_px=19.0,
+            kappa_fit_px_inv=0.02,
+            x_route_c_px=18.0,
+            kappa_route_c_px_inv=0.01,
+            direction_centerline_span_px=20.0,
+            direction_mask_span_px=24.0,
+            quality=0.9,
+            model_name="quadratic",
+        )
+        series = pd.DataFrame(
+            {
+                "frame": [0, 1, 2],
+                "x_route_a_recovery": [0.1, 0.2, 0.3],
+                "kappa_fit_recovery": [0.2, 0.3, 0.4],
+                "kappa_route_c_recovery": [0.3, 0.4, 0.5],
+                "direction_centerline_span_px": [18.0, 20.0, 22.0],
+                "direction_mask_span_px": [22.0, 24.0, 26.0],
+            }
+        )
+        metric_plot_calls: list[dict[str, object]] = []
+
+        def capture_metric_plot(**kwargs):
+            metric_plot_calls.append(kwargs)
+
+        with mock.patch.object(process_debug_video, "_make_canvas", side_effect=lambda overlay: overlay), mock.patch.object(
+            process_debug_video, "_draw_text_block"
+        ), mock.patch.object(process_debug_video, "_draw_trend_plot"), mock.patch.object(
+            process_debug_video, "_draw_metric_plot", side_effect=capture_metric_plot
+        ):
+            process_debug_video._render_wire_debug_frame(
+                frame_bgr=frame,
+                geom=geom,
+                row=row,
+                series=series,
+                frame_idx=1,
+                extraction=extraction,
+            )
+
+        self.assertEqual(len(metric_plot_calls), 1)
+        self.assertEqual(metric_plot_calls[0]["title"], "方向法变化曲线")
+        self.assertEqual(
+            metric_plot_calls[0]["metric_specs"],
+            [
+                ("direction_centerline_span_px", process_debug_video.DIRECTION_CENTERLINE_COLOR, "中心线投影"),
+                ("direction_mask_span_px", process_debug_video.DIRECTION_CONTOUR_COLOR, "轮廓/掩膜投影"),
+            ],
+        )
+
+    def test_braided_debug_renderer_adds_direction_metric_plot(self) -> None:
+        frame = np.zeros((24, 32, 3), dtype=np.uint8)
+        extraction = BraidedExtractionConfig(roi_xyxy=(2, 3, 30, 22))
+        geom = SimpleNamespace(
+            source_roi_xyxy=(2, 3, 30, 22),
+            body_tube_mask=np.ones((19, 28), dtype=np.uint8),
+            contour_xy=np.array([[4, 6], [4, 18], [28, 18], [28, 6]], dtype=float),
+            body_contour_xy=np.array([[5, 7], [5, 17], [27, 17], [27, 7]], dtype=float),
+            sampled_centerline_xy=np.array([[6, 12], [26, 12]], dtype=float),
+            sampled_width_segments_xy=np.array([[[10, 8], [10, 16]], [[20, 8], [20, 16]]], dtype=float),
+            anchor_xy=np.array([6, 6], dtype=float),
+            tip_xy=np.array([24, 17], dtype=float),
+        )
+        row = SimpleNamespace(
+            frame=1,
+            time_sec=1.0,
+            temperature_c=20.0,
+            direction_angle_deg=90.0,
+            length_axis_px=30.0,
+            length_axis_recovery=0.2,
+            diameter_max_px=8.0,
+            diameter_max_recovery=0.3,
+            area_proj_px2=180.0,
+            area_proj_recovery=0.4,
+            direction_span_px=22.0,
+            direction_recovery=0.35,
+            endpoint_jump_px=0.0,
+            body_mask_attachment_leak_fraction=0.0,
+            centerline_disagreement=0.0,
+            quality=0.95,
+        )
+        series = pd.DataFrame(
+            {
+                "frame": [0, 1, 2],
+                "length_axis_recovery": [0.1, 0.2, 0.3],
+                "diameter_max_recovery": [0.2, 0.3, 0.4],
+                "area_proj_recovery": [0.3, 0.4, 0.5],
+                "direction_span_px": [20.0, 22.0, 24.0],
+            }
+        )
+        metric_plot_calls: list[dict[str, object]] = []
+
+        def capture_metric_plot(**kwargs):
+            metric_plot_calls.append(kwargs)
+
+        with mock.patch.object(process_debug_video, "_make_canvas", side_effect=lambda overlay: overlay), mock.patch.object(
+            process_debug_video, "_draw_text_block"
+        ), mock.patch.object(process_debug_video, "_draw_trend_plot"), mock.patch.object(
+            process_debug_video, "_draw_metric_plot", side_effect=capture_metric_plot
+        ):
+            process_debug_video._render_braided_debug_frame(
+                frame_bgr=frame,
+                geom=geom,
+                row=row,
+                series=series,
+                frame_idx=1,
+                extraction=extraction,
+                roi_xyxy=(2, 3, 30, 22),
+            )
+
+        self.assertEqual(len(metric_plot_calls), 1)
+        self.assertEqual(metric_plot_calls[0]["title"], "方向法变化曲线")
+        self.assertEqual(
+            metric_plot_calls[0]["metric_specs"],
+            [("direction_span_px", process_debug_video.DIRECTION_CONTOUR_COLOR, "方向投影跨度")],
+        )
+
     def test_wire_annotated_overview_labels_route_b_as_shape_fit(self) -> None:
         frame = np.zeros((24, 32, 3), dtype=np.uint8)
         extraction = ExtractionConfig(roi_xyxy=(2, 3, 30, 22))
