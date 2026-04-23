@@ -155,6 +155,11 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(_worker_output_label("route_c_recovery_vs_temperature.png", "braided_demo"), "投影面积温度曲线")
         self.assertEqual(_worker_output_label("direction_metric_over_time.png", "braided_demo"), "方向法变化图")
         self.assertEqual(_worker_output_label("direction_recovery_vs_temperature.png", "braided_demo"), "方向法温度曲线")
+        self.assertEqual(_worker_output_label("direction_centerline_metric_over_time.png", "demo"), "方向法中心线变化图")
+        self.assertEqual(
+            _worker_output_label("direction_mask_recovery_vs_temperature.png", "demo"),
+            "方向法轮廓/掩膜温度曲线",
+        )
 
     def test_plot_route_titles_follow_series_family(self) -> None:
         wire_titles = _plot_route_titles_for_series(pd.DataFrame({"x_route_a_px": [1.0], "kappa_fit_px_inv": [0.1]}))
@@ -491,6 +496,37 @@ class WebappFrontendLabelTests(unittest.TestCase):
 
                 self.assertFalse(_postprocess_needed(run, prepared))
 
+    def test_expected_plot_outputs_include_wire_direction_method_pairs(self) -> None:
+        run = {
+            "id": "wire-run-direction",
+            "preset": "wire_like",
+            "requested_mode": "formal_af",
+            "actual_mode": "quicklook",
+            "temperature_filename": "temp.csv",
+            "run_dir": "/tmp/wire-run-direction",
+            "direction_metric_enabled": True,
+            "status": "completed",
+        }
+        prepared = {
+            "preset": "wire_like",
+            "actual_mode": "quicklook",
+            "temperature_c_min": 20.0,
+            "temperature_c_max": 80.0,
+            "direction_results": [
+                {"enabled": True, "metric_key": "direction_centerline_span"},
+                {"enabled": True, "metric_key": "direction_mask_span"},
+            ],
+        }
+
+        expected = _expected_plot_outputs(run, prepared)
+
+        self.assertIn("direction_metric_over_time.png", expected)
+        self.assertIn("direction_recovery_vs_temperature.png", expected)
+        self.assertIn("direction_centerline_metric_over_time.png", expected)
+        self.assertIn("direction_centerline_recovery_vs_temperature.png", expected)
+        self.assertIn("direction_mask_metric_over_time.png", expected)
+        self.assertIn("direction_mask_recovery_vs_temperature.png", expected)
+
     def test_refresh_plot_outputs_for_display_schedules_when_partial_plots_exist(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._storage_patch_context(tmp):
@@ -706,6 +742,61 @@ class WebappFrontendLabelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("/files/runs/legacy-storage/outputs/analysis_process.mp4", text)
         self.assertIn("/files/runs/legacy-storage/outputs/route_a_metric_over_time.png", text)
+
+    def test_run_detail_shows_wire_direction_method_curves(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._storage_patch_context(tmp):
+                webapp._ensure_storage()
+                run_id = "wire-direction-curves"
+                run_dir = webapp.RUNS_ROOT / run_id
+                outputs_dir = run_dir / "outputs"
+                outputs_dir.mkdir(parents=True, exist_ok=True)
+                self._insert_basic_run(run_id=run_id, run_dir=run_dir, status="completed", preset="wire_like")
+                self._write_json(
+                    outputs_dir / "summary.json",
+                    {
+                        "preset": "wire_like",
+                        "requested_mode": "formal_af",
+                        "actual_mode": "quicklook",
+                        "temperature_c_min": 20.0,
+                        "temperature_c_max": 80.0,
+                        "asset_generation_status": "completed",
+                        "direction_results": [
+                            {
+                                "enabled": True,
+                                "angle_deg": 17.0,
+                                "metric_key": "direction_centerline_span",
+                                "display_label": "中心线投影跨度",
+                                "reportability_status": "formal_passed",
+                                "af95_c": 52.0,
+                            },
+                            {
+                                "enabled": True,
+                                "angle_deg": 17.0,
+                                "metric_key": "direction_mask_span",
+                                "display_label": "轮廓/掩膜投影跨度",
+                                "reportability_status": "formal_passed",
+                                "af95_c": 53.0,
+                            },
+                        ],
+                    },
+                )
+                for filename in [
+                    "direction_centerline_metric_over_time.png",
+                    "direction_centerline_recovery_vs_temperature.png",
+                    "direction_mask_metric_over_time.png",
+                    "direction_mask_recovery_vs_temperature.png",
+                ]:
+                    (outputs_dir / filename).write_bytes(b"plot")
+
+                response = webapp.run_detail(_FakeRequest(), run_id)
+                text = response.body.decode("utf-8")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("中心线投影跨度", text)
+        self.assertIn("轮廓/掩膜投影跨度", text)
+        self.assertIn("/files/runs/wire-direction-curves/outputs/direction_centerline_metric_over_time.png", text)
+        self.assertIn("/files/runs/wire-direction-curves/outputs/direction_mask_recovery_vs_temperature.png", text)
 
     def test_run_status_endpoint_is_read_only(self) -> None:
         with TemporaryDirectory() as tmp:

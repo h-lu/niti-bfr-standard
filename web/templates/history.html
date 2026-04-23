@@ -229,7 +229,7 @@
                     <span>{{ run["video_filename"] }}</span>
                   </div>
                 </td>
-                <td data-label="提交时间" class="muted">{{ run["created_at"][:19].replace("T", " ") }}</td>
+                <td data-label="提交时间" class="muted">{{ display_time(run["created_at"]) }}</td>
                 <td data-label="状态">
                   <span class="pill status-{{ run['status'] }}">{{ run["status_label"] }}</span>
                 </td>

@@ -119,6 +119,7 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertIn("requiresRoiPreview", text)
         self.assertIn("requiresDirectionConfirmation", text)
         self.assertIn("return requiresRoiPreview();", text)
+        self.assertIn('return presetSelect.value === "wire_like" ? 90 : 0;', text)
         self.assertIn("先选固定 ROI，再确认方向", text)
         self.assertIn("该 ROI 将用于所有帧", text)
         self.assertIn('id="confirm_direction_button"', text)
@@ -128,7 +129,7 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertIn("function sourceRoiFromBox", text)
         self.assertIn("sourceRoi.width < MIN_ROI_SOURCE_PX", text)
         self.assertNotIn("roiBox.x1 - roiBox.x0 < 0.01", text)
-        self.assertLess(text.index("尚未选择固定 ROI"), text.index("方向角度：0°"))
+        self.assertLess(text.index("尚未选择固定 ROI"), text.index("方向角度：90°"))
         self.assertIn('name="initial_roi_xyxy"', text)
         self.assertIn("preview_roi", text)
 
@@ -241,6 +242,50 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertEqual(history_response.status_code, 200)
         read_csv.assert_not_called()
         write_summary.assert_not_called()
+
+    def test_home_and_history_display_created_at_in_shanghai_time(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp):
+                webapp._ensure_storage()
+                run_id = "run-shanghai-time"
+                run_dir = webapp.RUNS_ROOT / run_id
+                run_dir.mkdir(parents=True, exist_ok=True)
+                webapp._insert_run(
+                    {
+                        "id": run_id,
+                        "created_at": "2026-04-23T12:00:00+00:00",
+                        "status": "completed",
+                        "run_name": "tz-check",
+                        "preset": "wire_like",
+                        "requested_mode": "quicklook",
+                        "frame_stride": 1,
+                        "direction_angle_deg": 90.0,
+                        "direction_metric_enabled": 1,
+                        "initial_roi_xyxy": "[1,2,20,30]",
+                        "actual_mode": "quicklook",
+                        "formal_metric_label": None,
+                        "formal_gate_reason": None,
+                        "af95_c": None,
+                        "aftan_c": None,
+                        "original_frame_count": None,
+                        "analyzed_frame_count": None,
+                        "annotated_video_filename": None,
+                        "video_filename": "demo.mp4",
+                        "temperature_filename": None,
+                        "run_dir": str(run_dir),
+                        "error_text": None,
+                    }
+                )
+
+                home_response = webapp.home(_FakeRequest())
+                history_response = webapp.history(_FakeRequest())
+                home_text = home_response.body.decode("utf-8")
+                history_text = history_response.body.decode("utf-8")
+
+        self.assertIn("2026-04-23 20:00", home_text)
+        self.assertIn("2026-04-23 20:00", history_text)
+        self.assertNotIn("2026-04-23 12:00", home_text)
+        self.assertNotIn("2026-04-23 12:00", history_text)
 
     def test_history_page_supports_deleting_completed_runs(self) -> None:
         with TemporaryDirectory() as tmp:

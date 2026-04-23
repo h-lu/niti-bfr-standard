@@ -636,10 +636,26 @@
                 <span class="token">状态说明：{{ direction_entry.get('gate_reason') }}</span>
               </div>
               {% endif %}
+              {% if direction_entry.get('recovery_curve') or direction_entry.get('metric_curve') %}
+              <div class="direction-curves">
+                {% if direction_entry.get('recovery_curve') %}
+                <figure class="curve-card">
+                  <strong>{{ direction_entry['recovery_curve']['label'] }}</strong>
+                  <img class="zoomable" src="{{ direction_entry['recovery_curve']['url'] }}" alt="{{ direction_entry['recovery_curve']['label'] }}">
+                </figure>
+                {% endif %}
+                {% if direction_entry.get('metric_curve') %}
+                <figure class="curve-card">
+                  <strong>{{ direction_entry['metric_curve']['label'] }}</strong>
+                  <img class="zoomable" src="{{ direction_entry['metric_curve']['url'] }}" alt="{{ direction_entry['metric_curve']['label'] }}">
+                </figure>
+                {% endif %}
+              </div>
+              {% endif %}
             </article>
             {% endfor %}
 
-            {% if direction_recovery_curve or direction_metric_curve %}
+            {% if direction_summary_curves_visible and (direction_recovery_curve or direction_metric_curve) %}
             <div class="direction-curves">
               {% if direction_recovery_curve %}
               <figure class="curve-card">

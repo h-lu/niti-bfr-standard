@@ -193,7 +193,7 @@
         border-radius: 999px;
         background:
           linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.92) 18%, rgba(182, 104, 55, 0.9) 50%, rgba(42, 121, 132, 0.94) 82%, rgba(255, 255, 255, 0.08) 100%);
-        transform: translate(-50%, -50%) rotate(0deg);
+        transform: translate(-50%, -50%) rotate(90deg);
         transform-origin: center center;
         box-shadow: 0 0 28px rgba(255, 255, 255, 0.18);
       }
@@ -539,7 +539,7 @@
                 </div>
                 <div class="preview-meta">
                   <span class="preview-token" id="preview_roi_token">尚未选择固定 ROI</span>
-                  <span class="preview-token direction-only" id="preview_angle_token">方向角度：0°</span>
+                  <span class="preview-token direction-only" id="preview_angle_token">方向角度：90°</span>
                   <span class="preview-token direction-only" id="preview_confirm_token">尚未确认方向</span>
                   <button class="preview-confirm-button direction-only" id="confirm_direction_button" type="button" disabled>确认方向</button>
                 </div>
@@ -576,7 +576,7 @@
                     <div class="run-meta">
                       <span class="token">{{ "细丝对象" if run["preset"] in ("wire_like", "demo") else "编织对象" }}</span>
                       <span class="token">{{ "已带温度表" if run["temperature_filename"] else "未带温度表" }}</span>
-                      <span class="token">{{ run["created_at"][:19].replace("T", " ") }}</span>
+                      <span class="token">{{ display_time(run["created_at"]) }}</span>
                     </div>
                   </div>
                   <span class="badge status-{{ run['status'] }}">{{ run["status_label"] }}</span>
@@ -632,7 +632,11 @@
       const submitButton = document.getElementById("submit_button");
       const MIN_ROI_SOURCE_PX = 2;
       let previewRequestToken = 0;
-      let directionAngle = 0;
+      function defaultDirectionAngle() {
+        return presetSelect.value === "wire_like" ? 90 : 0;
+      }
+
+      let directionAngle = defaultDirectionAngle();
       let directionConfirmed = false;
       let previewCenterX = 50;
       let previewCenterY = 50;
@@ -1016,6 +1020,7 @@
       presetButtons.forEach((button) => {
         button.addEventListener("click", () => {
           presetSelect.value = button.dataset.preset;
+          directionAngle = defaultDirectionAngle();
           syncPresetButtons();
           resetDirectionConfirmation();
           resetInitialRoi();
@@ -1026,7 +1031,7 @@
       });
 
       videoInput.addEventListener("change", () => {
-        directionAngle = 0;
+        directionAngle = defaultDirectionAngle();
         resetDirectionConfirmation();
         resetInitialRoi();
         resetPreviewCenter();
