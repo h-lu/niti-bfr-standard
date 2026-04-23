@@ -1029,12 +1029,12 @@ def _direction_metric_enabled_for_outputs(
         if isinstance(run, dict)
         else bool(run["direction_metric_enabled"]) if "direction_metric_enabled" in run.keys() else False
     )
-    direction_result = prepared.get("direction_result")
-    if isinstance(direction_result, dict):
-        return bool(direction_result.get("enabled")) or run_direction_enabled
     direction_results = prepared.get("direction_results")
     if isinstance(direction_results, list) and any(isinstance(item, dict) and item.get("enabled") for item in direction_results):
         return True
+    direction_result = prepared.get("direction_result")
+    if isinstance(direction_result, dict):
+        return bool(direction_result.get("enabled")) or run_direction_enabled
     return bool(direction_result) or run_direction_enabled
 
 

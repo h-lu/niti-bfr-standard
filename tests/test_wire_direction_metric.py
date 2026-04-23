@@ -103,6 +103,10 @@ class WireDirectionMetricTests(unittest.TestCase):
             webapp._write_plots(tmp_path, result)
             self.assertTrue((tmp_path / "direction_metric_over_time.png").exists())
             self.assertTrue((tmp_path / "direction_recovery_vs_temperature.png").exists())
+            self.assertTrue((tmp_path / "direction_centerline_metric_over_time.png").exists())
+            self.assertTrue((tmp_path / "direction_centerline_recovery_vs_temperature.png").exists())
+            self.assertTrue((tmp_path / "direction_mask_metric_over_time.png").exists())
+            self.assertTrue((tmp_path / "direction_mask_recovery_vs_temperature.png").exists())
 
 
 if __name__ == "__main__":
