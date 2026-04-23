@@ -566,6 +566,18 @@ def _render_wire_debug_frame(
             ("kappa_route_c_recovery", ROUTE_COLORS["C"], "时序平滑弦线"),
         ],
     )
+    _draw_metric_plot(
+        canvas=canvas,
+        series=series,
+        frame_idx=frame_idx,
+        origin_xy=(panel_x, 410),
+        size_xy=(SIDEBAR_WIDTH - 36, 132),
+        title="方向法变化曲线",
+        metric_specs=[
+            ("direction_centerline_span_px", DIRECTION_CENTERLINE_COLOR, "中心线投影"),
+            ("direction_mask_span_px", DIRECTION_CONTOUR_COLOR, "轮廓/掩膜投影"),
+        ],
+    )
     return canvas
 
 
@@ -678,6 +690,17 @@ def _render_braided_debug_frame(
             ("area_proj_recovery", ROUTE_COLORS["C"], "投影面积"),
         ],
     )
+    _draw_metric_plot(
+        canvas=canvas,
+        series=series,
+        frame_idx=frame_idx,
+        origin_xy=(panel_x, 410),
+        size_xy=(SIDEBAR_WIDTH - 36, 132),
+        title="方向法变化曲线",
+        metric_specs=[
+            ("direction_span_px", DIRECTION_CONTOUR_COLOR, "方向投影跨度"),
+        ],
+    )
     return canvas
 
 
@@ -777,6 +800,83 @@ def _draw_trend_plot(
     for frac in (0.0, 0.5, 1.0):
         py = int(round(float(plot_y0 + plot_h - frac * plot_h)))
         cv2.line(canvas, (plot_x0, py), (plot_x0 + plot_w, py), (235, 235, 235), 1, cv2.LINE_AA)
+
+
+def _draw_metric_plot(
+    *,
+    canvas: np.ndarray,
+    series: pd.DataFrame,
+    frame_idx: int,
+    origin_xy: tuple[int, int],
+    size_xy: tuple[int, int],
+    title: str,
+    metric_specs: list[tuple[str, tuple[int, int, int], str]],
+) -> None:
+    ox, oy = origin_xy
+    width, height = size_xy
+    x1 = ox + width
+    y1 = oy + height
+    cv2.rectangle(canvas, (ox, oy), (x1, y1), (248, 248, 248), -1)
+    cv2.rectangle(canvas, (ox, oy), (x1, y1), (120, 120, 120), 1)
+    _draw_unicode_text(canvas, title, (ox + 10, oy + 6), font_size=18, color_bgr=TEXT_COLOR)
+
+    plot_x0 = ox + 12
+    plot_y0 = oy + 32
+    plot_w = width - 24
+    plot_h = height - 44
+    cv2.rectangle(canvas, (plot_x0, plot_y0), (plot_x0 + plot_w, plot_y0 + plot_h), (255, 255, 255), -1)
+    cv2.rectangle(canvas, (plot_x0, plot_y0), (plot_x0 + plot_w, plot_y0 + plot_h), (210, 210, 210), 1)
+
+    valid_specs: list[tuple[str, tuple[int, int, int], str, np.ndarray]] = []
+    for col, color, label in metric_specs:
+        if col not in series.columns:
+            continue
+        values = series[col].to_numpy(dtype=float)
+        if np.count_nonzero(np.isfinite(values)) < 2:
+            continue
+        valid_specs.append((col, color, label, values))
+
+    if not valid_specs:
+        _draw_unicode_text(canvas, "暂无可绘制方向曲线", (plot_x0 + 12, plot_y0 + 18), font_size=16, color_bgr=MUTED_TEXT)
+        return
+
+    all_values = np.concatenate([values[np.isfinite(values)] for _, _, _, values in valid_specs])
+    min_value = float(np.min(all_values))
+    max_value = float(np.max(all_values))
+    if np.isclose(min_value, max_value):
+        pad = max(abs(min_value) * 0.05, 1.0)
+        min_value -= pad
+        max_value += pad
+    value_span = max_value - min_value
+
+    x_values = np.linspace(plot_x0, plot_x0 + plot_w, len(series), endpoint=True)
+    for _, color, label, values in valid_specs:
+        points: list[list[int]] = []
+        for idx, value in enumerate(values):
+            if not np.isfinite(value):
+                continue
+            px = int(round(float(x_values[idx])))
+            frac = (float(value) - min_value) / value_span
+            py = int(round(float(plot_y0 + plot_h - np.clip(frac, 0.0, 1.0) * plot_h)))
+            points.append([px, py])
+        if len(points) >= 2:
+            cv2.polylines(canvas, [np.asarray(points, dtype=np.int32).reshape(-1, 1, 2)], False, color, 2, cv2.LINE_AA)
+        value_now = values[frame_idx]
+        if np.isfinite(value_now):
+            px = int(round(float(x_values[frame_idx])))
+            frac = (float(value_now) - min_value) / value_span
+            py = int(round(float(plot_y0 + plot_h - np.clip(frac, 0.0, 1.0) * plot_h)))
+            cv2.circle(canvas, (px, py), 4, color, -1)
+            _draw_unicode_text(canvas, label, (px + 6, py - 14), font_size=16, color_bgr=color)
+
+    px = int(round(float(x_values[frame_idx])))
+    cv2.line(canvas, (px, plot_y0), (px, plot_y0 + plot_h), (150, 150, 150), 1, cv2.LINE_AA)
+    for frac in (0.0, 0.5, 1.0):
+        py = int(round(float(plot_y0 + plot_h - frac * plot_h)))
+        cv2.line(canvas, (plot_x0, py), (plot_x0 + plot_w, py), (235, 235, 235), 1, cv2.LINE_AA)
+
+    _draw_unicode_text(canvas, _fmt(max_value, precision=1), (plot_x0 + plot_w - 48, plot_y0 - 2), font_size=14, color_bgr=MUTED_TEXT)
+    _draw_unicode_text(canvas, _fmt(min_value, precision=1), (plot_x0 + plot_w - 48, plot_y0 + plot_h - 16), font_size=14, color_bgr=MUTED_TEXT)
 
 
 def _blend_mask(
