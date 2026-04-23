@@ -57,6 +57,9 @@ ROUTE_COLORS: dict[str, tuple[int, int, int]] = {
     "B": (220, 60, 220),
     "C": (60, 180, 80),
 }
+DIRECTION_REFERENCE_COLOR = (20, 120, 240)
+DIRECTION_CENTERLINE_COLOR = (255, 220, 0)
+DIRECTION_CONTOUR_COLOR = (0, 90, 255)
 FONT_CANDIDATE_PATHS = (
     "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Medium.ttc",
@@ -512,9 +515,23 @@ def _render_wire_debug_frame(
             overlay,
             np.round(start).astype(int),
             np.round(end).astype(int),
-            (20, 120, 240),
+            DIRECTION_REFERENCE_COLOR,
             2,
             cv2.LINE_AA,
+        )
+        _draw_direction_projection_span(
+            overlay,
+            getattr(geom, "sampled_centerline_xy", np.empty((0, 2))),
+            float(direction_angle_deg),
+            color_bgr=DIRECTION_CENTERLINE_COLOR,
+            lateral_offset_px=-8.0,
+        )
+        _draw_direction_projection_span(
+            overlay,
+            geom.contour_xy,
+            float(direction_angle_deg),
+            color_bgr=DIRECTION_CONTOUR_COLOR,
+            lateral_offset_px=8.0,
         )
 
     canvas = _make_canvas(overlay)
@@ -533,6 +550,7 @@ def _render_wire_debug_frame(
         f"质量={_fmt(_row_value(row, 'quality'), precision=3)}"
         f"  模型={_row_text(row, 'model_name') or '-'}",
         "橙色：两端距离  紫色：整体弯曲拟合主线  绿色：temporal chord / 时序平滑弦线",
+        "蓝色：方向参考线  黄色：中心线投影  红橙：轮廓/掩膜投影",
     ]
     _draw_text_block(canvas, lines, origin_xy=(panel_x, 36), width=SIDEBAR_WIDTH - 36)
     _draw_trend_plot(
@@ -616,9 +634,15 @@ def _render_braided_debug_frame(
             overlay,
             np.round(start).astype(int),
             np.round(end).astype(int),
-            (20, 120, 240),
+            DIRECTION_REFERENCE_COLOR,
             2,
             cv2.LINE_AA,
+        )
+        _draw_direction_projection_span(
+            overlay,
+            geom.body_contour_xy,
+            float(direction_angle_deg),
+            color_bgr=DIRECTION_CONTOUR_COLOR,
         )
 
     canvas = _make_canvas(overlay)
@@ -638,6 +662,7 @@ def _render_braided_debug_frame(
         f"  泄漏={_fmt(_row_value(row, 'body_mask_attachment_leak_fraction'), precision=3)}",
         f"中心线差异={_fmt(_row_value(row, 'centerline_disagreement'), precision=3)}"
         f"  质量={_fmt(_row_value(row, 'quality'), precision=3)}",
+        "蓝色：方向参考线  红橙：方向投影跨度",
     ]
     _draw_text_block(canvas, lines, origin_xy=(panel_x, 36), width=SIDEBAR_WIDTH - 36)
     _draw_trend_plot(
@@ -784,6 +809,72 @@ def _max_segment(segments_xy: np.ndarray) -> np.ndarray | None:
     if not lengths or not np.isfinite(max(lengths)):
         return None
     return np.asarray(segments_xy[int(np.argmax(lengths))], dtype=float)
+
+
+def _draw_direction_projection_span(
+    overlay: np.ndarray,
+    points_xy: np.ndarray,
+    angle_deg: float,
+    *,
+    color_bgr: tuple[int, int, int],
+    lateral_offset_px: float = 0.0,
+) -> None:
+    segment = _project_points_onto_direction_axis(points_xy, angle_deg, lateral_offset_px=lateral_offset_px)
+    if segment is None:
+        return
+    start_xy, end_xy, source_start_xy, source_end_xy = segment
+    cv2.line(
+        overlay,
+        np.round(source_start_xy).astype(int),
+        np.round(start_xy).astype(int),
+        color_bgr,
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.line(
+        overlay,
+        np.round(source_end_xy).astype(int),
+        np.round(end_xy).astype(int),
+        color_bgr,
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.line(
+        overlay,
+        np.round(start_xy).astype(int),
+        np.round(end_xy).astype(int),
+        color_bgr,
+        3,
+        cv2.LINE_AA,
+    )
+    cv2.circle(overlay, np.round(start_xy).astype(int), 4, color_bgr, -1)
+    cv2.circle(overlay, np.round(end_xy).astype(int), 4, color_bgr, -1)
+
+
+def _project_points_onto_direction_axis(
+    points_xy: np.ndarray,
+    angle_deg: float,
+    *,
+    lateral_offset_px: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    points = np.asarray(points_xy, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 2:
+        return None
+    finite = np.isfinite(points).all(axis=1)
+    points = points[finite]
+    if len(points) == 0:
+        return None
+
+    direction = directional_unit_vector(float(angle_deg))
+    normal = np.array([-direction[1], direction[0]], dtype=float)
+    projections = points @ direction
+    normal_coords = points @ normal
+    source_start_xy = points[int(np.argmin(projections))]
+    source_end_xy = points[int(np.argmax(projections))]
+    axis_offset = float(np.median(normal_coords) + lateral_offset_px)
+    start_xy = direction * float(np.min(projections)) + normal * axis_offset
+    end_xy = direction * float(np.max(projections)) + normal * axis_offset
+    return start_xy, end_xy, source_start_xy, source_end_xy
 
 
 def _frame_line(row: Any) -> str:

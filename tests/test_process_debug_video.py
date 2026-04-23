@@ -400,6 +400,66 @@ class ProcessDebugVideoTests(unittest.TestCase):
             np.round(geom.fitted_curve_xy).astype(np.int32).reshape(-1, 1, 2),
         )
 
+    def test_wire_debug_renderer_draws_direction_projection_spans(self) -> None:
+        frame = np.zeros((24, 32, 3), dtype=np.uint8)
+        extraction = ExtractionConfig(roi_xyxy=(2, 3, 30, 22))
+        geom = SimpleNamespace(
+            contour_xy=np.array([[4, 6], [4, 18], [28, 18], [28, 6]], dtype=float),
+            sampled_centerline_xy=np.array([[6, 12], [26, 12]], dtype=float),
+            fitted_curve_xy=np.array([[7, 5], [13, 9], [21, 12]], dtype=float),
+            route_a_anchor_xy=np.array([5, 5], dtype=float),
+            route_a_tip_xy=np.array([26, 18], dtype=float),
+            anchor_xy=np.array([6, 6], dtype=float),
+            tip_xy=np.array([24, 17], dtype=float),
+        )
+        row = SimpleNamespace(
+            frame=0,
+            time_sec=0.0,
+            temperature_c=20.0,
+            direction_angle_deg=90.0,
+            x_route_a_px=20.0,
+            x_route_a_recovery=0.1,
+            x_fit_px=19.0,
+            kappa_fit_px_inv=0.02,
+            x_route_c_px=18.0,
+            kappa_route_c_px_inv=0.01,
+            direction_centerline_span_px=20.0,
+            direction_mask_span_px=24.0,
+            quality=0.9,
+            model_name="quadratic",
+        )
+        series = pd.DataFrame(
+            {
+                "frame": [0],
+                "x_route_a_recovery": [0.1],
+                "kappa_fit_recovery": [0.2],
+                "kappa_route_c_recovery": [0.3],
+            }
+        )
+        line_colors: list[tuple[int, int, int]] = []
+
+        def capture_line(_image, _p0, _p1, color, *args, **kwargs):
+            line_colors.append(tuple(int(v) for v in color))
+            return None
+
+        with mock.patch.object(process_debug_video.cv2, "line", side_effect=capture_line), mock.patch.object(
+            process_debug_video, "_make_canvas", side_effect=lambda overlay: overlay
+        ), mock.patch.object(process_debug_video, "_draw_text_block"), mock.patch.object(
+            process_debug_video, "_draw_trend_plot"
+        ):
+            process_debug_video._render_wire_debug_frame(
+                frame_bgr=frame,
+                geom=geom,
+                row=row,
+                series=series,
+                frame_idx=0,
+                extraction=extraction,
+            )
+
+        self.assertIn(process_debug_video.DIRECTION_REFERENCE_COLOR, line_colors)
+        self.assertIn(process_debug_video.DIRECTION_CENTERLINE_COLOR, line_colors)
+        self.assertIn(process_debug_video.DIRECTION_CONTOUR_COLOR, line_colors)
+
     def test_wire_annotated_overview_labels_route_b_as_shape_fit(self) -> None:
         frame = np.zeros((24, 32, 3), dtype=np.uint8)
         extraction = ExtractionConfig(roi_xyxy=(2, 3, 30, 22))
