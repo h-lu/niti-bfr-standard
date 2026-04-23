@@ -282,6 +282,53 @@ class WebappFrontendLabelTests(unittest.TestCase):
         assert prepared is not None
         self.assertEqual(prepared["direction_result"]["angle_deg"], 12.0)
         self.assertTrue(prepared["direction_result"]["enabled"])
+        self.assertEqual(prepared["direction_results"][0]["metric_key"], "direction_span")
+
+    def test_prepare_summary_keeps_wire_direction_results(self) -> None:
+        run = {
+            "id": "wire-run-direction",
+            "preset": "wire_like",
+            "requested_mode": "formal_af",
+            "actual_mode": "quicklook",
+            "temperature_filename": "wire.csv",
+        }
+        summary = {
+            "preset": "wire_like",
+            "requested_mode": "formal_af",
+            "actual_mode": "quicklook",
+            "direction_result": {
+                "enabled": True,
+                "angle_deg": 18.0,
+                "metric_key": "direction_centerline_span",
+                "display_label": "中心线投影跨度",
+                "reportability_status": "formal_passed",
+            },
+            "direction_results": [
+                {
+                    "enabled": True,
+                    "angle_deg": 18.0,
+                    "metric_key": "direction_centerline_span",
+                    "display_label": "中心线投影跨度",
+                    "reportability_status": "formal_passed",
+                },
+                {
+                    "enabled": True,
+                    "angle_deg": 18.0,
+                    "metric_key": "direction_mask_span",
+                    "display_label": "轮廓/掩膜投影跨度",
+                    "reportability_status": "formal_passed",
+                },
+            ],
+        }
+
+        prepared = _prepare_summary_for_display(run, summary)
+        self.assertIsNotNone(prepared)
+        assert prepared is not None
+        self.assertEqual(len(prepared["direction_results"]), 2)
+        self.assertEqual(
+            [entry["metric_key"] for entry in prepared["direction_results"]],
+            ["direction_centerline_span", "direction_mask_span"],
+        )
 
     def test_prepare_summary_backfills_smoothed_values_from_analysis_csv(self) -> None:
         with TemporaryDirectory() as tmp:

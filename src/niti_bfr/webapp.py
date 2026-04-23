@@ -960,6 +960,7 @@ def _result_for_display_plots(
         acceptance_profile=prepared.get("acceptance_profile"),
         route_results=list(prepared.get("route_results") or []),
         direction_result=prepared.get("direction_result"),
+        direction_results=list(prepared.get("direction_results") or []),
         formal_candidate_gates=prepared.get("formal_candidate_gates"),
         input_fps=_coerce_float(prepared.get("input_fps")),
         original_frame_count=prepared.get("original_frame_count"),
@@ -1015,6 +1016,9 @@ def _direction_metric_enabled_for_outputs(
     direction_result = prepared.get("direction_result")
     if isinstance(direction_result, dict):
         return bool(direction_result.get("enabled")) or run_direction_enabled
+    direction_results = prepared.get("direction_results")
+    if isinstance(direction_results, list) and any(isinstance(item, dict) and item.get("enabled") for item in direction_results):
+        return True
     return bool(direction_result) or run_direction_enabled
 
 
@@ -1811,6 +1815,13 @@ def _prepare_summary_for_display(
     direction_result = prepared.get("direction_result")
     if isinstance(direction_result, dict):
         prepared["direction_result"] = dict(direction_result)
+    direction_results = prepared.get("direction_results")
+    if isinstance(direction_results, list):
+        prepared["direction_results"] = [dict(item or {}) for item in direction_results]
+    elif isinstance(prepared.get("direction_result"), dict):
+        prepared["direction_results"] = [dict(prepared["direction_result"])]
+    else:
+        prepared["direction_results"] = []
     if backfill_smoothed:
         prepared = _backfill_smoothed_summary_fields(run, prepared)
     return _augment_reported_result_fields(prepared)
@@ -2477,15 +2488,15 @@ async def create_run(
                 detail = "initial_roi_xyxy is required for wire_like uploads"
             raise HTTPException(status_code=400, detail=detail)
     parsed_direction_angle: float | None = None
-    if preset == "braided_like" and direction_angle_deg.strip():
+    if preset in {"wire_like", "braided_like"} and direction_angle_deg.strip():
         try:
             parsed_direction_angle = float(direction_angle_deg)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="direction_angle_deg must be numeric") from exc
         if not np.isfinite(parsed_direction_angle):
             raise HTTPException(status_code=400, detail="direction_angle_deg must be finite")
-    if preset == "braided_like" and parsed_direction_angle is None:
-        raise HTTPException(status_code=400, detail="direction_angle_deg is required after initial_roi_xyxy for braided uploads")
+    if preset in {"wire_like", "braided_like"} and parsed_direction_angle is None:
+        raise HTTPException(status_code=400, detail=f"direction_angle_deg is required after initial_roi_xyxy for {preset} uploads")
 
     run_id = _new_run_id()
     run_dir = RUNS_ROOT / run_id
@@ -2520,7 +2531,7 @@ async def create_run(
             "requested_mode": requested_mode,
             "frame_stride": parsed_frame_stride,
             "direction_angle_deg": parsed_direction_angle,
-            "direction_metric_enabled": bool(preset.startswith("braided") and parsed_direction_angle is not None),
+            "direction_metric_enabled": bool(preset in {"wire_like", "braided_like"} and parsed_direction_angle is not None),
             "initial_roi_xyxy": _encode_initial_roi_xyxy(parsed_initial_roi),
             "actual_mode": None,
             "formal_metric_label": None,
@@ -2730,6 +2741,13 @@ def run_detail(request: Request, run_id: str) -> Any:
             route_curve_files.append(matched)
     direction_metric_curve = next((item for item in curve_files if item["name"] == "direction_metric_over_time.png"), None)
     direction_recovery_curve = next((item for item in curve_files if item["name"] == "direction_recovery_vs_temperature.png"), None)
+    direction_results = [
+        dict(item)
+        for item in ((summary or {}).get("direction_results") or [])
+        if isinstance(item, dict) and item.get("enabled")
+    ]
+    if not direction_results and summary and isinstance(summary.get("direction_result"), dict) and summary["direction_result"].get("enabled"):
+        direction_results = [dict(summary["direction_result"])]
 
     return templates.TemplateResponse(
         "run_detail.html",
@@ -2748,6 +2766,7 @@ def run_detail(request: Request, run_id: str) -> Any:
             "primary_curve": primary_curve,
             "route_curve_files": route_curve_files,
             "direction_result": summary.get("direction_result") if summary else None,
+            "direction_results": direction_results,
             "direction_metric_curve": direction_metric_curve,
             "direction_recovery_curve": direction_recovery_curve,
             "download_files": download_files,
@@ -2860,6 +2879,11 @@ def _execute_run(run_id: str) -> None:
                 temperature_csv=temperature_path,
                 route_c=route_c,
                 frame_stride=frame_stride,
+                direction_angle_deg=(
+                    float(run["direction_angle_deg"])
+                    if "direction_angle_deg" in run.keys() and run["direction_angle_deg"] is not None
+                    else None
+                ),
                 retain_frame_geometries=True,
             )
         elif run["preset"] in {"braided_like", "braided_demo"}:
@@ -3024,6 +3048,8 @@ def _build_summary(run: sqlite3.Row, result: AnalysisResult) -> dict[str, Any]:
         }
     if result.direction_result is not None:
         summary["direction_result"] = dict(result.direction_result)
+    if result.direction_results is not None:
+        summary["direction_results"] = [dict(item) for item in result.direction_results]
     route_results, route_results_by_alias = _normalize_route_results(
         preset=run["preset"],
         route_results=result.route_results,
@@ -3197,9 +3223,21 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         fig.savefig(out_dir / "route_c_metric_over_time.png", dpi=160)
         plt.close(fig)
 
-    if {"time_sec", "direction_span_px"}.issubset(series.columns) and series["direction_span_px"].notna().any():
+    direction_metric_specs = [
+        ("direction_span_px", "方向投影跨度"),
+        ("direction_centerline_span_px", "中心线投影跨度"),
+        ("direction_mask_span_px", "轮廓/掩膜投影跨度"),
+    ]
+    direction_metric_specs = [
+        (column, label)
+        for column, label in direction_metric_specs
+        if {"time_sec", column}.issubset(series.columns) and series[column].notna().any()
+    ]
+    if direction_metric_specs:
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["time_sec"], series["direction_span_px"], label="方向法", linewidth=2.0, color="#c2410c")
+        colors = ["#c2410c", "#0369a1", "#9333ea"]
+        for idx, (column, label) in enumerate(direction_metric_specs):
+            plt.plot(series["time_sec"], series[column], label=label, linewidth=2.0, color=colors[idx % len(colors)])
         angle_deg = _coerce_float(series["direction_angle_deg"].dropna().iloc[0]) if "direction_angle_deg" in series.columns and series["direction_angle_deg"].notna().any() else None
         title = "方向法变化曲线" if angle_deg is None else f"方向法变化曲线 ({angle_deg:.1f}°)"
         plt.xlabel("时间（秒）")
@@ -3450,14 +3488,44 @@ def _write_plots(out_dir: Path, result: AnalysisResult) -> None:
         fig.savefig(out_dir / "route_c_recovery_vs_temperature.png", dpi=160)
         plt.close(fig)
 
-    if {"temperature_c", "direction_recovery"}.issubset(series.columns) and series["direction_recovery"].notna().any():
+    direction_recovery_specs = [
+        ("direction_recovery", "direction_span", "方向投影跨度"),
+        ("direction_centerline_recovery", "direction_centerline_span", "中心线投影跨度"),
+        ("direction_mask_recovery", "direction_mask_span", "轮廓/掩膜投影跨度"),
+    ]
+    direction_recovery_specs = [
+        (column, metric_key, label)
+        for column, metric_key, label in direction_recovery_specs
+        if {"temperature_c", column}.issubset(series.columns) and series[column].notna().any()
+    ]
+    if direction_recovery_specs:
         fig = plt.figure(figsize=(8, 4.8))
-        plt.plot(series["temperature_c"], series["direction_recovery"], label="方向法", linewidth=2.0, color="#c2410c")
+        colors = ["#c2410c", "#0369a1", "#9333ea"]
+        direction_results_by_key = {
+            item.get("metric_key"): item
+            for item in (result.direction_results or ([result.direction_result] if result.direction_result else []))
+            if isinstance(item, dict)
+        }
+        for idx, (column, metric_key, label) in enumerate(direction_recovery_specs):
+            plt.plot(series["temperature_c"], series[column], label=label, linewidth=2.0, color=colors[idx % len(colors)])
+            direction_entry = direction_results_by_key.get(metric_key) or {}
+            if direction_entry.get("af95_c") is not None:
+                plt.axvline(
+                    direction_entry["af95_c"],
+                    color=colors[idx % len(colors)],
+                    linestyle="--",
+                    alpha=0.65,
+                    label=f"{label} 95% {direction_entry['af95_c']:.2f}℃",
+                )
+            if direction_entry.get("aftan_c") is not None:
+                plt.axvline(
+                    direction_entry["aftan_c"],
+                    color=colors[idx % len(colors)],
+                    linestyle=":",
+                    alpha=0.65,
+                    label=f"{label} 切线 {direction_entry['aftan_c']:.2f}℃",
+                )
         direction_result = result.direction_result or {}
-        if direction_result.get("af95_c") is not None:
-            plt.axvline(direction_result["af95_c"], color="tab:green", linestyle="--", label=f"95%恢复温度 {direction_result['af95_c']:.2f}℃")
-        if direction_result.get("aftan_c") is not None:
-            plt.axvline(direction_result["aftan_c"], color="tab:red", linestyle="--", label=f"切线法温度 {direction_result['aftan_c']:.2f}℃")
         angle_deg = direction_result.get("angle_deg")
         title = "方向法温度曲线" if angle_deg is None else f"方向法温度曲线 ({float(angle_deg):.1f}°)"
         plt.xlabel("温度（℃）")

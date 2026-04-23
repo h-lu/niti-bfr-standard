@@ -501,6 +501,22 @@ def _render_wire_debug_frame(
         cv2.circle(overlay, np.round(route_c_anchor).astype(int), 5, ROUTE_COLORS["C"], -1)
         cv2.circle(overlay, np.round(route_c_tip).astype(int), 6, ROUTE_COLORS["C"], -1)
 
+    direction_angle_deg = _row_value(row, "direction_angle_deg")
+    if direction_angle_deg is not None and np.isfinite(direction_angle_deg):
+        direction = directional_unit_vector(float(direction_angle_deg))
+        center = np.mean(geom.contour_xy, axis=0)
+        span = 0.6 * float(np.hypot(frame_bgr.shape[0], frame_bgr.shape[1]))
+        start = center - span * direction
+        end = center + span * direction
+        cv2.line(
+            overlay,
+            np.round(start).astype(int),
+            np.round(end).astype(int),
+            (20, 120, 240),
+            2,
+            cv2.LINE_AA,
+        )
+
     canvas = _make_canvas(overlay)
     panel_x = overlay.shape[1] + 18
     lines = [
@@ -512,6 +528,8 @@ def _render_wire_debug_frame(
         f"  kappa={_fmt(_row_value(row, 'kappa_fit_px_inv'), precision=5)}",
         f"temporal chord / 时序平滑弦线  数值={_fmt(_row_value(row, 'x_route_c_px'), suffix=' px')}"
         f"  kappa={_fmt(_row_value(row, 'kappa_route_c_px_inv'), precision=5)}",
+        f"方向法 {(_fmt(direction_angle_deg, suffix='°', precision=1))}  中心线={_fmt(_row_value(row, 'direction_centerline_span_px'), suffix=' px')}"
+        f"  掩膜={_fmt(_row_value(row, 'direction_mask_span_px'), suffix=' px')}",
         f"质量={_fmt(_row_value(row, 'quality'), precision=3)}"
         f"  模型={_row_text(row, 'model_name') or '-'}",
         "橙色：两端距离  紫色：整体弯曲拟合主线  绿色：temporal chord / 时序平滑弦线",

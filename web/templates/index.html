@@ -483,7 +483,7 @@
               <div class="choice-grid">
                 <button class="choice active" data-preset="wire_like" type="button">
                   <strong>细丝对象</strong>
-                  <span>适合单根、主轴清晰、由弯曲到更直的细丝类视频。</span>
+                  <span>适合单根、主轴清晰的细丝类视频，先选固定 ROI，再确认方向。</span>
                 </button>
                 <button class="choice" data-preset="braided_like" type="button">
                   <strong>编织对象</strong>
@@ -644,16 +644,12 @@
       let previewSourceHeight = null;
       let previewObjectUrl = null;
 
-      function isBraidedPreset() {
-        return presetSelect.value === "braided_like";
-      }
-
       function requiresRoiPreview() {
         return presetSelect.value === "wire_like" || presetSelect.value === "braided_like";
       }
 
       function requiresDirectionConfirmation() {
-        return isBraidedPreset();
+        return requiresRoiPreview();
       }
 
       function resetDirectionConfirmation() {
@@ -699,8 +695,8 @@
         previewLine.style.transform = `translate(-50%, -50%) rotate(${directionAngle}deg)`;
         previewCenter.style.left = `${previewCenterX}%`;
         previewCenter.style.top = `${previewCenterY}%`;
-        previewTitle.textContent = needsDirection ? "编织对象 ROI 与方向确认" : "细丝对象固定 ROI";
-        previewStage.setAttribute("aria-label", needsDirection ? "编织对象 ROI 与方向确认" : "细丝对象固定 ROI");
+        previewTitle.textContent = needsDirection ? "固定 ROI 与方向确认" : "固定 ROI";
+        previewStage.setAttribute("aria-label", needsDirection ? "固定 ROI 与方向确认" : "固定 ROI");
         previewAngleToken.textContent = `方向角度：${directionAngle}°`;
         previewLine.classList.toggle("disabled", !hasRoi || !needsDirection);
         previewCenter.classList.toggle("disabled", !hasRoi || !needsDirection);
@@ -1007,7 +1003,7 @@
       }
 
       function confirmDirection() {
-        if (!isBraidedPreset() || !initialRoiInput.value) {
+        if (!requiresDirectionConfirmation() || !initialRoiInput.value) {
           updatePreviewHintText();
           return;
         }
@@ -1048,7 +1044,7 @@
       });
       confirmDirectionButton.addEventListener("click", confirmDirection);
       previewCenter.addEventListener("pointerdown", (event) => {
-        if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+        if (!requiresDirectionConfirmation() || !previewPanel.classList.contains("visible")) {
           return;
         }
         if (!roiBox) {
@@ -1146,7 +1142,7 @@
       previewStage.addEventListener("pointercancel", finishRoiDrag);
       window.addEventListener("resize", updatePreviewRoi);
       window.addEventListener("keydown", (event) => {
-        if (!isBraidedPreset() || !previewPanel.classList.contains("visible")) {
+        if (!requiresDirectionConfirmation() || !previewPanel.classList.contains("visible")) {
           return;
         }
         const isDirectionKey = event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Enter";

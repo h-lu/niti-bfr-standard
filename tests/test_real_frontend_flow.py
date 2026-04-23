@@ -115,10 +115,10 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertNotIn("直接运行这个示例", text)
         self.assertNotIn("分析模式", text)
         self.assertIn("开始分析", text)
-        self.assertIn("细丝对象固定 ROI", text)
-        self.assertIn("编织对象 ROI 与方向确认", text)
+        self.assertIn("固定 ROI 与方向确认", text)
         self.assertIn("requiresRoiPreview", text)
         self.assertIn("requiresDirectionConfirmation", text)
+        self.assertIn("return requiresRoiPreview();", text)
         self.assertIn("先选固定 ROI，再确认方向", text)
         self.assertIn("该 ROI 将用于所有帧", text)
         self.assertIn('id="confirm_direction_button"', text)
@@ -254,6 +254,7 @@ class RealFrontendFlowTests(unittest.TestCase):
                         "frame_stride": "1",
                         "run_name": "to-delete",
                         "initial_roi_xyxy": "[1,2,20,30]",
+                        "direction_angle_deg": "0",
                     },
                     files={"video_file": ("demo.mp4", b"not-a-real-video", "video/mp4")},
                     follow_redirects=False,
@@ -283,17 +284,11 @@ class RealFrontendFlowTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
                 webapp._ensure_storage()
-                client = TestClient(webapp.app)
-                response = client.post(
-                    "/runs",
-                    data={
-                        "preset": "wire_like",
-                        "frame_stride": "5",
-                        "run_name": "real-run",
-                        "initial_roi_xyxy": "[7,8,70,80]",
-                    },
-                    files={"video_file": ("demo.mp4", b"not-a-real-video", "video/mp4")},
-                    follow_redirects=False,
+                response = self._create_run_direct(
+                    preset="wire_like",
+                    frame_stride="5",
+                    direction_angle_deg="11",
+                    initial_roi_xyxy="[7,8,70,80]",
                 )
                 rows = webapp._list_runs(limit=1)
 
@@ -302,8 +297,8 @@ class RealFrontendFlowTests(unittest.TestCase):
         row = dict(rows[0])
         self.assertEqual(row["requested_mode"], "quicklook")
         self.assertEqual(row["frame_stride"], 5)
-        self.assertIsNone(row["direction_angle_deg"])
-        self.assertEqual(row["direction_metric_enabled"], 0)
+        self.assertEqual(row["direction_angle_deg"], 11.0)
+        self.assertEqual(row["direction_metric_enabled"], 1)
         self.assertEqual(row["initial_roi_xyxy"], "[7,8,70,80]")
 
     def test_create_wire_run_requires_initial_roi(self) -> None:
@@ -317,7 +312,22 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertIn("initial_roi_xyxy", ctx.exception.detail)
         self.assertIn("wire_like", ctx.exception.detail)
 
-    def test_create_wire_run_persists_initial_roi_without_direction(self) -> None:
+    def test_create_wire_run_requires_direction_angle_after_roi(self) -> None:
+        with TemporaryDirectory() as tmp:
+            with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
+                webapp._ensure_storage()
+                with self.assertRaises(webapp.HTTPException) as ctx:
+                    self._create_run_direct(
+                        preset="wire_like",
+                        frame_stride="2",
+                        initial_roi_xyxy="[12,24,220,260]",
+                    )
+
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("direction_angle_deg", ctx.exception.detail)
+        self.assertIn("wire_like", ctx.exception.detail)
+
+    def test_create_wire_run_persists_initial_roi_and_direction(self) -> None:
         with TemporaryDirectory() as tmp:
             with self._patched_storage(tmp), mock.patch.object(webapp, "_execute_run", autospec=True):
                 webapp._ensure_storage()
@@ -332,8 +342,8 @@ class RealFrontendFlowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 303)
         row = dict(rows[0])
         self.assertEqual(row["initial_roi_xyxy"], "[12,24,220,260]")
-        self.assertIsNone(row["direction_angle_deg"])
-        self.assertEqual(row["direction_metric_enabled"], 0)
+        self.assertEqual(row["direction_angle_deg"], 17.0)
+        self.assertEqual(row["direction_metric_enabled"], 1)
 
     def test_create_wire_run_clips_initial_roi_to_video_frame(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -343,6 +353,7 @@ class RealFrontendFlowTests(unittest.TestCase):
                     preset="wire_like",
                     frame_stride="1",
                     initial_roi_xyxy="[10,20,150,90]",
+                    direction_angle_deg="0",
                 )
                 rows = webapp._list_runs(limit=1)
 
@@ -358,6 +369,7 @@ class RealFrontendFlowTests(unittest.TestCase):
                         preset="wire_like",
                         frame_stride="1",
                         initial_roi_xyxy="[120,20,150,40]",
+                        direction_angle_deg="0",
                     )
 
         self.assertEqual(ctx.exception.status_code, 400)
@@ -717,6 +729,8 @@ class RealFrontendFlowTests(unittest.TestCase):
                         "preset": "wire_like",
                         "requested_mode": "quicklook",
                         "frame_stride": 1,
+                        "direction_angle_deg": 22.0,
+                        "direction_metric_enabled": 1,
                         "initial_roi_xyxy": "[6,7,60,70]",
                         "actual_mode": None,
                         "formal_metric_label": None,
@@ -779,7 +793,10 @@ class RealFrontendFlowTests(unittest.TestCase):
                 self.assertEqual(row["status"], "completed")
                 self.assertIsNone(row["annotated_video_filename"])
                 self.assertEqual(summary["initial_roi_xyxy"], [6, 7, 60, 70])
+                self.assertEqual(summary["direction_angle_deg"], 22.0)
+                self.assertTrue(summary["direction_metric_enabled"])
                 self.assertEqual(analyze_mock.call_args.kwargs["extraction"].roi_xyxy, (6, 7, 60, 70))
+                self.assertEqual(analyze_mock.call_args.kwargs["direction_angle_deg"], 22.0)
                 self.assertEqual(render_mock.call_args.kwargs["extraction"].roi_xyxy, (6, 7, 60, 70))
 
     def test_execute_run_passes_retained_geometries_to_process_video_asset(self) -> None:

@@ -598,44 +598,46 @@
         </section>
         {% endif %}
 
-        {% if direction_result and direction_result.get('enabled') %}
+        {% if direction_results %}
         <section class="section-card">
           <div class="section-header">
             <div>
               <h2>方向法</h2>
-              <p class="section-note">这是用户在上传后为编织对象手动确认的方向量结果，不替代现有 A / B / C 三种测量方式。</p>
+              <p class="section-note">这是用户在上传后手动确认的方向投影结果，不替代现有 A / B / C 三种测量方式。</p>
             </div>
           </div>
 
           <div class="direction-layout">
+            {% for direction_entry in direction_results if direction_entry.get('enabled') %}
             <article class="route-card">
               <div class="route-head">
                 <div>
                   <div class="route-name">方向法</div>
-                  <h3>方向投影跨度</h3>
+                  <h3>{{ direction_entry.get('display_label') or '方向投影跨度' }}</h3>
                 </div>
-                <span class="pill status-{{ (direction_result.get('reportability_status') or 'queued')|replace('_', '-') }}">{{ worker_route_status_label(direction_result.get('reportability_status')) }}</span>
+                <span class="pill status-{{ (direction_entry.get('reportability_status') or 'queued')|replace('_', '-') }}">{{ worker_route_status_label(direction_entry.get('reportability_status')) }}</span>
               </div>
               <div class="metric-grid">
                 <div class="metric-box">
-                  <strong>{% if direction_result.get('angle_deg') is not none %}{{ '%.1f'|format(direction_result.get('angle_deg')) }}°{% else %}--{% endif %}</strong>
+                  <strong>{% if direction_entry.get('angle_deg') is not none %}{{ '%.1f'|format(direction_entry.get('angle_deg')) }}°{% else %}--{% endif %}</strong>
                   <span>选定角度</span>
                 </div>
                 <div class="metric-box">
-                  <strong>{{ fmt_temp(direction_result.get('af95_c')) }}</strong>
+                  <strong>{{ fmt_temp(direction_entry.get('af95_c')) }}</strong>
                   <span>当前测量 95%恢复温度</span>
                 </div>
                 <div class="metric-box">
-                  <strong>{{ fmt_temp(direction_result.get('aftan_c')) }}</strong>
+                  <strong>{{ fmt_temp(direction_entry.get('aftan_c')) }}</strong>
                   <span>当前测量 切线法温度</span>
                 </div>
               </div>
-              {% if direction_result.get('gate_reason') %}
+              {% if direction_entry.get('gate_reason') %}
               <div class="route-tags">
-                <span class="token">状态说明：{{ direction_result.get('gate_reason') }}</span>
+                <span class="token">状态说明：{{ direction_entry.get('gate_reason') }}</span>
               </div>
               {% endif %}
             </article>
+            {% endfor %}
 
             {% if direction_recovery_curve or direction_metric_curve %}
             <div class="direction-curves">

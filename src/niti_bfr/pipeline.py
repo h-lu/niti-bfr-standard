@@ -54,6 +54,21 @@ WIRE_ROUTE_DISPLAY = {
     "kappa_route_c": "C:kappa_route_c",
 }
 
+WIRE_DIRECTION_METRIC_SPECS = (
+    {
+        "metric_key": "direction_centerline_span",
+        "display_label": "中心线投影跨度",
+        "value_series_col": "direction_centerline_span_px",
+        "recovery_series_col": "direction_centerline_recovery",
+    },
+    {
+        "metric_key": "direction_mask_span",
+        "display_label": "轮廓/掩膜投影跨度",
+        "value_series_col": "direction_mask_span_px",
+        "recovery_series_col": "direction_mask_recovery",
+    },
+)
+
 BRAIDED_ACCEPTANCE_THRESHOLDS: dict[str, dict[str, float]] = {
     "real_video": {
         "min_valid_frames": 10.0,
@@ -109,6 +124,7 @@ class AnalysisResult:
     acceptance_profile: str | None = None
     route_results: list[dict[str, Any]] | None = None
     direction_result: dict[str, Any] | None = None
+    direction_results: list[dict[str, Any]] | None = None
     formal_candidate_gates: dict[str, dict[str, Any]] | None = None
     input_fps: float | None = None
     original_frame_count: int | None = None
@@ -201,11 +217,30 @@ def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvalu
             increasing=increasing,
         )
 
+    for spec in WIRE_DIRECTION_METRIC_SPECS:
+        metric_label = str(spec["metric_key"])
+        value_col = str(spec["value_series_col"])
+        if value_col not in series.columns:
+            continue
+        valid = series.dropna(subset=["temperature_c", value_col])
+        if len(valid) < 4:
+            continue
+        direction_increasing = infer_metric_direction(valid[value_col].to_numpy(), default_increasing=True)
+        reports[metric_label] = evaluate_metric(
+            valid["temperature_c"].to_numpy(),
+            valid[value_col].to_numpy(),
+            label=metric_label,
+            increasing=direction_increasing,
+        )
+
     series["x_route_a_recovery"] = np.nan
     series["x_fit_recovery"] = np.nan
     series["x_route_c_recovery"] = np.nan
     series["kappa_fit_recovery"] = np.nan
     series["kappa_route_c_recovery"] = np.nan
+    for spec in WIRE_DIRECTION_METRIC_SPECS:
+        recovery_col = str(spec["recovery_series_col"])
+        series[recovery_col] = np.nan
 
     x_route_a_eval = reports.get("x_route_a")
     x_eval = reports.get("x_fit")
@@ -247,6 +282,16 @@ def _evaluate_temperature_metrics(series: pd.DataFrame) -> dict[str, MetricEvalu
             -k_route_c_eval.fit.x_a,
             increasing=False,
         )
+    for spec in WIRE_DIRECTION_METRIC_SPECS:
+        metric_label = str(spec["metric_key"])
+        value_col = str(spec["value_series_col"])
+        recovery_col = str(spec["recovery_series_col"])
+        direction_eval = reports.get(metric_label)
+        if direction_eval is not None and value_col in series.columns:
+            series[recovery_col] = _directional_recovery_from_report(
+                series[value_col].to_numpy(),
+                direction_eval,
+            )
     return reports
 
 
@@ -257,6 +302,23 @@ def _finite_or_none(value: float | None) -> float | None:
     if not np.isfinite(numeric):
         return None
     return numeric
+
+
+def _directional_unit_vector(angle_deg: float) -> np.ndarray:
+    angle_rad = np.deg2rad(float(angle_deg))
+    return np.array([np.cos(angle_rad), np.sin(angle_rad)], dtype=float)
+
+
+def _directional_span_from_points(points_xy: np.ndarray, angle_deg: float) -> float:
+    points = np.asarray(points_xy, dtype=float)
+    if points.ndim != 2 or points.shape[1] != 2 or len(points) == 0:
+        raise RuntimeError("directional span points unavailable")
+    finite = np.isfinite(points).all(axis=1)
+    points = points[finite]
+    if len(points) == 0:
+        raise RuntimeError("directional span points unavailable")
+    projections = points @ _directional_unit_vector(angle_deg)
+    return float(np.max(projections) - np.min(projections))
 
 
 def _wire_metric_columns(metric_label: str) -> tuple[str, str]:
@@ -944,13 +1006,18 @@ def _build_direction_result(
     direction_angle_deg: float | None,
     enabled: bool,
     temperature_available: bool,
+    metric_key: str = "direction_span",
+    display_label: str = "方向投影跨度",
+    value_series_col: str = "direction_span_px",
+    recovery_series_col: str = "direction_recovery",
 ) -> dict[str, Any]:
     result = {
         "enabled": bool(enabled and direction_angle_deg is not None),
         "angle_deg": None if direction_angle_deg is None else float(direction_angle_deg),
-        "metric_key": "direction_span",
-        "value_series_col": "direction_span_px",
-        "recovery_series_col": "direction_recovery",
+        "metric_key": metric_key,
+        "display_label": display_label,
+        "value_series_col": value_series_col,
+        "recovery_series_col": recovery_series_col,
         "af95_c": None,
         "aftan_c": None,
         "fit_rmse": None,
@@ -964,10 +1031,10 @@ def _build_direction_result(
     if not temperature_available:
         result["gate_reason"] = "temperature_sync_missing"
         return result
-    metric_report = (reports or {}).get("direction_span")
+    metric_report = (reports or {}).get(metric_key)
     if metric_report is None:
         result["reportability_status"] = "formal_blocked"
-        result["gate_reason"] = "direction_span_insufficient_points"
+        result["gate_reason"] = f"{metric_key}_insufficient_points"
         return result
     result.update(
         {
@@ -981,6 +1048,31 @@ def _build_direction_result(
         }
     )
     return result
+
+
+def _build_direction_results(
+    *,
+    specs: tuple[dict[str, str], ...],
+    series: pd.DataFrame,
+    reports: dict[str, MetricEvaluation] | None,
+    direction_angle_deg: float | None,
+    enabled: bool,
+    temperature_available: bool,
+) -> list[dict[str, Any]]:
+    return [
+        _build_direction_result(
+            series=series,
+            reports=reports,
+            direction_angle_deg=direction_angle_deg,
+            enabled=enabled,
+            temperature_available=temperature_available,
+            metric_key=str(spec["metric_key"]),
+            display_label=str(spec["display_label"]),
+            value_series_col=str(spec["value_series_col"]),
+            recovery_series_col=str(spec["recovery_series_col"]),
+        )
+        for spec in specs
+    ]
 
 
 def _directional_recovery_from_report(values: np.ndarray, report: MetricEvaluation) -> np.ndarray:
@@ -1679,6 +1771,7 @@ def analyze_video(
     temperature_time_offset_sec: float = 0.0,
     route_c: RouteCConfig | None = None,
     frame_stride: int = 1,
+    direction_angle_deg: float | None = None,
     retain_frame_geometries: bool = False,
 ) -> AnalysisResult:
     frame_stride = max(int(frame_stride), 1)
@@ -1687,6 +1780,7 @@ def analyze_video(
         raise RuntimeError(f"failed to open video: {video_path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 1.0
+    direction_enabled = direction_angle_deg is not None
     rows: list[dict[str, float]] = []
     frame_geometries: dict[int, Any] | None = {} if retain_frame_geometries else None
     frame_geometries_bytes = 0
@@ -1714,6 +1808,16 @@ def analyze_video(
                 quadratic_rmse_px = geom.quadratic_rmse_px
                 circle_rmse_px = geom.circle_rmse_px
                 model_name = geom.model_name
+                direction_centerline_span = (
+                    _directional_span_from_points(geom.sampled_centerline_xy, float(direction_angle_deg))
+                    if direction_enabled
+                    else np.nan
+                )
+                direction_mask_span = (
+                    compute_directional_span_from_mask(geom.mask, float(direction_angle_deg))
+                    if direction_enabled
+                    else np.nan
+                )
                 frame_geometries_bytes = _maybe_cache_frame_geometry(
                     frame_geometries,
                     frame_idx=frame_idx,
@@ -1734,6 +1838,8 @@ def analyze_video(
                 quadratic_rmse_px = np.nan
                 circle_rmse_px = np.nan
                 model_name = "failed"
+                direction_centerline_span = np.nan
+                direction_mask_span = np.nan
             rows.append(
                 {
                     "frame": frame_idx,
@@ -1755,6 +1861,9 @@ def analyze_video(
                     "quadratic_rmse_px": quadratic_rmse_px,
                     "circle_rmse_px": circle_rmse_px,
                     "model_name": model_name,
+                    "direction_angle_deg": float(direction_angle_deg) if direction_enabled else np.nan,
+                    "direction_centerline_span_px": direction_centerline_span,
+                    "direction_mask_span_px": direction_mask_span,
                 }
             )
             frame_idx += 1
@@ -1784,6 +1893,15 @@ def analyze_video(
         formal_metric_label=formal_metric_label,
         temperature_available=False,
     )
+    direction_results = _build_direction_results(
+        specs=WIRE_DIRECTION_METRIC_SPECS,
+        series=series,
+        reports=metric_reports,
+        direction_angle_deg=direction_angle_deg,
+        enabled=direction_enabled,
+        temperature_available=False,
+    )
+    direction_result = direction_results[0] if direction_results else None
 
     if temperature_csv is not None:
         temp = pd.read_csv(temperature_csv).copy()
@@ -1846,6 +1964,15 @@ def analyze_video(
             formal_metric_label=formal_metric_label,
             temperature_available=True,
         )
+        direction_results = _build_direction_results(
+            specs=WIRE_DIRECTION_METRIC_SPECS,
+            series=series,
+            reports=metric_reports,
+            direction_angle_deg=direction_angle_deg,
+            enabled=direction_enabled,
+            temperature_available=True,
+        )
+        direction_result = direction_results[0] if direction_results else None
 
     return AnalysisResult(
         series=series,
@@ -1863,6 +1990,8 @@ def analyze_video(
         reportability_status=reportability_status,
         warning_codes=warning_codes,
         route_results=route_results,
+        direction_result=direction_result,
+        direction_results=direction_results,
         formal_candidate_gates=formal_candidate_gates,
         input_fps=float(fps),
         original_frame_count=frame_idx,
@@ -2094,6 +2223,7 @@ def analyze_braided_video_quicklook(
         enabled=direction_enabled,
         temperature_available=False,
     )
+    direction_results = [direction_result]
     formal_candidate_gates = None
 
     if temperature_csv is not None:
@@ -2167,6 +2297,7 @@ def analyze_braided_video_quicklook(
             enabled=direction_enabled,
             temperature_available=True,
         )
+        direction_results = [direction_result]
 
     return AnalysisResult(
         series=series,
@@ -2186,6 +2317,7 @@ def analyze_braided_video_quicklook(
         acceptance_profile=acceptance_profile if temperature_csv is not None else None,
         route_results=route_results,
         direction_result=direction_result,
+        direction_results=direction_results,
         formal_candidate_gates=formal_candidate_gates,
         input_fps=float(fps),
         original_frame_count=frame_idx,
